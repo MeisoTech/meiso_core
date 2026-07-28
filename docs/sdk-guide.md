@@ -21,7 +21,7 @@ Host 应用与重计算
 | 模块 | 责任 | 当前状态 |
 |---|---|---|
 | `meiso_slice` | frame identity、姿态修正、overlay 安全门和进程内 fixture | 已实现并可在 Windows 复现 |
-| `meiso_latest_state` | 一槽 `LatestState(b)` 的替换、pending、ACK、幂等与 session 重发 | 本轮先定义契约，随后实现 |
+| `meiso_latest_state` | 一槽 `LatestState(b)` 的替换、pending、ACK、幂等与 session 重发 | 已实现并通过 MSVC、GCC 与 Cortex-M4 compile gate |
 | Link adapter | 把 Object 与 MediaStream 映射到 session 和载体 | 仅有私有实验候选，公共 wire 未定 |
 | Edge platform adapter | 接入 camera、IMU、codec、display 和 monotonic clock | i.MX8MM 有代理实验；K230D 未实现 |
 | Host integration | detector、历史存储和 Dashboard | 有 Orin 实验，不属于 portable core |
@@ -52,12 +52,14 @@ portable core 使用 C11、调用方提供的固定容量内存和显式状态�
 
 本轮核心只实现状态投递语义，不实现 socket 或 wire：
 
-1. publisher 和 replica 都使用调用方提供的固定容量 byte storage，不分配内存。
-2. version 从 1 开始并严格递增。更新版本替换尚未确认的旧版本；同版本同内容幂等，同版本不同内容是冲突；回绕必须显式失败。
-3. 首次发送立即可取；未收到精确 ACK 时始终保持 pending，Link adapter 按自己的有界 interval 重取并发送。精确 ACK 清除 pending，旧 ACK 或未来 ACK 不得错误完成当前版本。portable core 不拥有时钟或调度器。
+1. publisher 和 replica 都使用调用方提供的固定容量 byte storage，不分配内存；当前 payload 必须非空。storage 在实例存活期间由该实例独占，`MeisoLatestView` 只是借用视图，不能跨下一次 publish、receive、reinit 或 session 切换保留。异步 adapter 必须在释放外部同步前完成编码或复制，不能把 view 指针排入稍后发送的 queue。
+2. version 以 0 表示“无版本”，owner 持久化的非零 version 必须严格递增。fresh publisher 可以装载任意已持久化的非零当前版本；更新版本替换尚未确认的旧版本。同版本同内容幂等，同版本不同内容是冲突；从 `UINT64_MAX` 回到任何更小值（包括自然回绕到 0）必须显式失败。
+3. 首次发送立即可取；未收到精确 ACK 时始终保持 pending，Link adapter 按自己的有界 interval 重取并发送。精确 ACK 清除 pending，旧 ACK 或未来 ACK 不得错误完成当前版本。调用 `ack` 前，Link adapter 必须先确认 ACK 属于当前 session；portable core 不拥有 session identity、时钟或调度器。
 4. 新 session 使 replica 的旧副本失效，并让 publisher 重新发布当前 truth。session identity、持久化和安全传输仍由上层 Link adapter 负责。
 5. replica 只有完整复制后才接受新版本。重复的同版本同内容需要再次 ACK，但不得重复触发业务副作用。
 6. ACK 不代表设备已应用。对象 adapter 必须通过 Edge-owned actual state 表达成功、部分支持或失败。
+
+该 core 本身不加锁。一个实例只能由一个执行上下文访问，或由 platform adapter 在外部同步。
 
 ## 实时与平台边界
 

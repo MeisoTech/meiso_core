@@ -9,7 +9,12 @@ Meiso Glass 是一套面向分体式 XR/AR 眼镜的开放系统契约。
 
 ## 当前代码
 
-仓库目前提供一个固定容量、无网络依赖的 C11 闭环：Edge 产生 camera 与带时间戳的 IMU 数据，Host 生成框，Edge 按当前姿态修正并决定显示。开发板上的 camera 背景仅用于观察，不是产品显示模型。
+仓库目前提供两个固定容量、无网络依赖的 C11 模块：
+
+- `meiso_slice`：Edge 产生 camera 与带时间戳的 IMU 数据，Host 生成框，Edge 按当前姿态修正并决定显示。
+- `meiso_latest_state`：一槽 `LatestState(b)` 的 newest-wins、pending、ACK、幂等和新 session 重发。
+
+开发板上的 camera 背景仅用于观察，不是产品显示模型。
 
 ```powershell
 cmake --preset windows-msvc-debug

@@ -21,7 +21,7 @@ i.MX8MM Edge 代理：camera + 有时间身份的代理 IMU
 
 | 层次 | 已有证据 | 不能声称 |
 |---|---|---|
-| 公共仓库 | C11 进程内 camera/IMU/BBox/姿态修正闭环；Windows build 与测试 | 当前 fixture 仍以 `CameraFrame(d)` 和 `OverlayState(b)` 表达旧切片，不能代表已测连续媒体语义 |
+| 公共仓库 | C11 进程内 camera/IMU/BBox/姿态修正闭环；一槽 `LatestState(b)` portable core；Windows/GCC 测试与 Cortex-M4 compile gate | 当前 fixture 仍以 `CameraFrame(d)` 和 `OverlayState(b)` 表达旧切片，不能代表已测连续媒体语义 |
 | 双板实验 | i.MX8MM Edge 代理与 Orin Host 的媒体、控制、历史、BBox、修正和显示 | 公共 wire、生产安全传输、真实 IMU/麦克风 |
 | 目标产品 | 角色、所有权和验收边界 | K230D driver、资源、codec、render、时延或功耗 |
 
@@ -67,7 +67,7 @@ i.MX8MM Edge 代理：camera + 有时间身份的代理 IMU
 
 ## 对公共 SDK 的影响
 
-本轮公共实现先增加一个无网络、无 heap、调用方提供固定 storage 的 `LatestState(b)` core，覆盖 newest-wins、pending、ACK、duplicate/conflict、version wrap 和新 session 重发。重试间隔由 Link adapter 调度，core 只保证未确认 truth 一直可取。它不公开私有 UDP 布局，也不把 ACK 当成设备应用结果。
+本轮公共实现已增加一个无网络、无 heap、调用方提供固定 storage 的 `LatestState(b)` core，覆盖 newest-wins、pending、ACK、duplicate/conflict、version wrap 和新 session 重发。重试间隔由 Link adapter 调度，core 只保证未确认 truth 一直可取。它不公开私有 UDP 布局，也不把 ACK 当成设备应用结果。
 
 后续顺序：
 
