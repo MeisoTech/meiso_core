@@ -1,20 +1,18 @@
 # Meiso Glass 文档
 
-## 设计
+## 权威关系
 
-- [系统设计](system.md)：解释产品目标、长期边界与核心取舍。
+- [系统设计](system.md)：唯一的角色、责任与产品边界。
+- [链路契约](link.md)：唯一的 Object、MediaStream、LinkSession 与载体语义。
+- [Composition 契约](composition.md)：唯一的 layer 来源、代际和激活语义。
 
-## 技术契约
+## 实现与证据
 
-- [Composition 契约](composition.md)：定义 layer 来源、最终合成和代际切换。
-- [链路契约](link.md)：定义 Object、MediaStream、LinkSession 与 carrier 边界。
+- [SDK 设计与开发指南](sdk-guide.md)：模块边界、C11 约束、适配接口、验证方式和开发顺序。
+- [系统进展与待决策](system-report.md)：当前公共代码、双板实验结论、未验证边界与需要回复的事项。
 
-## 当前验证
+## 历史
 
-- [开发板验证](validation.md)：记录当前开发板形式、C11 slice、验证顺序和完成条件。
+[手写方向来源](history/manual-origin.md) 完整保留早期手写输入，但不是现行规范。
 
-## 历史来源
-
-[手写方向来源](manual-origin.md) 保护提交 `70c3643` 中的原始输入，不是另一份规范。
-
-设计文档说明为什么和边界；技术契约定义双方必须遵守的语义；验证文档只陈述当前证据。尚未进入实现的字节布局、资源参数和平台细节不提前固化。
+规范说明必须保持的行为；指南说明怎样接入；报告只陈述证据和未决事项。尚未验证的字节布局、资源参数与平台细节不提前固化。

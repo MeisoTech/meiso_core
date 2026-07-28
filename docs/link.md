@@ -1,6 +1,6 @@
 # 链路契约
 
-> 状态：产品级技术契约。
+> 状态：产品级技术契约。当前实现范围见[系统进展与待决策](system-report.md)。
 
 ## 分层
 
@@ -21,7 +21,7 @@ Application
 
 每个 Object 只有一个 truth owner；它是一种同步或消息形式，不要求对应 heap object，也不要求发送端长期保存。
 
-| Alias | Name | Semantics |
+| 别名 | 名称 | 语义 |
 |---|---|---|
 | `a` | `Observation` | 无 ACK、允许丢失；只用于过期即可丢弃的采样或遥测 |
 | `b` | `LatestState` | 有 ACK；新版本取代待发送旧版本，最终状态不能静默丢失 |
@@ -55,7 +55,7 @@ c > b > a > d
 
 ## DeliveryHandle
 
-发送 `b/c/d` 时，调用者应能观察终态：已确认、被新版本取代、失败、取消或 `Indeterminate`；session 失效是产生这些终态的原因。
+完整 Link SDK 发送 `b/c/d` 时，调用者应能观察终态：已确认、被新版本取代、失败、取消或 `Indeterminate`；当前 C11 slice 尚未实现完整 DeliveryHandle。
 
 ACK 只表示对端协议层接受了数据，不表示设备已经执行。业务结果由其 truth owner 另行发布状态。`Failed` 表示确定未交付；断线后无法判断事件是否已产生效果时必须返回 `Indeterminate`，不能伪装成失败后自动重试。
 
@@ -65,18 +65,18 @@ ACK 只表示对端协议层接受了数据，不表示设备已经执行。业�
 
 LinkSession 统一拥有 carrier，并负责：
 
-- peer 发现、版本协商、authenticated encryption 与 replay protection；密码算法和实现不得自造。
-- liveness、关闭、短暂中断恢复和新 session 建立。
+- peer 发现、版本协商、session identity、liveness 与关闭。
+- 短暂中断恢复和新 session 建立。
 - ACK、去重、重试、排序、分片、流控、pacing 与 backpressure。
 - clock offset 与 uncertainty 的持续估计。
 
-产品 session identity 必须同时区分双方的 peer incarnation/boot epoch，并包含不可与旧流量混淆的 nonce。
+产品实现必须使用经过审查的标准安全传输或密码库提供认证、加密和重放防护，不自造密码算法。具体库和 wire 尚未选定。
 
-只有双方仍保留有界恢复状态，并验证 peer incarnation、resume proof 与 ACK watermark 时，carrier 中断才能继续原 session。恢复身份尚未确认前不得发送可能重复产生副作用的 `c`。其余情况建立新 session。
+只有 adapter 能证明双方仍处于同一 session 且保留有界恢复状态时才允许恢复；不能证明时建立新 session。恢复身份未确认前不得发送可能重复产生副作用的 `c`。
 
 ## 中断与重连
 
-| Form | 同一 session 恢复 | 新 session 或 peer 重启 |
+| 形式 | 同一 session 恢复 | 新 session 或 peer 重启 |
 |---|---|---|
 | `a` | 不补发过期值 | 丢弃 |
 | `b` | 重发当前版本或以更新版本取代 | owner 重新发布当前 truth |

@@ -6,12 +6,12 @@
 
 Host 与 Edge 理解同一套 Composition contract，但只实现各自声明的能力。
 
-| Layer source | Host | Edge |
+| layer 来源 | Host 职责 | Edge 职责 |
 |---|---|---|
 | `REMOTE_PROJECTION` | 渲染、编码并提供生成投影所依据的 pose 与 projection | 解码、执行协商出的 correction profile，并完成光学校正与 scanout |
 | `EDGE_NATIVE` | 提供应用意图、状态与资源 | 本地生成 layer，并进入相同的最终 compositor |
 
-source 是 per-layer capability。远端 Projection、本地应用 layer 与 Edge 安全 HUD 可以同时存在。
+来源是逐 layer 能力。远端 Projection、本地应用 layer 与 Edge 安全 HUD 可以同时存在。
 
 `REMOTE_PROJECTION` 是跨设备的最低互操作来源；`EDGE_NATIVE` 是可选扩展。设备不必实现两套 renderer，但必须明确报告能力。Edge 安全层不受 Host 遮挡，其优先级由本地 policy 决定。
 
@@ -27,7 +27,7 @@ framebuffer 是 layer payload，不是 Composition 模型：结合视锥与 rend
 
 ## 同步对象
 
-| Object | Owner | Form | Meaning |
+| 对象 | 真值方 | 形式 | 含义 |
 |---|---|---|---|
 | `CompositionCapabilities` | Edge | `b` | 支持的 layer、source、修正方式、格式与资源边界 |
 | `PresentationPlan` | Host | `b` | 完整期望内容、plan generation 与可接受范围 |
