@@ -1,20 +1,26 @@
 # Meiso Glass
 
-Meiso Glass 是一套面向分体式 XR/AR 眼镜的开放系统契约。
+Meiso Glass 是面向分体式 XR/AR 的开放 Resource 与 Composition 契约。
 
-- `Edge` 是穿戴设备端，拥有传感器、姿态、最终合成与显示安全。
-- `Host` 是外部计算设备，消费 Edge 数据并完成业务与重计算。
+- `Edge` 拥有实际设备 truth、platform adapter、本地安全行为和已声明的物理输出；
+- `Host` 运行应用与重计算，通过 Virtual Edge 操作远端或模拟 Edge；
+- 公共 Resource 为 `State / Stream / Action / Blob`；MediaStream 是 Stream 的专业化；
+- Session、runtime、sensor、frontend、system image 和 transport implementation 可替换，
+  具体有效组合由 capability 与经过验证的 Profile 表达。
 
-项目不绑定某颗 SoC、操作系统、图形 API 或无线载体。公开 SDK 只固化已经有可执行验证的角色、数据语义和安全边界。
+项目不绑定某颗 SoC、开发板、操作系统、图形 API 或网络载体，也不规定组件实现顺序。
 
-## 当前代码
+## 当前代码状态
 
-仓库目前提供两个固定容量、无网络依赖的 C11 模块：
+当前 C11 代码来自 Resource 重基线前的实验，只保留为可执行行为 evidence：
 
-- `meiso_slice`：Edge 产生 camera 与带时间戳的 IMU 数据，Host 生成框，Edge 按当前姿态修正并决定显示。
-- `meiso_latest_state`：一槽 `LatestState(b)` 的 newest-wins、pending、ACK、幂等和新 session 重发。
+- `meiso_latest_state` 验证固定容量 newest-wins、pending、ACK、重复/冲突与 session 重发；
+- `meiso_slice` 验证 frame identity、姿态/时效 gate、lease 与 fail-closed 合成 workload。
 
-开发板上的 camera 背景仅用于观察，不是产品显示模型。
+这些符号和 API 不是新公共 SDK，不享有兼容承诺。它们通过测试也不代表 Resource Runtime、
+LinkSession、Virtual Edge 或平台 adapter 已实现。
+
+现有 Windows baseline 可以继续复现实验：
 
 ```powershell
 cmake --preset windows-msvc-debug
@@ -22,13 +28,14 @@ cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
 ```
 
-生成的 `build/slice_preview.ppm` 只是开发可视化。生产 LinkSession、公共 wire、K230D adapter 和通用 Composition API 尚未实现。
+生成的 `build/slice_preview.ppm` 只是 legacy fixture 可视化，不是产品显示模型。
 
 ## 文档
 
+- [文档入口与权威关系](docs/index.md)
 - [系统设计](docs/system.md)
-- [链路契约](docs/link.md)
+- [Resource 契约](docs/resource.md)
+- [Link 契约](docs/link.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
-- [系统进展与待决策](docs/system-report.md)
-- [文档入口](docs/index.md)
+- [系统进展](docs/system-report.md)

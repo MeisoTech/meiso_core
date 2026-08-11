@@ -1,93 +1,168 @@
 # SDK 设计与开发指南
 
-> 状态：当前实现指南。稳定语义以[系统设计](system.md)、[链路契约](link.md)和[Composition 契约](composition.md)为准。
+> 状态：实现与验证指南。稳定语义以[系统设计](system.md)、[Resource 契约](resource.md)、
+> [Link 契约](link.md)和[Composition 契约](composition.md)为准。
 
-## SDK 只解决什么
-
-SDK 连接两个公开角色：
+## SDK 边界
 
 ```text
-Host 应用与重计算
-  <-> Object / MediaStream / Composition
-  <-> Link adapter
-  <-> Edge portable core
-  <-> camera / IMU / codec / display platform adapter
+Host application / service / frontend
+    ↓
+EdgeHandle / Virtual Edge API
+    ↓
+portable Resource Runtime
+    ↓
+LinkSession backend interface
+    ↓
+transport and platform adapters
+
+Edge Resource Runtime
+    ↓
+capability / policy / endpoint adapters
 ```
 
-当前只建设有实验证据的最小闭环。SDK 不负责制作或刷写系统镜像，也不把 Linux 进程称为 RTOS 实现。Host、Edge 是协议角色，不是 A53、M4、操作系统或进程名称。
+这个分层不要求 daemon、多进程或通用 plugin framework。第一份实现可以在单进程中证明
+契约；只有真实 lifecycle、isolation 或 deployment 需求出现时才拆进程。
 
-## 当前模块
+SDK 不把 socket、packet、driver handle 或 platform buffer 暴露为 Host application 的
+业务接口。反过来，Core 也不要求所有 payload 复制进通用 byte container；adapter 可以
+提供满足相同 Resource lifecycle 的 zero/low-copy path。
 
-| 模块 | 责任 | 当前状态 |
-|---|---|---|
-| `meiso_slice` | frame identity、姿态修正、overlay 安全门和进程内 fixture | 已实现并可在 Windows 复现 |
-| `meiso_latest_state` | 一槽 `LatestState(b)` 的替换、pending、ACK、幂等与 session 重发 | 已实现并通过 MSVC、GCC 与 Cortex-M4 compile gate |
-| Link adapter | 把 Object 与 MediaStream 映射到 session 和载体 | 仅有私有实验候选，公共 wire 未定 |
-| Edge platform adapter | 接入 camera、IMU、codec、display 和 monotonic clock | i.MX8MM 有代理实验；K230D 未实现 |
-| Host integration | detector、历史存储和 Dashboard | 有 Orin 实验，不属于 portable core |
+## 数据如何选择
 
-portable core 使用 C11、调用方提供的固定容量内存和显式状态码，不依赖 heap、socket、线程、Linux 或 RTOS。平台层负责并发、驱动、硬件 buffer 和实际时间源。
-
-## 数据怎么选
-
-| 需求 | 使用形式 |
+| 业务含义 | Resource |
 |---|---|
-| 过期即可丢弃的 IMU、遥测、deadline-bound BBox 或结果观测 | `Observation(a)` |
-| 开关、采集参数、设备实际状态、稳定显示意图 | `LatestState(b)` |
-| 拍照、标记时间线等只执行一次且有顺序的动作 | `OrderedEvent(c)` |
-| 有限、不可变、必须完整校验的资源或按需快照 | `Bulk(d)` |
-| 连续 camera、音频或投影帧 | `MediaStream` |
+| 可替换的当前事实、configuration、desired/actual、capability/status | State |
+| 追加的 sensor sample、input event、telemetry 或 deadline-bound result | Stream |
+| 连续 raw/encoded camera、audio 或 projection | MediaStream（Stream 专业化） |
+| 请求另一端执行有副作用的操作并观察明确结果 | Action |
+| 有限、不可变、完整校验后才能使用的 asset/snapshot | Blob |
 
-不要为了覆盖四个别名虚构业务。当前驻留闭环使用 `a`、`b` 与 MediaStream；`c`、`d` 只在出现真实 one-shot 或 immutable payload 时进入业务路径。
+不要为了覆盖四种类型虚构业务。大型当前事实仍是引用 Blob 的 State；已经发生的 button
+event 是 Stream；连续 frame 不是 Blob；desired State 的 ACK 不是 Action result。
 
-## 当前对象与所有权
+## Virtual Edge 实现
 
-- Host 拥有完整 `DesiredEdgeConfig(b)`；Dashboard 只能发布新的完整状态，不能直接写 Edge 设备。
-- Edge ACK 只表示协议接收。Edge 另行发布 `EdgeState(b)`，包含期望版本、实际应用版本、能力、实际状态和有界错误。
-- Edge 拥有 `ImuObservation(a)` 与连续 camera MediaStream。所有样本携带 Edge monotonic timestamp、clock epoch 和 stream identity。
-- Host 的 BBox 必须引用精确源 frame。过期 BBox 是 `Observation(a)`；需要持续保持的 UI 或 Presentation plan 是 `LatestState(b)`，二者不能混用。
-- Edge 在实际显示评估后可以发送一次无 ACK 的 `OverlayResult(a)`。它只用于诊断和历史关联，不能成为 scanout 前置条件。
+Host-facing API 对 simulated、loopback、recorded 和 remote backend 使用同一业务语义。
+最小 facade 应能表达：
 
-## `LatestState(b)` portable core 验收
+- Session/online/freshness snapshot；
+- capability 与 Resource discovery；
+- State read/watch/submit 及 delivery/actual 分离；
+- Stream subscribe/publish endpoint；
+- Action invoke/result；
+- Blob lookup/transfer；
+- Composition plan/status（当 capability 存在）。
 
-本轮核心只实现状态投递语义，不实现 socket 或 wire：
+第一版不需要一次实现所有 operation。未实现能力必须通过 capability 缺失或 explicit
+unsupported 表达，不能留一个会静默成功的空方法。
 
-1. publisher 和 replica 都使用调用方提供的固定容量 byte storage，不分配内存；当前 payload 必须非空。storage 在实例存活期间由该实例独占，`MeisoLatestView` 只是借用视图，不能跨下一次 publish、receive、reinit 或 session 切换保留。异步 adapter 必须在释放外部同步前完成编码或复制，不能把 view 指针排入稍后发送的 queue。
-2. version 以 0 表示“无版本”，owner 持久化的非零 version 必须严格递增。fresh publisher 可以装载任意已持久化的非零当前版本；更新版本替换尚未确认的旧版本。同版本同内容幂等，同版本不同内容是冲突；从 `UINT64_MAX` 回到任何更小值（包括自然回绕到 0）必须显式失败。
-3. 首次发送立即可取；未收到精确 ACK 时始终保持 pending，Link adapter 按自己的有界 interval 重取并发送。精确 ACK 清除 pending，旧 ACK 或未来 ACK 不得错误完成当前版本。调用 `ack` 前，Link adapter 必须先确认 ACK 属于当前 session；portable core 不拥有 session identity、时钟或调度器。
-4. 新 session 使 replica 的旧副本失效，并让 publisher 重新发布当前 truth。session identity、持久化和安全传输仍由上层 Link adapter 负责。
-5. replica 只有完整复制后才接受新版本。重复的同版本同内容需要再次 ACK，但不得重复触发业务副作用。
-6. ACK 不代表设备已应用。对象 adapter 必须通过 Edge-owned actual state 表达成功、部分支持或失败。
+API 不承诺 transport 数量。backend 看到一个 transport-independent Session seam；具体
+Profile/adapter 自己选择 transport arrangement。本规范不定义 Host switching、跨 Session
+authority handoff 或 topology migration，也不对这些能力作支持或兼容承诺。
 
-该 core 本身不加锁。一个实例只能由一个执行上下文访问，或由 platform adapter 在外部同步。
+## Endpoint adapter 模式
 
-## 实时与平台边界
+runtime 发现的 sensor、input、audio、media、presentation、codec 或 compute endpoint 使用
+统一 capability/descriptor 模式，而不是在 Core 增加设备类型。
 
-- capture、Edge-local scanout、codec/carrier、IMU 和 Link control 是独立的有界消费者；网络或模型失败不能卡住本地显示。
-- 连续媒体使用 latest-wins 的有界 broker，生产者不等待 per-frame ACK。丢帧、覆盖、发送失败和恢复点必须计数。
-- `FrameKey` 至少区分 clock epoch、stream instance 和 frame sequence。Host 本地帧号不能替代 Edge identity。
-- Edge 保留固定上限的 IMU 时间环。缺少正确 epoch、姿态、标定或时效时，新的 Host overlay 必须明确隐藏。
-- “已应用”必须由实际进展证明，例如首个真实 camera frame、实际采样或实际 scanout；驱动调用返回成功本身不够。
-- Host 历史是非阻塞 consumer。SQLite、文件布局和 Dashboard 不进入 portable core ABI；存储必须报告 `ACTIVE`、`BOUNDED_STOP` 或 `FAILED`。
+一个 endpoint adapter 只公开它确实具备的组合：
 
-## 验证 profile
+```text
+configuration / desired    -> State（可选）
+actual status / capability -> State
+samples / events           -> Stream 或 MediaStream（可选）
+side-effect operation      -> Action（可选）
+immutable resource         -> Blob（可选）
+```
 
-| profile | 用途 | 必须保留的真实语义 |
+driver API 存在、module 可 import 或 device object 已注册都只证明 runtime exposure。只有
+真实 sample、physical output 或 effect/result 通过验收后，才把 endpoint 标为 physically
+verified。
+
+型号、format、sample rate、axis、calibration、clock relationship、memory domain 和 native
+handle 留在 descriptor/adapter/Profile。camera、IMU、microphone、display 只是实例，不是
+固定系统结构，也没有规范规定的实现先后。
+
+## Portable core 约束
+
+适合进入 portable core 的行为应：
+
+- 不依赖 OS、socket、线程、driver 或具体 runtime；
+- 在受限目标上允许调用方提供固定容量 storage；
+- 用显式状态码和终态，不靠日志猜测成功；
+- 明确 owner、version/epoch、lifetime 和借用 buffer 的有效期；
+- 对 overflow、duplicate、conflict、wrap、disconnect 和 resource exhaustion 有测试；
+- 不把 scheduling、locking、persistence 或 transport identity 偷藏在 primitive 中。
+
+现有 newest-wins 实验已经证明一组可复用行为：完整 snapshot、严格 version、pending、
+精确 ACK、重复/冲突、新 Session 重新发布和无隐式 heap。这些行为可转成 State conformance
+vector；现有文件名、C symbol 和 ABI 不因此自动晋升。
+
+## Identity 与时间
+
+从 loopback 开始，测试与 trace 使用相同逻辑 identity：
+
+```text
+peer / boot / session
+resource / state version
+stream epoch / sample sequence / FrameKey
+action identity / Blob content identity
+clock epoch / source time / receive time / uncertainty
+presentation generation
+```
+
+`FrameKey` 至少区分 producer clock epoch、stream epoch/instance 与 sequence。Host 本地帧号
+不能替代 source identity。缺少正确 epoch、时间、calibration 或 freshness 时，消费方按
+契约拒绝/隐藏，不能用最近一次任意值补齐。
+
+跨端时间只在 offset/uncertainty 满足当前 Profile 时可比较。测试必须覆盖 reboot、epoch
+变化、wrap、late arrival 与 uncertainty 超限。
+
+## Bounded 与实际应用
+
+- capture、Stream、codec、Link、history 和 physical output 是独立的有界消费者；一个
+  consumer 失败不能无限反压其他路径；
+- 每个 queue/history/retry/cache 声明 capacity、overflow policy 与 counters；
+- best-effort Stream 允许丢弃过期数据，但必须保持后续进展；
+- State/Action/Blob 不能在资源不足时静默伪装成功；
+- “已应用”由真实进展证明，例如首个 sample、实际寄存器/设备状态、Action result 或
+  presentation activation；adapter call 返回 success 本身不够；
+- persistence、database、Dashboard 和文件布局是 integration，不进入 portable ABI。
+
+## Runtime、镜像与构建选择
+
+SDK 架构不规定 MicroPython、native C/C++、RTOS、Linux、system image 或 firmware build
+路线。每个 platform work unit 选择最短且可复现的实现路径；需要制作或刷写镜像时，把
+provisioning 作为该工作单元的正常实现步骤，并提供准确目标、来源/integrity、恢复路径、
+供电条件、预期信号和写后验证。
+
+实现便利性不能扩大证据范围：Host build 不证明 target ABI，runtime API 不证明物理
+endpoint，模拟 output 不证明真实 scanout，另一块 SoC 的性能不证明当前 Profile。
+
+## 验证环境
+
+| 环境 | 证明 | 不证明 |
 |---|---|---|
-| `Host-only` | Edge 硬件不在场时开发 Host | Object 代际、session gate、frame identity、时间和失败行为 |
-| `Edge-only` | Host 不在场时开发驱动、姿态与显示 | 同一 Host intent/overlay、lease、安全降级和显示结果 |
-| `Integration` | 双方和载体一起运行 | 上述语义加真实吞吐、时延、资源、断线与恢复证据 |
+| pure unit | Resource primitive、identity、version/epoch、bounded storage | serialization、peer 或 hardware |
+| in-process loopback | Host/Edge contract 与 Virtual Edge state machine | process/transport failure |
+| local multi-process | serialization、buffer lifetime、crash/backpressure boundary | physical link/hardware |
+| synthetic remote | Session、time、loss/reorder/reconnect | driver 和真实性能 |
+| platform adapter | 一个真实 endpoint 的 sample/output/effect 与失败 | 其他 endpoint 或其他平台 |
+| integrated Profile | 声明组合的端到端正确性、资源、时延和恢复 | 未声明组合 |
 
-i.MX8MM 是 K230D 到板前的 Edge 验证代理。它能验证 contract 和 adapter 形状，不能替代 K230D 的目标构建、driver、内存、codec、render 或性能证据。
+这些是可选择的验证环境，不是组件实施顺序。每个工作单元选择最小环境来回答当前问题；
+相同 conformance vector 应尽可能用于 simulated、loopback 和 physical backend。
 
-## 工作顺序
+## 一个工作单元
 
-每个行为变更只回答一个问题，并按以下顺序完成：
+1. 记录 observed baseline、真实问题与非目标；
+2. 区分 `FACT / INFERENCE / PROPOSAL / UNKNOWN`；
+3. 若公共行为改变，先修改最小权威规范和 conformance/failure vector；
+4. 选择最小 implementation/Profile/configuration；
+5. build/run 并检查真实输出、bounded counters 与生成物；
+6. 记录证据范围，协调规范、报告和状态；
+7. 分仓库显式暂存并提交，不把原始设备证据或本机信息带入公开仓。
 
-1. 记录观测基线和真实问题。
-2. 先修改最小权威规范与可执行验收。
-3. 实现最小变化；不顺带建设无当前需求的平台服务。
-4. 运行 build、正向与失败测试，检查实际输出。
-5. 把结果写入[系统进展与待决策](system-report.md)，再提交该工作单元。
-
-下一顺序是：完成公共 `LatestState(b)` core；再建立最小 LinkSession identity/time 接口与 MediaStream adapter 边界；拿到 K230D 后才实现目标 platform adapter。没有真实业务前不扩建 `c/d` 运行时。
+组件、frontend、runtime 或 platform 的排期保存在当前计划中，不写入产品规范。当前公共
+代码成熟度与已知证据见[系统进展](system-report.md)。
