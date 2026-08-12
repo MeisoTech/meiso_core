@@ -50,6 +50,7 @@ add_library(meiso_resource_core
     src/meiso_state.c
     src/meiso_stream.c
     src/meiso_blob.c
+    src/meiso_descriptor_set.c
 )
 target_include_directories(meiso_resource_core PUBLIC include)
 meiso_enable_warnings(meiso_resource_core)
@@ -86,6 +87,10 @@ add_executable(meiso_blob_test tests/test_blob.c)
 target_link_libraries(meiso_blob_test PRIVATE meiso_resource_core)
 meiso_enable_warnings(meiso_blob_test)
 
+add_executable(meiso_descriptor_set_test tests/test_descriptor_set.c)
+target_link_libraries(meiso_descriptor_set_test PRIVATE meiso_resource_core)
+meiso_enable_warnings(meiso_descriptor_set_test)
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_executable(meiso_resource_short_enum_test tests/test_resource.c)
     target_link_libraries(meiso_resource_short_enum_test PRIVATE meiso_resource_core)
@@ -101,6 +106,7 @@ add_test(NAME meiso_resource_test COMMAND meiso_resource_test)
 add_test(NAME meiso_state_test COMMAND meiso_state_test)
 add_test(NAME meiso_stream_test COMMAND meiso_stream_test)
 add_test(NAME meiso_blob_test COMMAND meiso_blob_test)
+add_test(NAME meiso_descriptor_set_test COMMAND meiso_descriptor_set_test)
 if(TARGET meiso_resource_short_enum_test)
     add_test(NAME meiso_resource_short_enum_test COMMAND meiso_resource_short_enum_test)
 endif()

@@ -225,6 +225,12 @@ schema/owner、capacity exhausted 和 seal 后 mutation。snapshot 不拥有四�
 不表达 endpoint 当前 availability，也不阻止 runtime 在下一 capability generation 发布新的
 snapshot。
 
+v0 允许 capacity 为零，以表达可 seal、可查询但永远为空的 snapshot；builder 阶段 lookup
+显式返回 not-sealed，避免消费者观察半构造集合。seal 是幂等边界，重复 seal 返回
+already-sealed。lookup 只复制 descriptor value，不返回内部 borrow；duplicate/conflict 在容量
+检查前分类，因此满集合仍能准确识别已有 ResourceId。相同 ResourceId 的 descriptor 任一字段
+不同都是 conflict，不能因 kind 不同而成为第二项。
+
 ## 正交 conformance 矩阵
 
 | 轴 | State | Stream | Action | Blob |
