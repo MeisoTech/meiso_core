@@ -87,6 +87,7 @@ static bool view_equals(
 static void test_init_contract(void)
 {
     TestArena arena;
+    TestArena before;
     MeisoResourceDescriptor descriptor = state_descriptor(8U);
     MeisoStateConfig config = {MEISO_STATE_DELIVERY_CONVERGENT};
     MeisoStatePublisher *publisher = (MeisoStatePublisher *)(uintptr_t)1U;
@@ -103,10 +104,13 @@ static void test_init_contract(void)
         arena.bytes, required - 1U, &descriptor, &config, &publisher
     ) == MEISO_STATE_INIT_ARENA_TOO_SMALL);
     CHECK(publisher == NULL);
+    memset(&arena, 0x5a, sizeof(arena));
+    before = arena;
     CHECK(meiso_state_publisher_init(
         arena.bytes, sizeof(arena.bytes), &descriptor, &config,
         (MeisoStatePublisher **)arena.bytes
     ) == MEISO_STATE_INIT_INVALID_ARGUMENT);
+    CHECK(memcmp(&arena, &before, sizeof(arena)) == 0);
 
     config.delivery_mode = (MeisoStateDeliveryMode)0;
     CHECK(meiso_state_publisher_memory_required(&descriptor, &config) == 0U);

@@ -152,18 +152,21 @@ MeisoStateInitStatus meiso_state_publisher_init(
     if (out_publisher == NULL) {
         return MEISO_STATE_INIT_INVALID_ARGUMENT;
     }
-    *out_publisher = NULL;
     if (!state_descriptor_valid(descriptor)) {
+        *out_publisher = NULL;
         return MEISO_STATE_INIT_INVALID_DESCRIPTOR;
     }
     if (!state_config_valid(config)) {
+        *out_publisher = NULL;
         return MEISO_STATE_INIT_INVALID_CONFIG;
     }
     if (!arena_aligned(arena)) {
+        *out_publisher = NULL;
         return MEISO_STATE_INIT_MISALIGNED_ARENA;
     }
     required = meiso_state_publisher_memory_required(descriptor, config);
     if (required == 0U || arena_size < required) {
+        *out_publisher = NULL;
         return MEISO_STATE_INIT_ARENA_TOO_SMALL;
     }
     if (output_overlaps_arena(
@@ -464,15 +467,17 @@ MeisoStateInitStatus meiso_state_replica_init(
     if (out_replica == NULL) {
         return MEISO_STATE_INIT_INVALID_ARGUMENT;
     }
-    *out_replica = NULL;
     if (!state_descriptor_valid(descriptor)) {
+        *out_replica = NULL;
         return MEISO_STATE_INIT_INVALID_DESCRIPTOR;
     }
     if (!arena_aligned(arena)) {
+        *out_replica = NULL;
         return MEISO_STATE_INIT_MISALIGNED_ARENA;
     }
     required = meiso_state_replica_memory_required(descriptor);
     if (required == 0U || arena_size < required) {
+        *out_replica = NULL;
         return MEISO_STATE_INIT_ARENA_TOO_SMALL;
     }
     if (output_overlaps_arena(
