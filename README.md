@@ -18,8 +18,9 @@ Meiso Glass 是面向分体式 XR/AR 的开放 Resource 与 Composition 契约�
 source-level implementation API，不冻结二进制 ABI。
 
 这套实现仍不是 application-facing Resource Runtime 或完整 Meiso Core；它不包含
-Virtual Edge、LinkSession/wire、Composition、MediaStream data path、platform adapter 或
-target runtime。各 primitive fixture 与 four-kind in-process fixture 的 Host 验证范围见
+Virtual Edge、LinkSession/wire、Composition、MediaStream data path 或 platform adapter。
+K230D conformance target 已完成 host-side cross-build 与 image inspection，但板端 execution
+仍为 `NOT_RUN`。各 primitive fixture 与 four-kind in-process fixture 的 Host 验证范围见
 [系统进展](docs/system-report.md)；这些测试不构成 remote backend、LinkSession 或 target
 evidence。
 

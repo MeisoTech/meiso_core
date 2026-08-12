@@ -1,6 +1,6 @@
 # 系统进展
 
-> 日期：2026-08-12
+> 日期：2026-08-13
 > 状态：公开、已脱敏的 evidence report；不是产品规范，不包含原始日志、地址、凭据、
 > 唯一设备标识或本机路径。
 
@@ -16,7 +16,8 @@ transport 或实现顺序。
 
 ## 当前公共代码
 
-截至公开实现提交 `7244a5e`，`meiso_resource_core` 已实现四种 primitive、共同值类型、
+截至 payload source 提交 `add9b8ac49a86cb0fb10b8f8cff7cbb8f3739b27`，
+`meiso_resource_core` 已实现四种 primitive、共同值类型、
 descriptor validation 与 fixed immutable descriptor snapshot。下表中的“已证明”只表示当前
 portable in-process 实现通过了对应 Host fixture，不表示 remote、target 或产品 Runtime 已经
 成立。
@@ -62,10 +63,18 @@ C symbol、slot layout 和 ABI 不是新的 Resource semantic core，也没有�
 
 ## K230D lab evidence
 
-Resource semantic core 的 target build 状态为 `NOT_BUILT`，K230D conformance execution 状态为
-`NOT_RUN`。公开树已经准备复用同一 Host 测试源码的 K230D SDK overlay 与聚合 runner，但
-尚未下载锁定 SDK/toolchain、生成 RISC-V ELF 或系统镜像。以下既有启动证据只属于官方
-runtime recovery baseline，不能晋升这两个状态。
+Resource semantic core 的 target build 状态为 `HOST_VERIFIED_BOARD_UNVERIFIED`，K230D
+conformance execution 状态仍为 `NOT_RUN`。同一七套 Host 测试源码已经在 exact CanMV v1.8
+20-project graph 上 fresh cross-build；生成的 325472-byte static RISC-V ELF 经 host inspection，
+并从 fresh full-media `.img` 的 `/sdcard/app/meiso_conformance` 只读抽取后逐字节复核。完整镜像
+中的 payload SHA-256 为
+`04b085c813f85414ce0f8284f54a8e24fe1649e113429a0df50273edb1f23e91`。
+
+该 target application 在 warnings-as-errors 下有零 Meiso diagnostic；完整 pinned SDK fresh
+build 的 1421 条上游/toolchain warnings 已单独计数和审阅。生成的 `.kdimg` 分区表只有 `rtt` 与 `rtapp`，不含
+SDCARD FAT 或 Meiso ELF，因此是 `NO_MEISO_PAYLOAD / NOT_A_MEISO_OTA_CANDIDATE`。Host 生成、
+ELF inspection、镜像内 payload equality 或 USB 枚举都不能晋升 `NOT_RUN`；以下既有启动证据
+也仍只属于官方 runtime recovery baseline。
 
 一块 `CanMV-K230D-Zero V1.1` 已使用
 [官方 CanMV v1.8 Zero release](https://github.com/kendryte/canmv_k230/releases/tag/v1.8)
@@ -105,7 +114,7 @@ IMU、codec/KPU workload、network data path、clock quality、usable memory bud
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；
 - 任一完整、声明并验证过的产品 Profile；
-- target build、K230D conformance、CI、fuzz、并发、资源预算和长期 fault/soak evidence。
+- K230D conformance execution、CI、fuzz、并发、板端资源预算和长期 fault/soak evidence。
 
 这些 gap 是无序能力集合。实际下一项由当前产品问题、可用硬件、风险和可执行验收选择，
 不在本报告中固化开发路线。

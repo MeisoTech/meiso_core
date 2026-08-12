@@ -127,6 +127,6 @@ Core 当前不定义：
 
 这是 Resource semantic core，不是 application-facing Resource Runtime，也不是本页所定义的
 完整 Meiso Core。Virtual Edge、Link、Composition、MediaStream、capability discovery、
-platform adapter 与 target execution 尚未实现；K230D 目前只有尚未 target-build 的 source
-integration package。`meiso_latest_state` 和 `meiso_slice` 仍只作为 legacy evidence，不享有
+platform adapter 与 target execution 尚未实现；K230D 已有 host-inspected 的 conformance
+ELF/full-media package，但尚未在板端执行。`meiso_latest_state` 和 `meiso_slice` 仍只作为 legacy evidence，不享有
 兼容承诺。实现状态和平台证据见[系统进展](system-report.md)。

@@ -2,9 +2,9 @@
 
 > 实现状态：`IMPLEMENTED`
 > 验证状态：`HOST_VERIFIED`
-> target build：`NOT_BUILT`
+> target build：`HOST_VERIFIED_BOARD_UNVERIFIED`
 > K230D execution：`NOT_RUN`
-> 更新：2026-08-12
+> 更新：2026-08-13
 > 兼容性：本工作分支上的 C11 source API；不冻结二进制 ABI，也不兼容旧实验 API。
 
 本文把[Resource 契约](resource.md)映射为第一份可执行的 portable primitive 与 conformance
@@ -292,7 +292,8 @@ already-sealed。lookup 只复制 descriptor value，不返回内部 borrow；du
 
 ## Host 验证快照
 
-截至公开实现提交 `7244a5e`，common、四类 primitive、descriptor snapshot、纯进程内
+截至 payload source 提交
+`add9b8ac49a86cb0fb10b8f8cff7cbb8f3739b27`，common、四类 primitive、descriptor snapshot、纯进程内
 four-kind fixture 与复用同一测试源码的 conformance runner 已在 AppleClang 17、CMake 4.2、
 Ninja 1.13 的 clean out-of-tree Debug、Release 和 ASan/UBSan 配置中完成
 warnings-as-errors build 与 CTest，并通过 AppleClang 静态分析和 portable-library
@@ -310,15 +311,16 @@ backend、MediaStream external-buffer path 或板级 adapter，因此 `HOST_VERI
 |---|---|---|
 | common、四类 primitive、descriptor snapshot | `IMPLEMENTED / HOST_VERIFIED` | portable、in-process、caller-owned arena |
 | four-kind fixture | `HOST_VERIFIED` | test-only orthogonality，不是 runtime dispatcher |
-| target build | `NOT_BUILT` | 尚无 target ELF/toolchain evidence |
+| target build | `HOST_VERIFIED_BOARD_UNVERIFIED` | exact CanMV v1.8 graph 的 RISC-V ELF 与 fresh full image 已完成 host inspection；不是板端结果 |
 | K230D execution | `NOT_RUN` | 尚无板端 conformance evidence |
 
 ## 实施状态与后续工作
 
 common types/descriptor validation、State、Stream、Blob、descriptor set、Action、counter
-saturation vector 与 four-kind fixture 已分别完成并验证。下一工作单元是锁定 target toolchain、
-构建同一 conformance runner、检查 ELF 与制品摘要；实板重新可用后，再经过准确板卡、介质、
-镜像、供电、恢复和成功信号安全门执行 K230D 验证。
+saturation vector 与 four-kind fixture 已分别完成并验证。同一 runner 已由锁定 target toolchain
+构建成 RISC-V ELF，并在 fresh full image 中逐字节复核；`.kdimg` 被证明不含该 payload，不能
+作为 Meiso OTA candidate。下一工作单元是在准确板卡、介质、镜像、供电、恢复和成功信号
+安全门下执行 K230D 启动与人工 conformance，不由 host inspection 代替板端结果。
 
 旧实现会暂时并存，避免把“新文件能编译”和“旧行为已迁移完整”混为同一个不可审阅
 提交。只有行为向量覆盖和替代关系另行审阅后，才单独退役 `meiso_latest_state` 或

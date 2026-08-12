@@ -1,7 +1,7 @@
 # K230D Resource Core conformance target
 
-> Status: source integration prepared; target build and board execution are not
-> yet verified.
+> Status: the frozen source has been cross-built and host-inspected as a RISC-V
+> ELF and full-media image; K230D execution remains `NOT_RUN`.
 
 This target builds the same seven current Resource Core suites used on the host:
 `resource`, `state`, `stream`, `action`, `blob`, `descriptor_set`, and
@@ -16,6 +16,44 @@ threads, clocks, devices, or `libm`. The K230D build moves the large test arenas
 to static storage; host tests retain automatic storage. The target runner is
 therefore deliberately single-threaded, non-reentrant, and intended to run once
 per process.
+
+## Host-inspected target snapshot
+
+The 2026-08-13 offline candidate binds the payload source to
+`add9b8ac49a86cb0fb10b8f8cff7cbb8f3739b27`. The source is retained as a
+verified complete Git bundle in addition to the clean checkout; publication of
+that commit under a public remote ref is a separate repository operation and is
+not implied by this snapshot.
+
+The exact 20-project CanMV v1.8 graph was built from a fresh derived output
+directory with the graph's x86_64-hosted RISC-V musl compiler. The builder was
+Ubuntu 24.04 x86_64, which is a recorded and successfully qualified deviation
+from the upstream direct-build documentation's Ubuntu 20.04 host, not a claim
+that the two host environments are identical.
+
+- `meiso_conformance`: 325472 bytes; SHA-256
+  `04b085c813f85414ce0f8284f54a8e24fe1649e113429a0df50273edb1f23e91`;
+- ELF64 little-endian RISC-V `EXEC`, `lp64d`, RVC and RVV 1.0; static, entry
+  `_start == 0x200000000`, RX/RW LOAD separation, no dynamic dependency or
+  unresolved non-local symbol;
+- `.text = 166048`, `.data = 560`, `.bss = 934896`; emitted stack-usage data
+  records a largest single Meiso/test function frame of 1152 bytes, not a
+  runtime peak;
+- the fresh full `.img` is 650117120 bytes with SHA-256
+  `bbe269ff33b8d43c1f6974ec6e0fc641347e3db9ed22ed826c23db528e577a45`;
+- read-only extraction of `/sdcard/app/meiso_conformance` from that image is
+  byte-identical to the inspected ELF;
+- the generated `.kdimg` is 8630272 bytes with SHA-256
+  `3514b5c2bd6905fdce755446b50331a47b0d51871383b872b1fd68489ebb8258`,
+  but its table contains only `rtt` and `rtapp`. It is therefore
+  `NO_MEISO_PAYLOAD / NOT_A_MEISO_OTA_CANDIDATE`.
+
+All fourteen Meiso Core/test/runner objects were freshly compiled under the
+application's warnings-as-errors flags with zero Meiso warning or error. The
+pinned SDK and toolchain emitted 1421 reviewed upstream warnings during the
+complete fresh system build; those warnings are recorded separately and are not
+rewritten as Meiso diagnostics. None of these host inspections is a board
+execution result.
 
 ## Locked SDK boundary
 
@@ -33,13 +71,13 @@ remain outside this public source target. Do not replace these commits with a
 mutable branch head.
 
 The SDK toolchain named by this graph is an x86_64 Linux-hosted RISC-V musl
-toolchain. Download the SDK and toolchain only when a supported builder is ready
-and the public source commit has been frozen. A host-only conformance run does
-not require either download.
+toolchain. This candidate froze the archive and installed compiler identities;
+every later promotion build must recheck both before using the toolchain. A
+host-only conformance run does not require either download.
 
 ## SDK overlay
 
-Set three task-specific variables. `MEISO_PUBLIC_COMMIT` must come from the
+Set four task-specific variables. `MEISO_PUBLIC_COMMIT` must come from the
 candidate lock, not from an unreviewed moving checkout. It is accepted only as
 the exact 40-character lowercase commit of the clean checkout. Use an absolute
 `MEISO_PUBLIC_ROOT` made only of ASCII letters, digits, `_`, `.`, `/`, and `-`;
@@ -47,6 +85,7 @@ the restricted path keeps compiler flags and provenance checks unambiguous.
 
 ```sh
 SDK_ROOT=/path/to/locked/k230_rtos_sdk
+SDK_TOOLCHAIN_DIR=/path/to/locked/k230_toolchains
 MEISO_PUBLIC_ROOT=/path/to/clean/meiso_glass
 MEISO_PUBLIC_COMMIT=<full-public-source-commit>
 DERIVED_CONFIG=k230d_canmv_bpi_zero_meiso_conformance_defconfig
@@ -96,14 +135,24 @@ build, then build from the SDK root:
 ```sh
 make -C "$SDK_ROOT" "$DERIVED_CONFIG"
 make -C "$SDK_ROOT" \
+  SDK_TOOLCHAIN_DIR="$SDK_TOOLCHAIN_DIR" \
   MEISO_PUBLIC_ROOT="$MEISO_PUBLIC_ROOT" \
   MEISO_PUBLIC_COMMIT="$MEISO_PUBLIC_COMMIT" \
   app-distclean
 make -C "$SDK_ROOT" \
+  SDK_TOOLCHAIN_DIR="$SDK_TOOLCHAIN_DIR" \
+  SKIP_TOOLCHAIN_CHECK=1 \
   MEISO_PUBLIC_ROOT="$MEISO_PUBLIC_ROOT" \
   MEISO_PUBLIC_COMMIT="$MEISO_PUBLIC_COMMIT" \
   app
 ```
+
+`SKIP_TOOLCHAIN_CHECK=1` only bypasses the SDK's unconditional check for the
+separate XuanTie/Linux toolchain: this Zero config consumes the locked prebuilt
+U-Boot and OpenSBI payloads, while the application still uses the explicit
+`SDK_TOOLCHAIN_DIR` RT-Smart compiler. Use the bypass only after verifying the
+RT-Smart archive/compiler identities and the prebuilt U-Boot/OpenSBI hashes;
+never use it to ignore a missing or mismatched RT-Smart compiler.
 
 The standalone ELF is staged at:
 
@@ -117,11 +166,19 @@ template's OpenMP, MPP, OpenCV, nncase, HAL aggregation, third-party aggregation
 C++, strip, and `libm` settings. Inspect the unstripped ELF with the locked
 `file`, `readelf`, `size`, and `nm` tools before packaging it.
 
-After the ELF gate passes, build the full image with the same variables and no
-explicit goal:
+The commands above are an ordinary application build. Promotion additionally
+requires a controlled runbook to inventory the old derived output, move that
+exact directory recoverably outside `output/`, recreate it from the reviewed
+derived config, and prove that the new directory contained no object, ELF, or
+image before the build. This avoids publishing a destructive generic cleanup
+recipe and prevents stale outputs from satisfying a packaging script that did
+not regenerate them. After that fresh-output preflight, build the full image
+with the same variables and no explicit goal:
 
 ```sh
 make -C "$SDK_ROOT" \
+  SDK_TOOLCHAIN_DIR="$SDK_TOOLCHAIN_DIR" \
+  SKIP_TOOLCHAIN_CHECK=1 \
   MEISO_PUBLIC_ROOT="$MEISO_PUBLIC_ROOT" \
   MEISO_PUBLIC_COMMIT="$MEISO_PUBLIC_COMMIT"
 ```
@@ -132,16 +189,18 @@ The complete media image is the unique top-level `*.img` under:
 output/k230d_canmv_bpi_zero_meiso_conformance_defconfig/
 ```
 
-The `*.kdimg` is a distinct burning-tool/OTA artifact. Record the name, byte
-count, and SHA-256 of the ELF, full `.img`, and `.kdimg` separately. Never raw
-write a `.kdimg` to an SD card.
+The exact Zero `*.kdimg` is a distinct burning-tool/OTA artifact containing only
+`rtt` and `rtapp`; it does not contain the SDCARD FAT payload. Record it as a
+negative packaging result, not as a Meiso deployment candidate. Never raw write
+a `.kdimg` to an SD card.
 
 ## Offline promotion gate
 
 `HOST_VERIFIED_BOARD_UNVERIFIED` requires all of the following:
 
-- the public source and owning contract commits are frozen and the checkout is
-  clean;
+- the source and owning contract commits are frozen, the checkout is clean, and
+  the exact source is recoverable from a reviewed public ref or complete verified
+  Git bundle;
 - Debug, Release, warnings-as-errors, ASan/UBSan, analyzer, short-enum, the seven
   independent suites, and the aggregate host runner pass;
 - aggregate host output starts with `MEISO_CONFORMANCE_BEGIN format=1
@@ -153,13 +212,19 @@ write a `.kdimg` to an SD card.
   `MEISO_CONFORMANCE_FAIL`, including passed/failed totals and
   `first_failed_suite`;
 - the exact locked SDK graph and derived-config diff are recorded;
-- the target build has no warnings, and ELF architecture, entry point,
-  sections, size, static linkage, undefined symbols, and emitted `.su` stack
-  reports are reviewed;
-- ELF strings contain neither `MEISO_PUBLIC_ROOT` nor the SDK/build root; source
-  locations are normalized to the public `meiso_glass` prefix;
+- the Meiso application compiles under warnings-as-errors with zero Meiso
+  diagnostic, pinned upstream full-build warnings are separately counted and
+  reviewed, and ELF architecture, entry point, sections, size, static linkage,
+  undefined symbols, and emitted `.su` stack reports are reviewed;
+- ELF strings contain neither `MEISO_PUBLIC_ROOT` nor the current SDK/build root;
+  Meiso source locations are normalized to the public `meiso_glass` prefix, while
+  any pinned toolchain DWARF path is recorded as toolchain provenance;
 - the exact ELF is present in `images/sdcard/app/meiso_conformance` and the ELF,
-  full `.img`, and `.kdimg` each have recorded names, byte counts, and SHA-256;
+  fresh full `.img`, and optional compressed full image each have recorded names,
+  byte counts, and SHA-256;
+- read-only extraction proves that the full image contains that exact ELF, while
+  the `.kdimg` partition table is recorded as `NO_MEISO_PAYLOAD` and is excluded
+  from candidate activation;
 - image inspection confirms there is no startup hook, `main.py`, daemon, or
   network activation added by this target.
 
