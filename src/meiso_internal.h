@@ -10,4 +10,13 @@ static inline void meiso_increment_saturated(uint64_t *value)
     }
 }
 
+static inline void meiso_add_saturated(uint64_t *value, uint64_t amount)
+{
+    if (amount > UINT64_MAX - *value) {
+        *value = UINT64_MAX;
+    } else {
+        *value += amount;
+    }
+}
+
 #endif

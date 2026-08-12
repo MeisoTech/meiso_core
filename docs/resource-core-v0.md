@@ -142,9 +142,21 @@ Stream v0 是显式声明的 `STRICT_MONOTONIC` best-effort capability、完整 
 - `MeisoStreamConfig` 明确 `STRICT_MONOTONIC`、slot count、payload stride、retained history、
   deadline support 与 `DROP_OLDEST / REJECT_NEWEST`。满时 drop-oldest 是
   `ACCEPTED_WITH_DROP`，会移除最旧 sample 并计数；reject-newest 才是保持 ring 不变的失败。
+- queue slot 必须至少一个，history slot 可以是零。每个真正提交的 forward identity（进入 queue
+  或因过期而丢弃）都按接收顺序进入 latest-N history；queue 另外保留尚未消费的完整 sample，
+  因此慢消费者仍可识别已滑出 history 但尚在 queue 的 duplicate/conflict。`pop` 与
+  drop-oldest 只移除 queue，不把旧 sample 倒写进 history，以免消费时机改变 retained window。
+- intrinsic sample 结构、producer scope 与 epoch 先校验；随后先在 queue/history 分类同 key 的
+  duplicate/conflict，再将未保留且不大于 high-water 的 key 分类为 stale/wrap。只有新的 forward
+  key 才检查配置容量、deadline admission 和 ring overflow。这样动态 clock projection 或当前
+  ring 状态不会改写一次已提交 sample 的 identity 结论。
 - sample 保留原 sender clock/deadline metadata；外层另给本次 admission 使用的 local comparable
   deadline 与 `now`。重传时 clock estimate 变化不能把同一 sample 变成 conflict。clock scope
-  不匹配单独报告，Core 不做 offset/uncertainty 估计。
+  不匹配单独报告，Core 不做 offset/uncertainty 估计。`now == deadline` 仍可接收，只有
+  `now > deadline` 才过期；过期 sample 不占 queue、不会触发 overflow，但会推进 high-water、
+  保留 identity 并显式报告 gap。reject-newest 不推进 high-water，调用者消费后可重试同 sample。
+- `begin_producer` 把 epoch 当非零 opaque identity，不根据数值大小猜测先后。producer 或 epoch
+  改变会显式清空 queue/history/high-water；旧 scope/epoch 的迟到 sample 被拒绝。
 - `peek` 的 view 在下一次成功 receive/pop/begin-producer 前有效；`pop` 消费最旧 sample。
   v0 fixed-stride ring **尚未实现 MediaStream payload path**。未来 MediaStream adapter 可复用
   key/classification 规则，但必须另证 external-buffer、codec dependency 与 recovery，不能把
