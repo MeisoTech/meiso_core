@@ -18,6 +18,7 @@ struct MeisoBlobStore {
     size_t storage_offset;
     size_t slot_stride;
     size_t staging_offset;
+    size_t verification_offset;
     uint32_t published_count;
     MeisoContentId staging_content_id;
     size_t staging_length;
@@ -77,6 +78,7 @@ static bool calculate_layout(
     size_t *out_storage_offset,
     size_t *out_slot_stride,
     size_t *out_staging_offset,
+    size_t *out_verification_offset,
     size_t *out_required
 )
 {
@@ -98,7 +100,14 @@ static bool calculate_layout(
         ) ||
         !checked_add(*out_storage_offset, slots_size, out_staging_offset) ||
         !checked_add(
-            *out_staging_offset, descriptor->max_payload_size, out_required
+            *out_staging_offset,
+            descriptor->max_payload_size,
+            out_verification_offset
+        ) ||
+        !checked_add(
+            *out_verification_offset,
+            descriptor->max_payload_size,
+            out_required
         )) {
         return false;
     }
@@ -110,6 +119,7 @@ static bool store_valid(const MeisoBlobStore *store)
     size_t storage_offset;
     size_t slot_stride;
     size_t staging_offset;
+    size_t verification_offset;
     size_t required;
 
     return store != NULL &&
@@ -119,11 +129,13 @@ static bool store_valid(const MeisoBlobStore *store)
             &storage_offset,
             &slot_stride,
             &staging_offset,
+            &verification_offset,
             &required
         ) &&
         store->storage_offset == storage_offset &&
         store->slot_stride == slot_stride &&
         store->staging_offset == staging_offset &&
+        store->verification_offset == verification_offset &&
         store->published_count <= store->config.published_slot_count;
 }
 
@@ -214,6 +226,11 @@ static uint8_t *staging_content(MeisoBlobStore *store)
     return (uint8_t *)(void *)store + store->staging_offset;
 }
 
+static uint8_t *verification_content(MeisoBlobStore *store)
+{
+    return (uint8_t *)(void *)store + store->verification_offset;
+}
+
 static const MeisoBlobSlot *find_slot(
     const MeisoBlobStore *store,
     const MeisoContentId *content_id
@@ -265,6 +282,16 @@ static void clear_staging(MeisoBlobStore *store)
     store->staging_active = false;
 }
 
+static void clear_verification_snapshot(
+    MeisoBlobStore *store,
+    size_t snapshot_size
+)
+{
+    if (snapshot_size != 0U) {
+        memset(verification_content(store), 0, snapshot_size);
+    }
+}
+
 static void record_reentrant_rejection(MeisoBlobStore *store)
 {
     meiso_increment_saturated(&store->stats.reentrant_rejections);
@@ -283,6 +310,7 @@ size_t meiso_blob_store_memory_required(
     size_t storage_offset;
     size_t slot_stride;
     size_t staging_offset;
+    size_t verification_offset;
     size_t required;
 
     if (!calculate_layout(
@@ -291,6 +319,7 @@ size_t meiso_blob_store_memory_required(
         &storage_offset,
         &slot_stride,
         &staging_offset,
+        &verification_offset,
         &required
     )) {
         return 0U;
@@ -311,6 +340,7 @@ MeisoBlobInitStatus meiso_blob_store_init(
     size_t storage_offset;
     size_t slot_stride;
     size_t staging_offset;
+    size_t verification_offset;
     size_t required;
     MeisoBlobStore *store;
 
@@ -338,6 +368,7 @@ MeisoBlobInitStatus meiso_blob_store_init(
         &storage_offset,
         &slot_stride,
         &staging_offset,
+        &verification_offset,
         &required
     ) || arena_size < required) {
         return MEISO_BLOB_INIT_ARENA_TOO_SMALL;
@@ -352,6 +383,7 @@ MeisoBlobInitStatus meiso_blob_store_init(
     store->storage_offset = storage_offset;
     store->slot_stride = slot_stride;
     store->staging_offset = staging_offset;
+    store->verification_offset = verification_offset;
     *out_store = store;
     return MEISO_BLOB_INIT_OK;
 }
@@ -434,10 +466,12 @@ MeisoBlobCommitStatus meiso_blob_store_commit_verified(
     void *verifier_context
 )
 {
-    MeisoByteView staged_view;
+    MeisoByteView verification_view;
     MeisoContentId expected_content_id;
+    MeisoContentId publication_content_id;
     const MeisoBlobSlot *existing;
     MeisoBlobSlot *target;
+    size_t candidate_size;
     bool verified;
 
     if (!store_valid(store) || verifier == NULL) {
@@ -455,47 +489,61 @@ MeisoBlobCommitStatus meiso_blob_store_commit_verified(
         return MEISO_BLOB_COMMIT_LENGTH_MISMATCH;
     }
 
-    staged_view.data = staging_content(store);
-    staged_view.size = store->staging_length;
+    candidate_size = store->staging_length;
+    if (candidate_size != 0U) {
+        memmove(
+            verification_content(store),
+            staging_content(store),
+            candidate_size
+        );
+    }
+    verification_view.data = verification_content(store);
+    verification_view.size = candidate_size;
     expected_content_id = store->staging_content_id;
+    publication_content_id = store->staging_content_id;
     store->verifier_active = true;
     verified = verifier(
-        &expected_content_id, staged_view, verifier_context
+        &expected_content_id, verification_view, verifier_context
     );
     store->verifier_active = false;
     if (!verified) {
+        clear_verification_snapshot(store, candidate_size);
         meiso_increment_saturated(&store->stats.integrity_failures);
         return MEISO_BLOB_COMMIT_INTEGRITY_FAILED;
     }
 
-    existing = find_slot(store, &store->staging_content_id);
+    existing = find_slot(store, &publication_content_id);
     if (existing != NULL) {
         if (slot_content_equal(
-            existing, staging_content(store), store->staging_length
+            existing, verification_content(store), candidate_size
         )) {
+            clear_verification_snapshot(store, candidate_size);
             clear_staging(store);
             meiso_increment_saturated(&store->stats.duplicates);
             return MEISO_BLOB_COMMIT_DUPLICATE;
         }
+        clear_verification_snapshot(store, candidate_size);
         meiso_increment_saturated(&store->stats.conflicts);
         return MEISO_BLOB_COMMIT_CONFLICT;
     }
 
     target = find_empty_slot(store);
     if (target == NULL) {
+        clear_verification_snapshot(store, candidate_size);
         meiso_increment_saturated(&store->stats.capacity_failures);
         return MEISO_BLOB_COMMIT_CAPACITY;
     }
 
-    target->content_id = store->staging_content_id;
-    target->content_size = store->staging_length;
-    if (store->staging_length != 0U) {
+    target->content_id = publication_content_id;
+    target->content_size = candidate_size;
+    if (candidate_size != 0U) {
         memmove(
             slot_content(target),
-            staging_content(store),
-            store->staging_length
+            verification_content(store),
+            candidate_size
         );
     }
+    clear_verification_snapshot(store, candidate_size);
     target->occupied = true;
     store->published_count += 1U;
     clear_staging(store);

@@ -19,10 +19,17 @@ typedef struct {
 } MeisoBlobView;
 
 /*
- * The verifier receives the exact bytes held in the store's staging area.
+ * The verifier receives an immutable verification snapshot, not the mutable
+ * staging storage. For non-empty content the snapshot does not alias staging
+ * or published storage. The same snapshot bytes are used for the publication
+ * decision and any resulting publication.
+ *
  * The expected ContentId is canonicalized by Core. Both borrowed arguments
- * are valid only for the duration of the callback. The callback must not call
- * a mutating or staging-access Blob API for the same store.
+ * are valid only for the duration of the callback. The callback must treat
+ * staged_content as const, must not retain or access either borrow after it
+ * returns, and must not call a mutating or staging-access Blob API for the
+ * same store. Writing through a cast of staged_content.data is outside the
+ * verifier contract.
  */
 typedef bool (*MeisoBlobVerifier)(
     const MeisoContentId *expected_content_id,
@@ -99,6 +106,10 @@ enum {
 };
 
 size_t meiso_blob_alignment_required(void);
+/*
+ * Required storage includes independent max-payload staging and verification
+ * regions in addition to the configured immutable publication slots.
+ */
 size_t meiso_blob_store_memory_required(
     const MeisoResourceDescriptor *descriptor,
     const MeisoBlobConfig *config
@@ -123,7 +134,10 @@ bool meiso_blob_store_staging_buffer(
  * A staging buffer borrow remains valid until the next successful publish,
  * duplicate commit, or abort on this store. Length mismatch, integrity
  * failure, conflict, capacity, invalid input, and reentrant rejection retain
- * the staging candidate and do not invalidate that borrow.
+ * the staging candidate and do not invalidate that borrow. During verifier
+ * execution, writes through a previously obtained staging borrow do not alter
+ * that commit's verification snapshot; they remain in staging for a later
+ * retry if the current commit does not consume the candidate.
  */
 MeisoBlobCommitStatus meiso_blob_store_commit_verified(
     MeisoBlobStore *store,

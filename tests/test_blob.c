@@ -42,6 +42,16 @@ typedef struct {
     bool result;
 } ReentrantResultContext;
 
+typedef struct {
+    uint8_t *staging_alias;
+    const uint8_t *expected_snapshot;
+    const uint8_t *staging_replacement;
+    size_t content_size;
+    size_t calls;
+    bool saw_distinct_snapshot;
+    bool snapshot_remained_stable;
+} StagingAliasMutationContext;
+
 static MeisoResourceDescriptor blob_descriptor(size_t max_payload_size)
 {
     MeisoResourceDescriptor descriptor;
@@ -176,6 +186,46 @@ static bool verify_mutates_expected_copy(
     return true;
 }
 
+static bool verify_while_mutating_saved_staging_alias(
+    const MeisoContentId *expected_content_id,
+    MeisoByteView staged_content,
+    void *context
+)
+{
+    StagingAliasMutationContext *mutation = context;
+
+    (void)expected_content_id;
+    mutation->calls += 1U;
+    if (staged_content.size != mutation->content_size ||
+        (staged_content.size != 0U &&
+         memcmp(
+             staged_content.data,
+             mutation->expected_snapshot,
+             staged_content.size
+         ) != 0)) {
+        return false;
+    }
+    mutation->saw_distinct_snapshot =
+        staged_content.size == 0U ||
+        staged_content.data != mutation->staging_alias;
+    if (mutation->content_size != 0U) {
+        memmove(
+            mutation->staging_alias,
+            mutation->staging_replacement,
+            mutation->content_size
+        );
+    }
+    mutation->snapshot_remained_stable =
+        staged_content.size == 0U ||
+        memcmp(
+            staged_content.data,
+            mutation->expected_snapshot,
+            staged_content.size
+        ) == 0;
+    return mutation->saw_distinct_snapshot &&
+        mutation->snapshot_remained_stable;
+}
+
 static bool init_store(
     TestArena *arena,
     const MeisoResourceDescriptor *descriptor,
@@ -200,6 +250,7 @@ static bool test_memory_and_init_contract(void)
     size_t required = meiso_blob_store_memory_required(&descriptor, &config);
     MeisoResourceDescriptor invalid_descriptor = descriptor;
     MeisoBlobConfig invalid_config = {0U};
+    MeisoBlobConfig one_slot_config = {1U};
     size_t index;
 
     CHECK(required != 0U);
@@ -211,6 +262,10 @@ static bool test_memory_and_init_contract(void)
     invalid_descriptor = descriptor;
     invalid_descriptor.max_payload_size = SIZE_MAX;
     CHECK(meiso_blob_store_memory_required(&invalid_descriptor, &config) == 0U);
+    invalid_descriptor.max_payload_size = SIZE_MAX / 3U;
+    CHECK(meiso_blob_store_memory_required(
+        &invalid_descriptor, &one_slot_config
+    ) == 0U);
 
     CHECK(meiso_blob_store_init(
         arena.bytes, required, &descriptor, &config, NULL
@@ -646,6 +701,55 @@ static bool test_verifier_cannot_rewrite_staged_identity(void)
     return true;
 }
 
+static bool test_verifier_snapshot_isolated_from_saved_staging_alias(void)
+{
+    TestArena arena;
+    MeisoResourceDescriptor descriptor = blob_descriptor(4U);
+    MeisoBlobConfig config = {1U};
+    MeisoBlobStore *store;
+    MeisoContentId id = content_id(70U);
+    const uint8_t verified_content[] = {'g', 'o', 'o', 'd'};
+    const uint8_t staging_replacement[] = {'e', 'v', 'i', 'l'};
+    MeisoMutableBuffer staging;
+    MeisoBlobView published;
+    StagingAliasMutationContext mutation;
+
+    CHECK(init_store(&arena, &descriptor, &config, &store));
+    CHECK(meiso_blob_store_stage_begin(
+        store, &id, sizeof(verified_content)
+    ) == MEISO_BLOB_STAGE_STARTED);
+    CHECK(meiso_blob_store_staging_buffer(store, &staging));
+    memmove(staging.data, verified_content, sizeof(verified_content));
+
+    memset(&mutation, 0, sizeof(mutation));
+    mutation.staging_alias = staging.data;
+    mutation.expected_snapshot = verified_content;
+    mutation.staging_replacement = staging_replacement;
+    mutation.content_size = sizeof(verified_content);
+    CHECK(meiso_blob_store_commit_verified(
+        store,
+        sizeof(verified_content),
+        verify_while_mutating_saved_staging_alias,
+        &mutation
+    ) == MEISO_BLOB_COMMIT_PUBLISHED);
+    CHECK(mutation.calls == 1U);
+    CHECK(mutation.saw_distinct_snapshot);
+    CHECK(mutation.snapshot_remained_stable);
+    CHECK(meiso_blob_store_lookup(store, &id, &published));
+    CHECK(published.content.size == sizeof(verified_content));
+    CHECK(memcmp(
+        published.content.data,
+        verified_content,
+        sizeof(verified_content)
+    ) == 0);
+    CHECK(memcmp(
+        published.content.data,
+        staging_replacement,
+        sizeof(staging_replacement)
+    ) != 0);
+    return true;
+}
+
 int main(void)
 {
     if (!test_memory_and_init_contract() ||
@@ -655,7 +759,8 @@ int main(void)
         !test_zero_length_and_canonical_identity() ||
         !test_verifier_reentrancy_guard() ||
         !test_failed_reentrant_verifier_retains_staging() ||
-        !test_verifier_cannot_rewrite_staged_identity()) {
+        !test_verifier_cannot_rewrite_staged_identity() ||
+        !test_verifier_snapshot_isolated_from_saved_staging_alias()) {
         return 1;
     }
     (void)puts("blob tests passed");
