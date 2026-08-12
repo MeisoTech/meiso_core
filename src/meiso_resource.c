@@ -75,7 +75,7 @@ bool meiso_deadline_valid(MeisoDeadline value)
     return !value.present || meiso_time_point_valid(value.value);
 }
 
-bool meiso_delivery_scope_valid(MeisoDeliveryScope value)
+bool meiso_delivery_generation_valid(MeisoDeliveryGeneration value)
 {
     return value.value != 0U;
 }

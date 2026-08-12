@@ -27,17 +27,19 @@ typedef struct {
     uint64_t low;
 } MeisoActionId;
 
-typedef enum {
+typedef uint8_t MeisoResourceKind;
+enum {
     MEISO_RESOURCE_KIND_STATE = 1,
     MEISO_RESOURCE_KIND_STREAM = 2,
     MEISO_RESOURCE_KIND_ACTION = 3,
     MEISO_RESOURCE_KIND_BLOB = 4
-} MeisoResourceKind;
+};
 
-typedef enum {
+typedef uint8_t MeisoOwnerRole;
+enum {
     MEISO_OWNER_ROLE_HOST = 1,
     MEISO_OWNER_ROLE_EDGE = 2
-} MeisoOwnerRole;
+};
 
 typedef struct {
     MeisoOwnerRole role;
@@ -71,14 +73,15 @@ typedef struct {
 
 typedef struct {
     uint64_t value;
-} MeisoDeliveryScope;
+} MeisoDeliveryGeneration;
 
-typedef enum {
+typedef uint16_t MeisoContentAlgorithm;
+enum {
     MEISO_CONTENT_ALGORITHM_SHA256 = 1
-} MeisoContentAlgorithm;
+};
 
 typedef struct {
-    uint16_t algorithm;
+    MeisoContentAlgorithm algorithm;
     uint8_t digest_size;
     uint8_t digest[MEISO_CONTENT_DIGEST_MAX_SIZE];
 } MeisoContentId;
@@ -91,14 +94,15 @@ typedef struct {
     size_t max_payload_size;
 } MeisoResourceDescriptor;
 
-typedef enum {
+typedef uint8_t MeisoDescriptorStatus;
+enum {
     MEISO_DESCRIPTOR_VALID = 0,
     MEISO_DESCRIPTOR_INVALID_ARGUMENT = 1,
     MEISO_DESCRIPTOR_INVALID_RESOURCE_ID = 2,
     MEISO_DESCRIPTOR_INVALID_KIND = 3,
     MEISO_DESCRIPTOR_INVALID_SCHEMA = 4,
     MEISO_DESCRIPTOR_INVALID_OWNER = 5
-} MeisoDescriptorStatus;
+};
 
 bool meiso_resource_id_equal(MeisoResourceId lhs, MeisoResourceId rhs);
 bool meiso_resource_id_valid(MeisoResourceId value);
@@ -113,7 +117,7 @@ bool meiso_byte_view_valid(MeisoByteView value);
 bool meiso_mutable_buffer_valid(MeisoMutableBuffer value);
 bool meiso_time_point_valid(MeisoTimePoint value);
 bool meiso_deadline_valid(MeisoDeadline value);
-bool meiso_delivery_scope_valid(MeisoDeliveryScope value);
+bool meiso_delivery_generation_valid(MeisoDeliveryGeneration value);
 bool meiso_content_id_valid(const MeisoContentId *value);
 bool meiso_content_id_equal(const MeisoContentId *lhs, const MeisoContentId *rhs);
 bool meiso_schema_ref_equal(MeisoSchemaRef lhs, MeisoSchemaRef rhs);

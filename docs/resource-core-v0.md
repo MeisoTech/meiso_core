@@ -76,6 +76,8 @@ support；Action 的 slot/arguments/result/dedup 限制；Blob 的 slot/content/
 成功返回的 borrowed `ByteView` 只在同一 handle 下一次成功的 mutating operation 前有效；
 失败调用不得使它失效。`*_stats()` 复制饱和计数器 snapshot，不返回内部指针。所有 init 和
 operation 都有 typed outcome；`memory_required()` 对 invalid config 或 size overflow 返回 0。
+handle 不提供内部同步，调用者必须串行化同一 arena 的 mutation。init 允许 descriptor/config
+位于 arena 内（实现先复制再清零），但 output-handle pointer 不能与将被初始化的 arena 重叠。
 
 ## Prototype-level API 形状
 
@@ -84,7 +86,7 @@ publisher/replica 或 caller/executor typed handle。
 
 | primitive | arena/init | 主要 mutation | 只读 observation |
 |---|---|---|---|
-| State publisher | `state_publisher_memory_required(desc,cfg)`；`state_publisher_init(...)` | `publish(owner,version,bytes)`；`begin_delivery(generation)`；`mark_accepted(...)`；`mark_delivery_failed(...)`；`end_delivery(...)` | `current()`；`next_offer()`；`stats()` |
+| State publisher | `state_publisher_memory_required(desc,cfg)`；`state_publisher_init(...)` | `publish(owner,version,bytes)`；`begin_delivery(generation)`；`mark_offer_complete(...)`；`mark_delivery_accepted(...)`；`mark_delivery_failed(...)`；`end_delivery(...)` | `current()`；`next_offer()`；`stats()` |
 | State replica | `state_replica_memory_required(desc)`；`state_replica_init(...)` | `begin_owner(owner)`；`receive(owner,version,bytes)` | `current()`；`stats()` |
 | Stream receiver | `stream_memory_required(desc,cfg)`；`stream_init(...)` | `begin_producer(producer,epoch)`；`receive(sample,comparable_now)`；`pop()` | `peek()`；`stats()` |
 | Action caller | `action_caller_memory_required(desc,cfg)`；`action_caller_init(...)` | `submit(request)`；`mark_delivery_accepted(...)`；`observe_result(...)`；`mark_indeterminate(...)` | `next_offer()`；`query()`；`stats()` |
@@ -105,14 +107,23 @@ State publisher 与 replica 分开初始化，二者都持有调用者提供的�
   单调，`UINT64_MAX -> small` 是 wrap failure。
 - 同 key 同 bytes 是 duplicate；同 key 异 bytes 是 conflict；旧 version 是 stale。
 - publisher 的新 truth 原子覆盖 current；若旧 current 尚待交付，返回 `REPLACED_PENDING`。
+- publisher 第一次成功 publish 绑定 owner incarnation，直到该 handle 销毁；本地 owner 自身
+  重启必须新建 publisher handle，不能在同一 version namespace 内偷偷换 incarnation。
 - `next_offer` 只借用 current snapshot；`mark_delivery_accepted` 只清除匹配 local delivery
   generation、owner scope 和 version 的 pending，不表示 desired 已实际应用。
 - `BEST_EFFORT` 与 `CONVERGENT` 是 `MeisoStateConfig` 的两种明确模式。新 publish 在已打开
-  delivery generation 中都成为 pending；best-effort 的显式 `mark_delivery_failed` 清除该
-  offer 并增加 drop counter，convergent 则保留 pending 并返回 required-delivery failure。
+  delivery generation 中都成为 pending；best-effort 在 adapter 接管一次 offer 后用
+  `mark_offer_complete` 清除 pending，这既不是 peer acceptance 也不是 actual application。
+  显式 `mark_delivery_failed` 同样可清除并增加 drop counter；convergent 则保留 pending 并
+  返回 required-delivery failure。
 - `end_delivery` 在 convergent current 仍 pending 时返回 `CONVERGENCE_FAILED` 并增加 failure
   counter；新的 generation 重新 offer current。best-effort 结束时只记录/drop 未送达 offer，
-  新 generation 不重发旧 truth。wrong-generation acceptance 或 failure 永远不能清 pending。
+  在同一 generation 不自动 retry；新的 generation 仍 offer 当时最新 current 一次，以允许
+  owner 在新 Session 重新发布仍有效 truth。wrong-generation acceptance 或 failure 永远不能
+  清 pending。
+- 对一次 best-effort offer，adapter 必须在已知最终同步结果时选择 `mark_offer_complete`、
+  `mark_delivery_accepted` 或 `mark_delivery_failed` 之一；`complete` 只表示本地接管/尝试已
+  完成。若 peer acceptance 随后异步到达，Core 仍可独立记录它一次；重复 acceptance 幂等。
 - replica 显式开始 owner incarnation。切换后清空旧 current，新 incarnation 可以从 version 1
   开始；旧 scope 的 receive 被拒绝。
 - desired 与 actual 必须是两个 descriptor/State instance；primitive 不把它们合成布尔值。
@@ -124,15 +135,16 @@ Stream v0 是显式声明的 `STRICT_MONOTONIC` best-effort capability、完整 
 
 - sample key 为 `(producer incarnation, epoch, sequence)`；sequence 从 1 开始，只在同 epoch
   内比较。producer incarnation 或无法连续恢复时由调用者显式开始新 epoch。
-- 同 key 的完整 immutable sample（source clock/time、mapped deadline、dependency metadata 与
-  payload）相同才是 duplicate；任一字段不同都是 conflict。跳号接受并报告 `GAP`；已超出
+- 同 key 的完整 immutable sample（source clock/time、sender deadline metadata、dependency
+  metadata 与 payload）相同才是 duplicate；任一字段不同都是 conflict。动态 clock estimate
+  得到的 local projection 不是 sample identity。跳号接受并报告 `GAP`；已超出
   fixed retained history 的旧 key 报 stale，v0 不把 late/reorder 冒充已支持。
 - `MeisoStreamConfig` 明确 `STRICT_MONOTONIC`、slot count、payload stride、retained history、
   deadline support 与 `DROP_OLDEST / REJECT_NEWEST`。满时 drop-oldest 是
   `ACCEPTED_WITH_DROP`，会移除最旧 sample 并计数；reject-newest 才是保持 ring 不变的失败。
-- sample 保留原 sender clock metadata；deadline 则必须是外层已经映射并带 uncertainty gate
-  结论的 local comparable deadline。clock epoch 不匹配单独报告，Core 不做 offset/uncertainty
-  估计。
+- sample 保留原 sender clock/deadline metadata；外层另给本次 admission 使用的 local comparable
+  deadline 与 `now`。重传时 clock estimate 变化不能把同一 sample 变成 conflict。clock scope
+  不匹配单独报告，Core 不做 offset/uncertainty 估计。
 - `peek` 的 view 在下一次成功 receive/pop/begin-producer 前有效；`pop` 消费最旧 sample。
   v0 fixed-stride ring **尚未实现 MediaStream payload path**。未来 MediaStream adapter 可复用
   key/classification 规则，但必须另证 external-buffer、codec dependency 与 recovery，不能把
@@ -144,8 +156,10 @@ Action caller 与 executor 分开。delivery acceptance、executor acceptance �
 是三件不同的事。
 
 - `ActionId` 自身是稳定 request identity；request 另带 expected executor incarnation、target
-  ResourceId、operation SchemaId、arguments、可选的已映射 local deadline 与 idempotency
-  declaration。executor incarnation 只做 scope validation，不把旧 ID 变成“新 Action”。
+  ResourceId、operation SchemaId、arguments、sender deadline metadata 与 idempotency
+  declaration。executor incarnation 只做 scope validation，不把旧 ID 变成“新 Action”。本地
+  mapped expiry 是 ingest context，不进入 duplicate identity；同一 ActionId 首次 admission 后
+  保留原判断，clock estimate 更新不能让 replay 改写结果。
 - caller `submit -> next_offer -> mark_delivery_accepted` 不产生成功结果；只有 executor 的
   result 能进入 `SUCCEEDED / FAILED / REJECTED / EXPIRED / INDETERMINATE`。
 - executor `ingest` 同 ID 同完整 request 返回 replay-same，不再次交给 application；同 ID

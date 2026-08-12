@@ -1,10 +1,17 @@
 #include "meiso_resource.h"
 
+#include "meiso_internal.h"
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 static int failures;
+
+_Static_assert(sizeof(MeisoResourceKind) == sizeof(uint8_t), "fixed resource kind");
+_Static_assert(sizeof(MeisoOwnerRole) == sizeof(uint8_t), "fixed owner role");
+_Static_assert(sizeof(MeisoDescriptorStatus) == sizeof(uint8_t), "fixed status");
+_Static_assert(sizeof(MeisoContentAlgorithm) == sizeof(uint16_t), "fixed algorithm");
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -62,19 +69,29 @@ static void test_borrowed_views_and_time(void)
     CHECK(meiso_deadline_valid((MeisoDeadline){false, {0U, 0U}}));
     CHECK(meiso_deadline_valid((MeisoDeadline){true, {2U, 10U}}));
     CHECK(!meiso_deadline_valid((MeisoDeadline){true, {0U, 10U}}));
-    CHECK(meiso_delivery_scope_valid((MeisoDeliveryScope){1U}));
-    CHECK(!meiso_delivery_scope_valid((MeisoDeliveryScope){0U}));
+    CHECK(meiso_delivery_generation_valid((MeisoDeliveryGeneration){1U}));
+    CHECK(!meiso_delivery_generation_valid((MeisoDeliveryGeneration){0U}));
 }
 
 static void test_owner_scope(void)
 {
     const MeisoOwnerScope first = {MEISO_OWNER_ROLE_HOST, 4U};
+    MeisoOwnerScope padded_first;
+    MeisoOwnerScope padded_second;
 
     CHECK(meiso_owner_scope_valid(first));
     CHECK(meiso_owner_scope_equal(first, (MeisoOwnerScope){MEISO_OWNER_ROLE_HOST, 4U}));
     CHECK(!meiso_owner_scope_equal(first, (MeisoOwnerScope){MEISO_OWNER_ROLE_EDGE, 4U}));
     CHECK(!meiso_owner_scope_valid((MeisoOwnerScope){MEISO_OWNER_ROLE_HOST, 0U}));
     CHECK(!meiso_owner_scope_valid((MeisoOwnerScope){(MeisoOwnerRole)0, 4U}));
+
+    memset(&padded_first, 0xaa, sizeof(padded_first));
+    memset(&padded_second, 0x55, sizeof(padded_second));
+    padded_first.role = MEISO_OWNER_ROLE_HOST;
+    padded_first.incarnation = 4U;
+    padded_second.role = MEISO_OWNER_ROLE_HOST;
+    padded_second.incarnation = 4U;
+    CHECK(meiso_owner_scope_equal(padded_first, padded_second));
 }
 
 static void test_content_identity(void)
@@ -90,6 +107,8 @@ static void test_content_identity(void)
     second = first;
 
     CHECK(meiso_content_id_valid(&first));
+    CHECK(meiso_content_id_equal(&first, &second));
+    second.digest[MEISO_SHA256_DIGEST_SIZE] = 0xffU;
     CHECK(meiso_content_id_equal(&first, &second));
     second.digest[1] = 0x35U;
     CHECK(!meiso_content_id_equal(&first, &second));
@@ -110,12 +129,22 @@ static void test_descriptor_validation(void)
 {
     MeisoResourceDescriptor descriptor = valid_descriptor();
     MeisoResourceDescriptor same = descriptor;
+    MeisoResourceDescriptor padded;
 
     CHECK(meiso_resource_descriptor_validate(NULL) ==
           MEISO_DESCRIPTOR_INVALID_ARGUMENT);
     CHECK(meiso_resource_descriptor_validate(&descriptor) ==
           MEISO_DESCRIPTOR_VALID);
     CHECK(meiso_resource_descriptor_equal(&descriptor, &same));
+    CHECK(!meiso_resource_descriptor_equal(NULL, &same));
+
+    memset(&padded, 0xa5, sizeof(padded));
+    padded.id = descriptor.id;
+    padded.kind = descriptor.kind;
+    padded.schema = descriptor.schema;
+    padded.owner = descriptor.owner;
+    padded.max_payload_size = descriptor.max_payload_size;
+    CHECK(meiso_resource_descriptor_equal(&descriptor, &padded));
 
     descriptor.id = (MeisoResourceId){0U, 0U};
     CHECK(meiso_resource_descriptor_validate(&descriptor) ==
@@ -141,6 +170,31 @@ static void test_descriptor_validation(void)
     same = descriptor;
     same.max_payload_size = 1U;
     CHECK(!meiso_resource_descriptor_equal(&descriptor, &same));
+    same = descriptor;
+    same.id.low += 1U;
+    CHECK(!meiso_resource_descriptor_equal(&descriptor, &same));
+    same = descriptor;
+    same.kind = MEISO_RESOURCE_KIND_STREAM;
+    CHECK(!meiso_resource_descriptor_equal(&descriptor, &same));
+    same = descriptor;
+    same.schema.id.low += 1U;
+    CHECK(!meiso_resource_descriptor_equal(&descriptor, &same));
+    same = descriptor;
+    same.schema.version += 1U;
+    CHECK(!meiso_resource_descriptor_equal(&descriptor, &same));
+    same = descriptor;
+    same.owner = MEISO_OWNER_ROLE_HOST;
+    CHECK(!meiso_resource_descriptor_equal(&descriptor, &same));
+}
+
+static void test_saturating_counter(void)
+{
+    uint64_t value = UINT64_MAX - 1U;
+
+    meiso_increment_saturated(&value);
+    CHECK(value == UINT64_MAX);
+    meiso_increment_saturated(&value);
+    CHECK(value == UINT64_MAX);
 }
 
 int main(void)
@@ -150,6 +204,7 @@ int main(void)
     test_owner_scope();
     test_content_identity();
     test_descriptor_validation();
+    test_saturating_counter();
 
     if (failures != 0) {
         fprintf(stderr, "%d resource test(s) failed\n", failures);
