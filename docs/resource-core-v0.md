@@ -196,15 +196,22 @@ ContentId 决定内容 identity；二者不能互相替代。v0 store 有 fixed 
 staging buffer，不把 transport chunk protocol 放进 Core。
 
 - `stage_begin` 声明 ContentId 与完整 length；`staging_buffer` 返回借用 mutable view。一个 store
-  同时只允许一个 staging candidate，published slot 不会被 staging 覆盖。
+  同时只允许一个 staging candidate，published slot 不会被 staging 覆盖。同一 ContentId 与
+  length 的重复 begin 保留已写 bytes 并返回 unchanged；另一 candidate 显式 busy；已发布的
+  同 ContentId 若 length 冲突则在 begin 时直接报告 conflict。
 - `commit_verified(written_size, verifier, context)` 首先要求 written size 等于 declared length，
   再让 verifier 对 Core 提供的精确 staging bytes 与 expected ContentId 计算/确认。只有 callback
   返回 true 才能 publish；Core 信任该 callback 的密码学与实现正确性，但不信任调用者单独
   传入的 boolean 或另一块 buffer。
 - length、ContentId/algorithm、capacity 或 integrity failure 明确失败并保持 published set
-  不变；staging 是否保留供诊断由 outcome 定义。只有外层显式调用 `abort_staging(reason)` 才
-  取消 partial candidate，transport/Session 变化本身不会被 Core 观察或自动 abort。
+  不变。length mismatch、integrity failure、content conflict 与 published-slot exhaustion 都保留
+  staging candidate 和 mutable borrow；publish、verified duplicate 或显式 abort 才结束
+  staging。只有外层显式调用 `abort_staging(reason)` 才取消 partial candidate，transport/
+  Session 变化本身不会被 Core 观察或自动 abort。
 - 已 publish 的同 ContentId 同 bytes 是 duplicate；同 ContentId 异 bytes/length 是 conflict。
+- verifier 执行期间，同一 store 的 staging access 与 mutation 会被 reentrant guard 拒绝；
+  callback 只借用 canonical expected ContentId 的临时副本和 Core-owned staging bytes。v0 不
+  release/evict published slot，因此成功 lookup 的 immutable content borrow 与 store arena 同寿命。
 - zero-length Blob 合法；schema/Profile 决定它是否有业务意义。
 - 已发布 Blob 不因 Link Session 消失而自动删除；当前授权与引用仍由外层 State/Session
   判断，缓存命中不能冒充授权。
