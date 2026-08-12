@@ -174,8 +174,14 @@ Action caller 与 executor 分开。delivery acceptance、executor acceptance �
   保留原判断，clock estimate 更新不能让 replay 改写结果。
 - caller `submit -> next_offer -> mark_delivery_accepted` 不产生成功结果；只有 executor 的
   result 能进入 `SUCCEEDED / FAILED / REJECTED / EXPIRED / INDETERMINATE`。
+- caller 的 local delivery generation 严格递增；同 ActionId 不能通过下一 generation 重新
+  submit/requeue。`end_delivery` 若本 generation 仍有 `PENDING / ACCEPTED` 会明确返回
+  unresolved，但不擅自 replay、失败或标记 indeterminate；terminal entry 即使没有 transport
+  ACK 也不算 unresolved。带 generation、ActionId 和 executor scope 的迟到 ACK，以及迟到的
+  executor observation，在 generation 结束后仍可独立记录。
 - executor `ingest` 同 ID 同完整 request 返回 replay-same，不再次交给 application；同 ID
-  异内容返回 conflict。
+  异内容返回 conflict。replay outcome 不复制出第二份 request/result；调用者通过 `query` 读取
+  原 dedup slot 中持久的 PENDING、ACCEPTED 或 terminal/result。
 - dedup/result table 固定容量且不静默逐出。v0 没有 `release`；满时显式拒绝新 request，table
   的 replay horizon 就是当前 executor handle/incarnation 的完整 lifetime。
 - old-incarnation request 始终 `SCOPE_MISMATCH`，绝不进入 application。caller API 不允许把
@@ -183,10 +189,19 @@ Action caller 与 executor 分开。delivery acceptance、executor acceptance �
   dedup state 后不承诺 exactly-once，这一限制必须由 Profile/persistent operation design 补足。
 - deadline 在 application 接受前已过则 terminal `EXPIRED`。`ACCEPTED` 是非终态；
   `SUCCEEDED / FAILED / REJECTED / EXPIRED / INDETERMINATE` 是 v0 的五种 terminal。
+  executor 在 ingest 保存首次 local deadline projection，并在 application 接管副作用前用相同
+  local clock epoch 再检查；replay 不更新该 projection，`now == deadline` 仍可接受，只有
+  `now > deadline` 才过期。`next_application_request` 只是可重复 observation；只有一次串行的
+  `executor_accept -> ACCEPTED` 返回授权 application 开始副作用，duplicate accept 不授权第二次
+  执行。executor 只允许 `PENDING -> REJECTED/EXPIRED` 与
+  `ACCEPTED -> SUCCEEDED/FAILED/INDETERMINATE`；caller 可从 PENDING 直接观察任一 terminal 以
+  容忍 accepted observation 丢失，但一旦观察 ACCEPTED，就拒绝矛盾的 REJECTED/EXPIRED。
   terminal immutable，迟到 result 只能报告 `TERMINAL_ALREADY_SET`，不悄悄改写知识状态。
 - 外层显式报告 delivery discontinuity 或 executor restart 时，无法证明副作用结果的 caller/
   executor entry 由 `mark_indeterminate` 进入终态。Core 不观察 Session，也不自动重放
   non-idempotent Action。
+- executor handle 在 init 时永久绑定 role/incarnation；同 incarnation 不能通过清空 arena 重建
+  来绕过 dedup。新 executor incarnation 拒绝旧 request，新的业务尝试必须使用新 ActionId。
 
 ## Blob 状态机
 
