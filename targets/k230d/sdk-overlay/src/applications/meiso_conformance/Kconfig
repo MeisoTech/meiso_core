@@ -1,0 +1,6 @@
+config APP_ENABLE_MEISO_CONFORMANCE
+    bool "Enable Meiso Resource Core conformance"
+    default n
+    help
+      Build the bounded, manually invoked Meiso Resource Core conformance ELF.
+      This option does not register an MSH command or enable automatic start.

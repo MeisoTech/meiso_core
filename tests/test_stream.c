@@ -1,5 +1,7 @@
 #include "meiso_stream.h"
 
+#include "meiso_test_support.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -114,8 +116,8 @@ static bool sample_view_equals(
 
 static void test_init_contract(void)
 {
-    TestArena arena;
-    TestArena before;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena before;
     MeisoResourceDescriptor descriptor = stream_descriptor(8U);
     MeisoStreamConfig config = stream_config(
         MEISO_STREAM_OVERFLOW_DROP_OLDEST,
@@ -172,7 +174,7 @@ static void test_init_contract(void)
 
 static void test_ordering_history_duplicate_and_conflict(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStream *stream = make_stream(
         &arena,
         4U,
@@ -256,8 +258,8 @@ static void test_ordering_history_duplicate_and_conflict(void)
 
 static void test_drop_oldest_and_reject_newest(void)
 {
-    TestArena drop_arena;
-    TestArena reject_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena drop_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena reject_arena;
     const MeisoOwnerScope producer = {MEISO_OWNER_ROLE_EDGE, 4U};
     const uint8_t values[] = {1U, 2U, 3U};
     MeisoStream *drop = make_stream(
@@ -323,7 +325,7 @@ static void test_drop_oldest_and_reject_newest(void)
 
 static void test_retention_is_receive_ordered(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStream *stream = make_stream(
         &arena,
         1U,
@@ -359,7 +361,7 @@ static void test_retention_is_receive_ordered(void)
 
 static void test_queued_identity_survives_history_rotation(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStream *stream = make_stream(
         &arena,
         1U,
@@ -409,7 +411,7 @@ static void test_queued_identity_survives_history_rotation(void)
 
 static void test_deadline_is_admission_not_identity(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStream *stream = make_stream(
         &arena,
         1U,
@@ -464,8 +466,8 @@ static void test_deadline_is_admission_not_identity(void)
 
 static void test_expiry_precedes_overflow_and_unsupported_is_explicit(void)
 {
-    TestArena deadline_arena;
-    TestArena unsupported_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena deadline_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena unsupported_arena;
     const MeisoOwnerScope producer = {MEISO_OWNER_ROLE_EDGE, 1U};
     const uint8_t byte = 1U;
     MeisoStream *deadline_stream = make_stream(
@@ -537,8 +539,8 @@ static void test_expiry_precedes_overflow_and_unsupported_is_explicit(void)
 
 static void test_epoch_scope_wrap_capacity_zero_and_alias(void)
 {
-    TestArena arena;
-    TestArena zero_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena zero_arena;
     MeisoStream *stream = make_stream(
         &arena,
         2U,
@@ -630,7 +632,7 @@ static void test_epoch_scope_wrap_capacity_zero_and_alias(void)
 
 static void test_stats(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStream *stream = make_stream(
         &arena,
         1U,

@@ -1,5 +1,7 @@
 #include "meiso_descriptor_set.h"
 
+#include "meiso_test_support.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -60,7 +62,7 @@ static bool init_set(
 
 static bool test_memory_and_init_contract(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoDescriptorSet *set = (MeisoDescriptorSet *)(uintptr_t)1U;
     const size_t empty_required = meiso_descriptor_set_memory_required(0U);
     const size_t required = meiso_descriptor_set_memory_required(2U);
@@ -113,7 +115,7 @@ static bool test_memory_and_init_contract(void)
 
 static bool test_zero_capacity_empty_snapshot(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoDescriptorSet *set;
     MeisoResourceDescriptor candidate = descriptor(
         1U, MEISO_RESOURCE_KIND_STATE
@@ -143,7 +145,7 @@ static bool test_zero_capacity_empty_snapshot(void)
 
 static bool test_registration_identity_and_capacity(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoDescriptorSet *set;
     MeisoResourceDescriptor first = descriptor(
         1U, MEISO_RESOURCE_KIND_STATE
@@ -207,7 +209,7 @@ static bool test_registration_identity_and_capacity(void)
 
 static bool test_sealed_lookup_value_copy(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoDescriptorSet *set;
     MeisoResourceDescriptor first = descriptor(
         1U, MEISO_RESOURCE_KIND_ACTION
@@ -263,7 +265,7 @@ static bool test_sealed_lookup_value_copy(void)
 
 static bool test_registration_input_alias(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoDescriptorSet *set;
     const size_t slot_offset = meiso_descriptor_set_memory_required(0U);
     const size_t required = meiso_descriptor_set_memory_required(2U);

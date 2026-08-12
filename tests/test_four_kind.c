@@ -4,6 +4,8 @@
 #include "meiso_state.h"
 #include "meiso_stream.h"
 
+#include "meiso_test_support.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -602,7 +604,7 @@ static bool exercise_isolated_capacity_failures(FourKindFixture *fixture)
 
 static bool test_four_kind_fixture(void)
 {
-    FourKindFixture fixture;
+    MEISO_TEST_ARENA_STORAGE FourKindFixture fixture;
     const MeisoOwnerScope executor_scope = {MEISO_OWNER_ROLE_EDGE, 13U};
 
     memset(&fixture, 0, sizeof(fixture));

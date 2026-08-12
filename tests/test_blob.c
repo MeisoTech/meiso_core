@@ -1,5 +1,7 @@
 #include "meiso_blob.h"
 
+#include "meiso_test_support.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -243,7 +245,7 @@ static bool init_store(
 
 static bool test_memory_and_init_contract(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(8U);
     MeisoBlobConfig config = {2U};
     MeisoBlobStore *store = (MeisoBlobStore *)(uintptr_t)1U;
@@ -333,7 +335,7 @@ static bool test_memory_and_init_contract(void)
 
 static bool test_incomplete_integrity_and_atomic_publish(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(4U);
     MeisoBlobConfig config = {2U};
     MeisoBlobStore *store;
@@ -394,7 +396,7 @@ static bool test_incomplete_integrity_and_atomic_publish(void)
 
 static bool test_duplicate_conflict_capacity_and_abort(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(4U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;
@@ -491,7 +493,7 @@ static bool test_duplicate_conflict_capacity_and_abort(void)
 
 static bool test_invalid_inputs_and_busy_staging(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(4U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;
@@ -550,7 +552,7 @@ static bool test_invalid_inputs_and_busy_staging(void)
 
 static bool test_zero_length_and_canonical_identity(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(0U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;
@@ -601,7 +603,7 @@ static bool test_zero_length_and_canonical_identity(void)
 
 static bool test_verifier_reentrancy_guard(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(3U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;
@@ -638,7 +640,7 @@ static bool test_verifier_reentrancy_guard(void)
 
 static bool test_failed_reentrant_verifier_retains_staging(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(2U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;
@@ -673,7 +675,7 @@ static bool test_failed_reentrant_verifier_retains_staging(void)
 
 static bool test_verifier_cannot_rewrite_staged_identity(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(1U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;
@@ -703,7 +705,7 @@ static bool test_verifier_cannot_rewrite_staged_identity(void)
 
 static bool test_verifier_snapshot_isolated_from_saved_staging_alias(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoResourceDescriptor descriptor = blob_descriptor(4U);
     MeisoBlobConfig config = {1U};
     MeisoBlobStore *store;

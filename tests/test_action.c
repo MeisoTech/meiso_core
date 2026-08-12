@@ -1,5 +1,7 @@
 #include "meiso_action.h"
 
+#include "meiso_test_support.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -137,8 +139,8 @@ static bool bytes_are(MeisoByteView view, const uint8_t *data, size_t size)
 
 static void test_init_contract(void)
 {
-    TestArena arena;
-    TestArena before;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena before;
     MeisoResourceDescriptor descriptor = action_descriptor(16U);
     MeisoActionConfig config = action_config(2U, 8U, 8U);
     MeisoActionCaller *caller = (MeisoActionCaller *)(uintptr_t)1U;
@@ -221,8 +223,8 @@ static void test_init_contract(void)
 
 static void test_single_execution_and_orthogonal_ack(void)
 {
-    TestArena caller_arena;
-    TestArena executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena executor_arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 11U};
     const MeisoDeliveryGeneration delivery = {5U};
     const uint8_t arguments[] = {1U, 2U, 3U};
@@ -321,8 +323,8 @@ static void test_single_execution_and_orthogonal_ack(void)
 
 static void test_identity_conflict_scope_and_mapped_deadline(void)
 {
-    TestArena caller_arena;
-    TestArena executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena executor_arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 21U};
     const uint8_t arguments[] = {4U, 5U};
     const uint8_t changed[] = {4U, 6U};
@@ -396,7 +398,7 @@ static void test_identity_conflict_scope_and_mapped_deadline(void)
 
 static void test_deadline_expiry_is_retained(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 31U};
     const uint8_t value[] = {1U};
     MeisoActionExecutor *executor = make_executor(
@@ -468,8 +470,8 @@ static void test_deadline_expiry_is_retained(void)
 
 static void test_capacity_no_eviction_and_replay_when_full(void)
 {
-    TestArena caller_arena;
-    TestArena executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena executor_arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 41U};
     const uint8_t one[] = {1U};
     const uint8_t too_large[] = {1U, 2U, 3U};
@@ -513,8 +515,8 @@ static void test_capacity_no_eviction_and_replay_when_full(void)
 
 static void test_terminal_transitions_and_indeterminate(void)
 {
-    TestArena executor_arena;
-    TestArena caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena caller_arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 51U};
     const uint8_t value[] = {7U};
     const uint8_t other[] = {8U};
@@ -626,7 +628,7 @@ static void test_terminal_transitions_and_indeterminate(void)
 
 static void test_generation_cursor_and_late_ack(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 61U};
     const uint8_t value[] = {1U};
     const MeisoDeliveryGeneration first_generation = {1U};
@@ -708,10 +710,10 @@ static void test_generation_cursor_and_late_ack(void)
 
 static void test_alias_zero_length_and_failure_rollback(void)
 {
-    TestArena caller_arena;
-    TestArena executor_arena;
-    TestArena zero_caller_arena;
-    TestArena zero_executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena zero_caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena zero_executor_arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 71U};
     const uint8_t bytes[] = {1U, 2U, 3U, 4U};
     const uint8_t oversized[] = {9U, 9U, 9U, 9U, 9U};
@@ -817,8 +819,8 @@ static void test_alias_zero_length_and_failure_rollback(void)
 
 static void test_stats(void)
 {
-    TestArena caller_arena;
-    TestArena executor_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena caller_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena executor_arena;
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 81U};
     const uint8_t value[] = {1U};
     MeisoActionCaller *caller = make_caller(

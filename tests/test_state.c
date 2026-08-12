@@ -1,5 +1,7 @@
 #include "meiso_state.h"
 
+#include "meiso_test_support.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -86,8 +88,8 @@ static bool view_equals(
 
 static void test_init_contract(void)
 {
-    TestArena arena;
-    TestArena before;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena before;
     MeisoResourceDescriptor descriptor = state_descriptor(8U);
     MeisoStateConfig config = {MEISO_STATE_DELIVERY_CONVERGENT};
     MeisoStatePublisher *publisher = (MeisoStatePublisher *)(uintptr_t)1U;
@@ -145,8 +147,8 @@ static void test_init_contract(void)
 
 static void test_convergent_lost_ack_and_actual_separation(void)
 {
-    TestArena publisher_arena;
-    TestArena replica_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena publisher_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena replica_arena;
     MeisoStatePublisher *publisher = make_publisher(
         &publisher_arena, MEISO_STATE_DELIVERY_CONVERGENT, 16U
     );
@@ -192,7 +194,7 @@ static void test_convergent_lost_ack_and_actual_separation(void)
 
 static void test_newest_replaces_pending_and_failures_do_not_mutate(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStatePublisher *publisher = make_publisher(
         &arena, MEISO_STATE_DELIVERY_CONVERGENT, 4U
     );
@@ -241,8 +243,8 @@ static void test_newest_replaces_pending_and_failures_do_not_mutate(void)
 
 static void test_delivery_discontinuity_modes(void)
 {
-    TestArena convergent_arena;
-    TestArena best_effort_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena convergent_arena;
+    MEISO_TEST_ARENA_STORAGE TestArena best_effort_arena;
     MeisoStatePublisher *convergent = make_publisher(
         &convergent_arena, MEISO_STATE_DELIVERY_CONVERGENT, 8U
     );
@@ -324,7 +326,7 @@ static void test_delivery_discontinuity_modes(void)
 
 static void test_empty_delivery_has_no_scope_mismatch(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStatePublisher *publisher = make_publisher(
         &arena, MEISO_STATE_DELIVERY_BEST_EFFORT, 1U
     );
@@ -349,7 +351,7 @@ static void test_empty_delivery_has_no_scope_mismatch(void)
 
 static void test_replica_owner_reset_wrap_and_zero_payload(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStateReplica *replica = make_replica(&arena, 2U);
     const MeisoOwnerScope first = {MEISO_OWNER_ROLE_EDGE, 1U};
     const MeisoOwnerScope second = {MEISO_OWNER_ROLE_EDGE, 2U};
@@ -380,7 +382,7 @@ static void test_replica_owner_reset_wrap_and_zero_payload(void)
 
 static void test_overlap_and_role_scope(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStatePublisher *publisher = make_publisher(
         &arena, MEISO_STATE_DELIVERY_CONVERGENT, 4U
     );
@@ -405,7 +407,7 @@ static void test_overlap_and_role_scope(void)
 
 static void test_stats(void)
 {
-    TestArena arena;
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
     MeisoStatePublisher *publisher = make_publisher(
         &arena, MEISO_STATE_DELIVERY_CONVERGENT, 1U
     );

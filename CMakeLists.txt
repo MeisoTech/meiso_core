@@ -100,6 +100,40 @@ add_executable(meiso_four_kind_test tests/test_four_kind.c)
 target_link_libraries(meiso_four_kind_test PRIVATE meiso_resource_core)
 meiso_enable_warnings(meiso_four_kind_test)
 
+function(meiso_add_conformance_suite suite_name source_file)
+    set(target_name meiso_conformance_${suite_name}_suite)
+    add_library(${target_name} OBJECT ${source_file})
+    target_link_libraries(${target_name} PRIVATE meiso_resource_core)
+    target_include_directories(${target_name} PRIVATE src tests)
+    target_compile_definitions(
+        ${target_name}
+        PRIVATE main=meiso_conformance_run_${suite_name}
+    )
+    meiso_enable_warnings(${target_name})
+endfunction()
+
+meiso_add_conformance_suite(resource tests/test_resource.c)
+meiso_add_conformance_suite(state tests/test_state.c)
+meiso_add_conformance_suite(stream tests/test_stream.c)
+meiso_add_conformance_suite(action tests/test_action.c)
+meiso_add_conformance_suite(blob tests/test_blob.c)
+meiso_add_conformance_suite(descriptor_set tests/test_descriptor_set.c)
+meiso_add_conformance_suite(four_kind tests/test_four_kind.c)
+
+add_executable(
+    meiso_conformance
+    targets/conformance/main.c
+    $<TARGET_OBJECTS:meiso_conformance_resource_suite>
+    $<TARGET_OBJECTS:meiso_conformance_state_suite>
+    $<TARGET_OBJECTS:meiso_conformance_stream_suite>
+    $<TARGET_OBJECTS:meiso_conformance_action_suite>
+    $<TARGET_OBJECTS:meiso_conformance_blob_suite>
+    $<TARGET_OBJECTS:meiso_conformance_descriptor_set_suite>
+    $<TARGET_OBJECTS:meiso_conformance_four_kind_suite>
+)
+target_link_libraries(meiso_conformance PRIVATE meiso_resource_core)
+meiso_enable_warnings(meiso_conformance)
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_executable(meiso_resource_short_enum_test tests/test_resource.c)
     target_link_libraries(meiso_resource_short_enum_test PRIVATE meiso_resource_core)
@@ -118,6 +152,7 @@ add_test(NAME meiso_blob_test COMMAND meiso_blob_test)
 add_test(NAME meiso_descriptor_set_test COMMAND meiso_descriptor_set_test)
 add_test(NAME meiso_action_test COMMAND meiso_action_test)
 add_test(NAME meiso_four_kind_test COMMAND meiso_four_kind_test)
+add_test(NAME meiso_conformance COMMAND meiso_conformance)
 if(TARGET meiso_resource_short_enum_test)
     add_test(NAME meiso_resource_short_enum_test COMMAND meiso_resource_short_enum_test)
 endif()
