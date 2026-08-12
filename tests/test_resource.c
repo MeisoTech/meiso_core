@@ -84,7 +84,7 @@ static void test_content_identity(void)
 
     memset(&first, 0, sizeof(first));
     first.algorithm = MEISO_CONTENT_ALGORITHM_SHA256;
-    first.digest_size = 2U;
+    first.digest_size = MEISO_SHA256_DIGEST_SIZE;
     first.digest[0] = 0x12U;
     first.digest[1] = 0x34U;
     second = first;
@@ -93,7 +93,14 @@ static void test_content_identity(void)
     CHECK(meiso_content_id_equal(&first, &second));
     second.digest[1] = 0x35U;
     CHECK(!meiso_content_id_equal(&first, &second));
-    first.digest_size = 0U;
+    first.digest_size = MEISO_SHA256_DIGEST_SIZE - 1U;
+    CHECK(!meiso_content_id_valid(&first));
+    first.digest_size = MEISO_SHA256_DIGEST_SIZE + 1U;
+    CHECK(!meiso_content_id_valid(&first));
+    first.digest_size = MEISO_CONTENT_DIGEST_MAX_SIZE;
+    CHECK(!meiso_content_id_valid(&first));
+    first.digest_size = MEISO_SHA256_DIGEST_SIZE;
+    first.algorithm = 0xffffU;
     CHECK(!meiso_content_id_valid(&first));
     CHECK(!meiso_content_id_valid(NULL));
     CHECK(!meiso_content_id_equal(NULL, &second));

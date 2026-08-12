@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 #define MEISO_CONTENT_DIGEST_MAX_SIZE 64U
+#define MEISO_SHA256_DIGEST_SIZE 32U
 
 typedef struct {
     uint64_t high;

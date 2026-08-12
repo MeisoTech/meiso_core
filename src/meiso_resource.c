@@ -82,9 +82,15 @@ bool meiso_delivery_scope_valid(MeisoDeliveryScope value)
 
 bool meiso_content_id_valid(const MeisoContentId *value)
 {
-    return value != NULL && value->algorithm != 0U &&
-        value->digest_size > 0U &&
-        value->digest_size <= MEISO_CONTENT_DIGEST_MAX_SIZE;
+    if (value == NULL) {
+        return false;
+    }
+    switch (value->algorithm) {
+    case MEISO_CONTENT_ALGORITHM_SHA256:
+        return value->digest_size == MEISO_SHA256_DIGEST_SIZE;
+    default:
+        return false;
+    }
 }
 
 bool meiso_content_id_equal(const MeisoContentId *lhs, const MeisoContentId *rhs)
