@@ -112,6 +112,19 @@ static void test_init_contract(void)
     ) == MEISO_STATE_INIT_INVALID_ARGUMENT);
     CHECK(memcmp(&arena, &before, sizeof(arena)) == 0);
 
+    descriptor.kind = MEISO_RESOURCE_KIND_STREAM;
+    CHECK(meiso_state_publisher_init(
+        arena.bytes, sizeof(arena.bytes), &descriptor, &config,
+        (MeisoStatePublisher **)arena.bytes
+    ) == MEISO_STATE_INIT_INVALID_ARGUMENT);
+    CHECK(memcmp(&arena, &before, sizeof(arena)) == 0);
+    CHECK(meiso_state_replica_init(
+        arena.bytes, sizeof(arena.bytes), &descriptor,
+        (MeisoStateReplica **)arena.bytes
+    ) == MEISO_STATE_INIT_INVALID_ARGUMENT);
+    CHECK(memcmp(&arena, &before, sizeof(arena)) == 0);
+    descriptor.kind = MEISO_RESOURCE_KIND_STATE;
+
     config.delivery_mode = (MeisoStateDeliveryMode)0;
     CHECK(meiso_state_publisher_memory_required(&descriptor, &config) == 0U);
     CHECK(meiso_state_publisher_init(
