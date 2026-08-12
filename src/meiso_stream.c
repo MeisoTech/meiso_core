@@ -101,6 +101,39 @@ static bool config_valid(const MeisoStreamConfig *config)
         config->queue_slots > 0U;
 }
 
+static bool calculate_layout(
+    const MeisoResourceDescriptor *descriptor,
+    const MeisoStreamConfig *config,
+    size_t *out_storage_offset,
+    size_t *out_slot_stride,
+    size_t *out_required
+)
+{
+    size_t slot_size;
+    size_t slot_count;
+    size_t slots_size;
+
+    return descriptor_valid(descriptor) && config_valid(config) &&
+        checked_add(
+            sizeof(MeisoStreamSlot), config->max_dependency_size, &slot_size
+        ) &&
+        checked_add(slot_size, descriptor->max_payload_size, &slot_size) &&
+        align_up(slot_size, meiso_stream_alignment_required(), out_slot_stride) &&
+        checked_add(
+            (size_t)config->queue_slots,
+            (size_t)config->history_slots,
+            &slot_count
+        ) &&
+        checked_add(slot_count, 1U, &slot_count) &&
+        checked_multiply(slot_count, *out_slot_stride, &slots_size) &&
+        align_up(
+            sizeof(MeisoStream),
+            meiso_stream_alignment_required(),
+            out_storage_offset
+        ) &&
+        checked_add(*out_storage_offset, slots_size, out_required);
+}
+
 static bool stream_valid(const MeisoStream *stream)
 {
     return stream != NULL && descriptor_valid(&stream->descriptor) &&
@@ -310,26 +343,20 @@ size_t meiso_stream_memory_required(
     const MeisoStreamConfig *config
 )
 {
-    size_t slot_size;
-    size_t slot_stride;
-    size_t slot_count;
-    size_t slots_size;
     size_t storage_offset;
-    size_t result;
+    size_t slot_stride;
+    size_t required;
 
-    if (!descriptor_valid(descriptor) || !config_valid(config) ||
-        !checked_add(sizeof(MeisoStreamSlot), config->max_dependency_size, &slot_size) ||
-        !checked_add(slot_size, descriptor->max_payload_size, &slot_size) ||
-        !align_up(slot_size, meiso_stream_alignment_required(), &slot_stride) ||
-        !checked_add((size_t)config->queue_slots,
-                     (size_t)config->history_slots, &slot_count) ||
-        !checked_add(slot_count, 1U, &slot_count) ||
-        !checked_multiply(slot_count, slot_stride, &slots_size) ||
-        !align_up(sizeof(MeisoStream), meiso_stream_alignment_required(), &storage_offset) ||
-        !checked_add(storage_offset, slots_size, &result)) {
+    if (!calculate_layout(
+            descriptor,
+            config,
+            &storage_offset,
+            &slot_stride,
+            &required
+        )) {
         return 0U;
     }
-    return result;
+    return required;
 }
 
 MeisoStreamInitStatus meiso_stream_init(
@@ -341,7 +368,8 @@ MeisoStreamInitStatus meiso_stream_init(
 )
 {
     size_t required;
-    size_t slot_size;
+    size_t storage_offset;
+    size_t slot_stride;
     MeisoResourceDescriptor descriptor_copy;
     MeisoStreamConfig config_copy;
     MeisoStream *stream;
@@ -363,8 +391,13 @@ MeisoStreamInitStatus meiso_stream_init(
     if (!arena_aligned(arena)) {
         return MEISO_STREAM_INIT_MISALIGNED_ARENA;
     }
-    required = meiso_stream_memory_required(descriptor, config);
-    if (required == 0U || arena_size < required) {
+    if (!calculate_layout(
+            descriptor,
+            config,
+            &storage_offset,
+            &slot_stride,
+            &required
+        ) || arena_size < required) {
         return MEISO_STREAM_INIT_ARENA_TOO_SMALL;
     }
     descriptor_copy = *descriptor;
@@ -373,14 +406,8 @@ MeisoStreamInitStatus meiso_stream_init(
     stream = arena;
     stream->descriptor = descriptor_copy;
     stream->config = config_copy;
-    (void)align_up(
-        sizeof(MeisoStream), meiso_stream_alignment_required(), &stream->storage_offset
-    );
-    (void)checked_add(
-        sizeof(MeisoStreamSlot), config_copy.max_dependency_size, &slot_size
-    );
-    (void)checked_add(slot_size, descriptor_copy.max_payload_size, &slot_size);
-    (void)align_up(slot_size, meiso_stream_alignment_required(), &stream->slot_stride);
+    stream->storage_offset = storage_offset;
+    stream->slot_stride = slot_stride;
     *out_stream = stream;
     return MEISO_STREAM_INIT_OK;
 }
