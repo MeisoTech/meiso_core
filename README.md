@@ -12,15 +12,25 @@ Meiso Glass 是面向分体式 XR/AR 的开放 Resource 与 Composition 契约�
 
 ## 当前代码状态
 
-当前 C11 代码来自 Resource 重基线前的实验，只保留为可执行行为 evidence：
+当前分支包含新的 portable C11 `meiso_resource_core`：共同 identity 与 descriptor 校验、
+固定且可 seal 的 descriptor snapshot，以及 caller-owned arena 上的 bounded
+`State / Stream / Action / Blob` primitive。它们是 Resource semantic core v0 的
+source-level implementation API，不冻结二进制 ABI。
+
+这套实现仍不是 application-facing Resource Runtime 或完整 Meiso Core；它不包含
+Virtual Edge、LinkSession/wire、Composition、MediaStream data path、platform adapter 或
+target runtime。各 primitive fixture 与 four-kind in-process fixture 的 Host 验证范围见
+[系统进展](docs/system-report.md)；这些测试不构成 remote backend、LinkSession 或 target
+evidence。
+
+以下重基线前模块继续作为 legacy behavior/workload evidence：
 
 - `meiso_latest_state` 验证固定容量 newest-wins、pending、ACK、重复/冲突与 session 重发；
 - `meiso_slice` 验证 frame identity、姿态/时效 gate、lease 与 fail-closed 合成 workload。
 
-这些符号和 API 不是新公共 SDK，不享有兼容承诺。它们通过测试也不代表 Resource Runtime、
-LinkSession、Virtual Edge 或平台 adapter 已实现。
+这些 legacy 符号、ABI 和 slot layout 不构成新 SDK 兼容面。
 
-现有 Windows baseline 可以继续复现实验：
+Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
 ```powershell
 cmake --preset windows-msvc-debug
@@ -38,5 +48,5 @@ ctest --preset windows-msvc-debug
 - [Link 契约](docs/link.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
-- [Resource semantic core v0 实现设计](docs/resource-core-v0.md)
+- [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)
 - [系统进展](docs/system-report.md)

@@ -122,5 +122,11 @@ Core 当前不定义：
 
 ## 当前实现范围
 
-当前代码早于本次 Resource 重基线，只能作为行为与测试 evidence，不定义新公共 API，
-也没有兼容承诺。实现状态和平台证据见[系统进展](system-report.md)。
+当前公开 C11 实现已经包含 `meiso_resource_core`：共同值类型与 descriptor validation、
+固定 immutable descriptor snapshot，以及四种 bounded in-process Resource primitive。
+
+这是 Resource semantic core，不是 application-facing Resource Runtime，也不是本页所定义的
+完整 Meiso Core。Virtual Edge、Link、Composition、MediaStream、capability discovery、
+platform adapter 与 target execution 尚未实现；K230D 目前只有尚未 target-build 的 source
+integration package。`meiso_latest_state` 和 `meiso_slice` 仍只作为 legacy evidence，不享有
+兼容承诺。实现状态和平台证据见[系统进展](system-report.md)。

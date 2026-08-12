@@ -7,37 +7,45 @@
 ## 架构重基线
 
 产品规范现已直接使用 `State / Stream / Action / Blob`、Virtual Edge 和 transport-
-independent Session boundary。旧公共 API、旧私有 wire 和旧术语没有兼容承诺；当前 C11
-代码及双板实验只作为可复用行为与失败证据。
+independent Session boundary。旧公共 API、旧私有 wire 和旧术语没有兼容承诺。新的
+portable Resource semantic core、legacy fixture 与板级实验各自只有下文明确列出的 evidence
+范围，不能互相替代。
 
 规范入口是 [docs/index.md](index.md)。本报告不规定 platform、runtime、sensor、frontend、
 transport 或实现顺序。
 
 ## 当前公共代码
 
+截至公开实现提交 `7244a5e`，`meiso_resource_core` 已实现四种 primitive、共同值类型、
+descriptor validation 与 fixed immutable descriptor snapshot。下表中的“已证明”只表示当前
+portable in-process 实现通过了对应 Host fixture，不表示 remote、target 或产品 Runtime 已经
+成立。
+
+| 内容 | 当前 Host evidence | 尚未证明 |
+|---|---|---|
+| common / descriptor set | typed identity、SHA-256 ContentId 形状、descriptor 校验；fixed-capacity register/seal/value-copy lookup、duplicate/conflict/capacity | capability registry lifecycle、generation/permission/schema negotiation、wire 或 runtime dispatch |
+| State | bounded publisher/replica、完整 snapshot、owner/version、duplicate/conflict/stale/wrap、best-effort/convergent、delivery generation 与 ACK/actual 分离 | Session adapter、真实物理 application、remote backend、线程安全或持久化 |
+| Stream | `STRICT_MONOTONIC`、producer/epoch/sequence、bounded queue/history、gap/stale/conflict、drop/reject 与 deadline admission | reorder/reliable Profile、clock estimator、MediaStream external-buffer/codec/recovery 或 remote delivery |
+| Action | bounded caller/executor、ActionId dedup/conflict、delivery ACK/executor acceptance/terminal result 分离、deadline、indeterminate 与 no eviction | 真实 operation、persistent dedup/exactly-once、Session 自动恢复、cancel/progress/DAG |
+| Blob | bounded staging、callback verification、完整后原子 publish、duplicate/conflict/capacity/abort、zero length 与 reentrancy guard | Core 内置 hash、chunk/resume、persistence、eviction、授权或 Session transfer |
+| four-kind fixture | 同一 descriptor snapshot 下四类真实 public contract 的独立初始化、正交状态以及逐类容量失败隔离 | Resource Runtime、generic dispatcher、LinkSession、remote backend 或产品 Profile |
+
+该提交在 AppleClang 17、CMake 4.2、Ninja 1.13 的 clean out-of-tree Debug、Release 与
+ASan/UBSan 配置下完成 warnings-as-errors build 和 CTest，并通过 AppleClang 静态分析与
+portable-library forbidden-symbol 审计。测试 inventory 以该提交的
+`ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
+固化为长期事实。Core fixture 与下面的 legacy fixture 必须分开解释。
+
+## Legacy evidence
+
+以下模块早于当前 Resource 规范，继续保留为可执行 behavior/workload evidence。其文件名、
+C symbol、slot layout 和 ABI 不是新的 Resource semantic core，也没有兼容承诺。
+
 | 内容 | 已证明 | 未证明 |
 |---|---|---|
-| `meiso_latest_state` | 固定容量完整 snapshot、newest-wins、pending、精确 ACK、duplicate/conflict、version wrap gate 与新 session 重发 | 新 State API、Resource Registry、Session identity、wire、scheduler、concurrency、persistence 或 actual application |
-| `meiso_slice` | 确定性 frame identity、pose/freshness/uncertainty gate、lease、session isolation 与 fail-closed workload | Virtual Edge、通用 Resource Runtime、真实 MediaStream、platform adapter 或产品 Composition |
+| `meiso_latest_state` | 固定容量完整 snapshot、newest-wins、pending、精确 ACK、duplicate/conflict、version wrap gate 与新 session 重发 | 新 State ABI、Resource Runtime、Session identity、wire、scheduler、concurrency、persistence 或 actual application |
+| `meiso_slice` | 确定性 frame identity、pose/freshness/uncertainty gate、lease、session isolation 与 fail-closed workload | Virtual Edge、真实 MediaStream、platform adapter 或产品 Composition |
 | synthetic demo | 固定 camera-like frame、模拟姿态/检测与 PPM 输出 | 真实 camera、sensor、codec、network、display 或 target performance |
-
-这些模块早于当前规范。其文件名、C symbol、slot layout 和 ABI 都是 legacy evidence，不是
-新公共 SDK。迁移可以提取 behavior/conformance vector，也可以在更小实现中重建；不需要
-兼容旧调用面。
-
-本次纯文档重基线在 AppleClang 17、CMake 4.2 与 Ninja 1.13 环境重新以 warnings-as-errors
-构建，现有 3 个 CTest 全部通过。它只证明文档改动没有破坏 legacy baseline，不证明新
-Resource/Link/Virtual Edge 契约已经实现。
-
-## Resource evidence
-
-| Resource | 当前 evidence | Gap |
-|---|---|---|
-| State | 公共 fixed-capacity newest-wins primitive；私有代理实验验证 desired/actual、ACK 丢失、幂等、重启重发与 lease safe state | 尚无按新 descriptor/ownership/actual contract 实现的公共 Runtime |
-| Stream | 私有代理实验验证 timestamped sensor-like sample、deadline-bound result、bounded history 和 failure isolation | 尚无公共 Stream endpoint/epoch/backpressure API |
-| MediaStream | 私有 i.MX8MM/Orin workload 验证持续 H.264/RTP、recovery、硬解码、identity-bound result 和本地预览 | 私有 wire/codec/平台路径不是公共 transport/Profile，也不能外推到其他平台 |
-| Action | 只有旧 fixture 的 ordering/duplicate 行为，没有当前驻留 operation | 尚无公共 Action request/result/idempotency runtime |
-| Blob | 旧实验验证 chunk、integrity、manifest、有限 retry/failure 和恢复思路 | 尚无公共 Blob content identity/atomic publish runtime |
 
 ## 代理平台实验
 
@@ -53,6 +61,11 @@ Resource/Link/Virtual Edge 契约已经实现。
 设备节点、私有 packet、Orin 计算路径和约 27 fps 数字都不是新架构约束。
 
 ## K230D lab evidence
+
+Resource semantic core 的 target build 状态为 `NOT_BUILT`，K230D conformance execution 状态为
+`NOT_RUN`。公开树已经准备复用同一 Host 测试源码的 K230D SDK overlay 与聚合 runner，但
+尚未下载锁定 SDK/toolchain、生成 RISC-V ELF 或系统镜像。以下既有启动证据只属于官方
+runtime recovery baseline，不能晋升这两个状态。
 
 一块 `CanMV-K230D-Zero V1.1` 已使用
 [官方 CanMV v1.8 Zero release](https://github.com/kendryte/canmv_k230/releases/tag/v1.8)
@@ -85,13 +98,14 @@ IMU、codec/KPU workload、network data path、clock quality、usable memory bud
 ## 未实现与未知
 
 - 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
-- Resource descriptor/registry 和 State/Stream/Action/Blob runtime；
+- application-facing Resource Runtime、capability/endpoint registry lifecycle 与 backend
+  orchestration；
 - 生产 LinkSession handshake、安全 transport、公共 wire、time/reconnect 参数；
 - capability/endpoint discovery 和真实 platform adapter；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；
 - 任一完整、声明并验证过的产品 Profile；
-- fuzz/sanitizer/CI、资源预算和长期 fault/soak evidence。
+- target build、K230D conformance、CI、fuzz、并发、资源预算和长期 fault/soak evidence。
 
 这些 gap 是无序能力集合。实际下一项由当前产品问题、可用硬件、风险和可执行验收选择，
 不在本报告中固化开发路线。

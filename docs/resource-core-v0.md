@@ -1,6 +1,9 @@
 # Resource semantic core v0 实现设计
 
-> 状态：`DRAFT_IMPLEMENTATION_BASELINE`
+> 实现状态：`IMPLEMENTED`
+> 验证状态：`HOST_VERIFIED`
+> target build：`NOT_BUILT`
+> K230D execution：`NOT_RUN`
 > 更新：2026-08-12
 > 兼容性：本工作分支上的 C11 source API；不冻结二进制 ABI，也不兼容旧实验 API。
 
@@ -10,7 +13,7 @@ package。产品语义仍由 `system.md / resource.md / link.md / composition.md
 
 ## 完成定义与非目标
 
-本工作单元完成的是 **Resource semantic core**，包括四个相互独立的
+本工作单元的完成边界是 **Resource semantic core**，包括四个相互独立的
 `State / Stream / Action / Blob` 状态机、共同值类型、descriptor 校验、固定容量 catalog
 和纯进程内 conformance fixture。
 
@@ -79,10 +82,10 @@ operation 都有 typed outcome；`memory_required()` 对 invalid config 或 size
 handle 不提供内部同步，调用者必须串行化同一 arena 的 mutation。init 允许 descriptor/config
 位于 arena 内（实现先复制再清零），但 output-handle pointer 不能与将被初始化的 arena 重叠。
 
-## Prototype-level API 形状
+## v0 source API 形状
 
-下表固定职责和 lifetime，不冻结 v0 ABI 的 struct layout；header 实现时可将同一职责拆成
-publisher/replica 或 caller/executor typed handle。
+下表记录已实现 API 的职责和 lifetime，不冻结 v0 ABI 的 struct layout；State 和 Action
+分别使用 publisher/replica 与 caller/executor typed handle。
 
 | primitive | arena/init | 主要 mutation | 只读 observation |
 |---|---|---|---|
@@ -200,8 +203,10 @@ Action caller 与 executor 分开。delivery acceptance、executor acceptance �
 - 外层显式报告 delivery discontinuity 或 executor restart 时，无法证明副作用结果的 caller/
   executor entry 由 `mark_indeterminate` 进入终态。Core 不观察 Session，也不自动重放
   non-idempotent Action。
-- executor handle 在 init 时永久绑定 role/incarnation；同 incarnation 不能通过清空 arena 重建
-  来绕过 dedup。新 executor incarnation 拒绝旧 request，新的业务尝试必须使用新 ActionId。
+- executor handle 在 init 时永久绑定 role/incarnation。外层 lifecycle 必须保证同一
+  incarnation 不通过清空并重建 arena 丢弃 dedup table；这是调用者/外层前置条件，primitive
+  无法在 arena 之外检测这种重建。新 executor incarnation 拒绝旧 request，新的业务尝试必须
+  使用新 ActionId。
 
 ## Blob 状态机
 
@@ -285,13 +290,36 @@ already-sealed。lookup 只复制 descriptor value，不返回内部 borrow；du
 7. clean build 在 warnings-as-errors 下通过，并以源码/链接审计确认 portable library 不引用
    socket、syscall、filesystem、thread、clock service 或旧 wire symbol。
 
-## 提交与退役顺序
+## Host 验证快照
 
-1. common types、descriptor validator 与 memory contract；
-2. State，并迁移 `meiso_latest_state` 的行为向量；
-3. Stream；4. Action；5. Blob；6. catalog 与 cross-kind fixture；
-7. target toolchain/build evidence；8. 行为向量全部覆盖后再单独删除旧
-   `meiso_latest_state` 与不再适用的 `meiso_slice` demo。
+截至公开实现提交 `7244a5e`，common、四类 primitive、descriptor snapshot、纯进程内
+four-kind fixture 与复用同一测试源码的 conformance runner 已在 AppleClang 17、CMake 4.2、
+Ninja 1.13 的 clean out-of-tree Debug、Release 和 ASan/UBSan 配置中完成
+warnings-as-errors build 与 CTest，并通过 AppleClang 静态分析和 portable-library
+forbidden-symbol 审计。测试 inventory 以该提交的
+`ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准，不在文档中固化测试
+总数。
+
+four-kind fixture 使用真实 public contracts 证明 catalog identity、State delivery/actual、
+Stream receive/consume、Action delivery/accepted/result 与 Blob staging/publish 彼此独立，并
+逐类验证容量失败不污染其他 kind。它不包含 serialization、socket、LinkSession、remote
+backend、MediaStream external-buffer path 或板级 adapter，因此 `HOST_VERIFIED` 不能解释为
+完整 Meiso Core、Resource Runtime、Profile 或 K230D 通过。
+
+| 层级 | 状态 | 边界 |
+|---|---|---|
+| common、四类 primitive、descriptor snapshot | `IMPLEMENTED / HOST_VERIFIED` | portable、in-process、caller-owned arena |
+| four-kind fixture | `HOST_VERIFIED` | test-only orthogonality，不是 runtime dispatcher |
+| target build | `NOT_BUILT` | 尚无 target ELF/toolchain evidence |
+| K230D execution | `NOT_RUN` | 尚无板端 conformance evidence |
+
+## 实施状态与后续工作
+
+common types/descriptor validation、State、Stream、Blob、descriptor set、Action、counter
+saturation vector 与 four-kind fixture 已分别完成并验证。下一工作单元是锁定 target toolchain、
+构建同一 conformance runner、检查 ELF 与制品摘要；实板重新可用后，再经过准确板卡、介质、
+镜像、供电、恢复和成功信号安全门执行 K230D 验证。
 
 旧实现会暂时并存，避免把“新文件能编译”和“旧行为已迁移完整”混为同一个不可审阅
-提交。每个切片都必须 clean build + test 后独立提交。
+提交。只有行为向量覆盖和替代关系另行审阅后，才单独退役 `meiso_latest_state` 或
+`meiso_slice` demo。
