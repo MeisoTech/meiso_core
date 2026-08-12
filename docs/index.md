@@ -16,6 +16,8 @@
 ## 实现与证据
 
 - [SDK 设计与开发指南](sdk-guide.md)：实现边界、adapter pattern、conformance 与工作单元；
+- [Resource semantic core v0](resource-core-v0.md)：当前 portable primitives、内存模型与
+  conformance 矩阵；这是实现基线，不是第五份产品规范；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 

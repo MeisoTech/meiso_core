@@ -38,4 +38,5 @@ ctest --preset windows-msvc-debug
 - [Link 契约](docs/link.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
+- [Resource semantic core v0 实现设计](docs/resource-core-v0.md)
 - [系统进展](docs/system-report.md)
