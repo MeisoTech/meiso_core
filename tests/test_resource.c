@@ -195,6 +195,20 @@ static void test_saturating_counter(void)
     CHECK(value == UINT64_MAX);
     meiso_increment_saturated(&value);
     CHECK(value == UINT64_MAX);
+
+    value = 10U;
+    meiso_add_saturated(&value, 0U);
+    CHECK(value == 10U);
+    meiso_add_saturated(&value, 7U);
+    CHECK(value == 17U);
+    meiso_add_saturated(&value, UINT64_MAX - 17U);
+    CHECK(value == UINT64_MAX);
+    meiso_add_saturated(&value, 1U);
+    CHECK(value == UINT64_MAX);
+
+    value = UINT64_MAX - 1U;
+    meiso_add_saturated(&value, 2U);
+    CHECK(value == UINT64_MAX);
 }
 
 int main(void)
