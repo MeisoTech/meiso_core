@@ -45,6 +45,10 @@ add_library(meiso_latest_state src/meiso_latest_state.c)
 target_include_directories(meiso_latest_state PUBLIC include)
 meiso_enable_warnings(meiso_latest_state)
 
+add_library(meiso_resource_core src/meiso_resource.c)
+target_include_directories(meiso_resource_core PUBLIC include)
+meiso_enable_warnings(meiso_resource_core)
+
 add_executable(meiso_synthetic_demo demo/synthetic_main.c)
 target_link_libraries(meiso_synthetic_demo PRIVATE meiso_slice)
 meiso_enable_warnings(meiso_synthetic_demo)
@@ -60,9 +64,14 @@ add_executable(meiso_latest_state_test tests/test_latest_state.c)
 target_link_libraries(meiso_latest_state_test PRIVATE meiso_latest_state)
 meiso_enable_warnings(meiso_latest_state_test)
 
+add_executable(meiso_resource_test tests/test_resource.c)
+target_link_libraries(meiso_resource_test PRIVATE meiso_resource_core)
+meiso_enable_warnings(meiso_resource_test)
+
 enable_testing()
 add_test(NAME meiso_slice_test COMMAND meiso_slice_test)
 add_test(NAME meiso_latest_state_test COMMAND meiso_latest_state_test)
+add_test(NAME meiso_resource_test COMMAND meiso_resource_test)
 add_test(
     NAME meiso_synthetic_demo
     COMMAND meiso_synthetic_demo ${CMAKE_CURRENT_BINARY_DIR}/slice_preview.ppm
