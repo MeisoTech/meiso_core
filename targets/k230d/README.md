@@ -1,7 +1,9 @@
 # K230D Resource Core conformance target
 
 > Status: the frozen source has been cross-built and host-inspected as a RISC-V
-> ELF and full-media image; K230D execution remains `NOT_RUN`.
+> ELF and full-media image; the candidate with its locked boot-critical prefix,
+> payload identity, and documented mutable-FAT boundary is `BOARD_VERIFIED` for the
+> Resource semantic core v0 runner only.
 
 This target builds the same seven current Resource Core suites used on the host:
 `resource`, `state`, `stream`, `action`, `blob`, `descriptor_set`, and
@@ -21,9 +23,9 @@ per process.
 
 The 2026-08-13 offline candidate binds the payload source to
 `add9b8ac49a86cb0fb10b8f8cff7cbb8f3739b27`. The source is retained as a
-verified complete Git bundle in addition to the clean checkout; publication of
-that commit under a public remote ref is a separate repository operation and is
-not implied by this snapshot.
+verified complete Git bundle in addition to the clean checkout. The source's
+publication state after evidence capture is not part of the board result and
+does not alter the artifact identity.
 
 The exact 20-project CanMV v1.8 graph was built from a fresh derived output
 directory with the graph's x86_64-hosted RISC-V musl compiler. The builder was
@@ -54,6 +56,35 @@ pinned SDK and toolchain emitted 1421 reviewed upstream warnings during the
 complete fresh system build; those warnings are recorded separately and are not
 rewritten as Meiso diagnostics. None of these host inspections is a board
 execution result.
+
+## Board execution snapshot
+
+The candidate described above, with the documented post-write FAT metadata
+mutation below, booted on a `CanMV-K230D-Zero V1.1`. Captured output covered
+U-Boot SPL, DDR training, OpenSBI, RT-Smart/CanMV, and nncase; a fixed marker
+probe established that the interactive native loader was MSH.
+One manual invocation of `/sdcard/app/meiso_conformance` reported `rc=0` for
+`resource`, `state`, `stream`, `action`, `blob`, `descriptor_set`, and
+`four_kind`, ending with `passed=7 failed=0 first_failed_suite=none`.
+
+After a physical power cycle, a second manual process run produced the same
+summary and output digest. Only the second conformance invocation has a retained
+complete raw RX capture; it does not include the preceding boot. Capture was not armed before power-on, and opening the serial device may
+have changed control lines, so this is not an undisturbed cold-boot trace and
+does not prove LinkSession reset or autostart behavior.
+
+The development card received the complete source-length image write and sync.
+No whole-media equality was captured before automount. A later macOS
+read-write automount changed writable FAT metadata, so whole-media equality was
+not preserved; later comparison proved only the first 115343360-byte boot-critical
+prefix and the conformance payload byte-identical to the source candidate. This acceptance is specific to a freely
+reflashable development card and is not a release-media reproducibility claim.
+
+The operator reported gradual, acceptable warming. No calibrated numeric
+temperature, ambient condition, power, soak,
+or thermal-fault evidence was collected. `BOARD_VERIFIED` therefore covers only
+this deterministic Resource Core runner, not Link, Composition, MediaStream,
+capability/platform adapters, or a product Profile.
 
 ## Locked SDK boundary
 
@@ -235,9 +266,12 @@ storage bound.
 ## Board activation boundary
 
 Packaging the ELF does not prove that the observed CanMV REPL can execute it.
-First boot remains RX-only. Run `/sdcard/app/meiso_conformance` manually exactly
-once only after the current prompt has been independently proven to be MSH (or
+First boot remains RX-only. Run `/sdcard/app/meiso_conformance` manually at most
+once per separately authorized boot/process attempt, only after the current prompt has been independently proven to be MSH (or
 another reviewed native ELF loader) and the operator has authorized that run.
-If the board still ends at CanMV REPL, activation is blocked. This target adds no
-autostart, MSH builtin, startup script, persistent configuration, background
-task, or network service.
+The recorded candidate passed this gate through an MSH marker probe and manual
+invocation. A future candidate must repeat the gate rather than inherit this
+result. Static source/image inspection shows that this target adds no autostart,
+MSH builtin, startup script, persistent configuration, background task, or network
+service; retained serial evidence does not independently prove runtime autostart
+absence across the full cold-boot interval.

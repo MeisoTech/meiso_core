@@ -20,7 +20,8 @@ transport 或实现顺序。
 `meiso_resource_core` 已实现四种 primitive、共同值类型、
 descriptor validation 与 fixed immutable descriptor snapshot。下表中的“已证明”只表示当前
 portable in-process 实现通过了对应 Host fixture，不表示 remote、target 或产品 Runtime 已经
-成立。
+成立。证据捕获时 source 由 verified Git bundle 保留；commit 的后续发布状态不属于本报告的
+运行证据，也不改变 artifact identity。
 
 | 内容 | 当前 Host evidence | 尚未证明 |
 |---|---|---|
@@ -63,26 +64,39 @@ C symbol、slot layout 和 ABI 不是新的 Resource semantic core，也没有�
 
 ## K230D lab evidence
 
-Resource semantic core 的 target build 状态为 `HOST_VERIFIED_BOARD_UNVERIFIED`，K230D
-conformance execution 状态仍为 `NOT_RUN`。同一七套 Host 测试源码已经在 exact CanMV v1.8
-20-project graph 上 fresh cross-build；生成的 325472-byte static RISC-V ELF 经 host inspection，
-并从 fresh full-media `.img` 的 `/sdcard/app/meiso_conformance` 只读抽取后逐字节复核。完整镜像
-中的 payload SHA-256 为
+Resource semantic core 的 target build 状态为 `HOST_VERIFIED`，identity-gated candidate 在
+`CanMV-K230D-Zero V1.1` 上的 execution 状态为 `BOARD_VERIFIED`。同一七套 Host 测试源码
+已经在 exact CanMV v1.8 20-project graph 上 fresh cross-build；生成的 325472-byte static
+RISC-V ELF 经 host inspection，并从 fresh full-media `.img` 的
+`/sdcard/app/meiso_conformance` 只读抽取后逐字节复核。完整镜像中的 payload SHA-256 为
 `04b085c813f85414ce0f8284f54a8e24fe1649e113429a0df50273edb1f23e91`。
 
 该 target application 在 warnings-as-errors 下有零 Meiso diagnostic；完整 pinned SDK fresh
 build 的 1421 条上游/toolchain warnings 已单独计数和审阅。生成的 `.kdimg` 分区表只有 `rtt` 与 `rtapp`，不含
-SDCARD FAT 或 Meiso ELF，因此是 `NO_MEISO_PAYLOAD / NOT_A_MEISO_OTA_CANDIDATE`。Host 生成、
-ELF inspection、镜像内 payload equality 或 USB 枚举都不能晋升 `NOT_RUN`；以下既有启动证据
-也仍只属于官方 runtime recovery baseline。
+SDCARD FAT 或 Meiso ELF，因此是 `NO_MEISO_PAYLOAD / NOT_A_MEISO_OTA_CANDIDATE`。
 
-一块 `CanMV-K230D-Zero V1.1` 已使用
-[官方 CanMV v1.8 Zero release](https://github.com/kendryte/canmv_k230/releases/tag/v1.8)
-从 TF/SD 完整启动到 CanMV REPL；启动链实证 U-Boot SPL、DDR training、OpenSBI、
-RT-Smart/CanMV 与 nncase runtime。对应
+candidate `.img` 的准确 source length 已完成写入并 sync 到一张可反复刷写的开发卡。没有取得
+自动挂载前的 whole-media equality；macOS 随后的读写自动挂载改变了 writable FAT metadata，
+因此 post-write whole-media digest 不再等于 source image。后续比较只证明前 115343360 bytes
+的 boot-critical prefix 与 `/sdcard/app/meiso_conformance` payload 逐字节一致。这个明确记录的
+开发卡接受条件不等于 release-media reproducibility，也不把 host inspection 或 USB 枚举本身
+算成板端通过。
+
+带上述 FAT 变更边界的 candidate 从 TF/SD 启动，capture 实证 U-Boot SPL、DDR training、OpenSBI、
+RT-Smart/CanMV 与 nncase runtime；固定 marker probe 证明交互入口为 MSH。人工运行
+`/sdcard/app/meiso_conformance` 后，`resource / state / stream / action / blob /
+descriptor_set / four_kind` 七套 suite 均返回 `rc=0`，最终报告 `passed=7`、`failed=0`、
+`first_failed_suite=none`。物理断电重启后再次人工运行得到相同摘要与输出 digest；只有第二次
+conformance invocation 保留完整原始 RX capture，该 capture 不包含此前的上电过程。候选基于
+[官方 CanMV v1.8 Zero release](https://github.com/kendryte/canmv_k230/releases/tag/v1.8)。对应
 [Zero 官方规格](https://www.kendryte.com/k230_canmv/en/main/userguide/boards/canmv_k230d.html)
 声明 128 MiB LPDDR4，但本次启动并未测得可供 Meiso 使用的容量或预算。这个结果只证明
-准确镜像实例能够启动。
+准确镜像实例能够启动并在一个 fresh process 中执行 Resource semantic core v0 runner。
+
+本次没有取得从上电前开始的完整无干扰 cold-boot capture；串口工具打开设备时是否改变
+control line 也未知。因此证据不声明运行时 autostart absence、完整重启时序或 LinkSession
+reset；静态 image inspection 只证明 Meiso target 没有新增 startup hook。操作者报告板体缓慢
+升温且可接受，但没有校准数值、环境条件、功耗或 soak，所以这不是 thermal validation。
 
 当前公开 evidence 尚未证明该板实例的 camera module、display panel、touch、microphone、
 IMU、codec/KPU workload、network data path、clock quality、usable memory budget、持续温度、
@@ -114,7 +128,8 @@ IMU、codec/KPU workload、network data path、clock quality、usable memory bud
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；
 - 任一完整、声明并验证过的产品 Profile；
-- K230D conformance execution、CI、fuzz、并发、板端资源预算和长期 fault/soak evidence。
+- K230D 自动化 cold-boot/restart evidence、CI、fuzz、并发、板端资源预算和长期
+  fault/soak/thermal evidence。
 
 这些 gap 是无序能力集合。实际下一项由当前产品问题、可用硬件、风险和可执行验收选择，
 不在本报告中固化开发路线。

@@ -2,8 +2,8 @@
 
 > 实现状态：`IMPLEMENTED`
 > 验证状态：`HOST_VERIFIED`
-> target build：`HOST_VERIFIED_BOARD_UNVERIFIED`
-> K230D execution：`NOT_RUN`
+> target build：`HOST_VERIFIED`
+> K230D execution：`BOARD_VERIFIED`（仅 Resource semantic core v0）
 > 更新：2026-08-13
 > 兼容性：本工作分支上的 C11 source API；不冻结二进制 ABI，也不兼容旧实验 API。
 
@@ -311,16 +311,20 @@ backend、MediaStream external-buffer path 或板级 adapter，因此 `HOST_VERI
 |---|---|---|
 | common、四类 primitive、descriptor snapshot | `IMPLEMENTED / HOST_VERIFIED` | portable、in-process、caller-owned arena |
 | four-kind fixture | `HOST_VERIFIED` | test-only orthogonality，不是 runtime dispatcher |
-| target build | `HOST_VERIFIED_BOARD_UNVERIFIED` | exact CanMV v1.8 graph 的 RISC-V ELF 与 fresh full image 已完成 host inspection；不是板端结果 |
-| K230D execution | `NOT_RUN` | 尚无板端 conformance evidence |
+| target build | `HOST_VERIFIED` | exact CanMV v1.8 graph 的 RISC-V ELF 与 fresh full image 已完成 host inspection |
+| K230D execution | `BOARD_VERIFIED` | 锁定 candidate 的 boot-critical prefix/payload identity 在 `CanMV-K230D-Zero V1.1` 上人工执行；七套 aggregate suite 全部 `rc=0`，仅覆盖本页 semantic core |
 
 ## 实施状态与后续工作
 
 common types/descriptor validation、State、Stream、Blob、descriptor set、Action、counter
 saturation vector 与 four-kind fixture 已分别完成并验证。同一 runner 已由锁定 target toolchain
-构建成 RISC-V ELF，并在 fresh full image 中逐字节复核；`.kdimg` 被证明不含该 payload，不能
-作为 Meiso OTA candidate。下一工作单元是在准确板卡、介质、镜像、供电、恢复和成功信号
-安全门下执行 K230D 启动与人工 conformance，不由 host inspection 代替板端结果。
+构建成 RISC-V ELF，在 fresh full image 中逐字节复核，并在带明确 FAT 变更边界的 K230D
+candidate 上人工运行两次；两次之间有一次物理断电重启，每次七套 aggregate suite 均通过。
+只有第二次 conformance invocation 保留了完整原始 RX capture；它不包含此前的上电过程。
+串口工具可能改变 control line，且没有取得从上电前开始的完整无干扰
+cold-boot capture，因此该结果不证明启动时序、LinkSession reset 或自动执行。`.kdimg` 被证明
+不含该 payload，仍不能作为 Meiso OTA candidate。具体介质、启动与证据限制见
+[系统进展](system-report.md)。
 
 旧实现会暂时并存，避免把“新文件能编译”和“旧行为已迁移完整”混为同一个不可审阅
 提交。只有行为向量覆盖和替代关系另行审阅后，才单独退役 `meiso_latest_state` 或

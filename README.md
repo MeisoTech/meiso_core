@@ -19,10 +19,11 @@ source-level implementation API，不冻结二进制 ABI。
 
 这套实现仍不是 application-facing Resource Runtime 或完整 Meiso Core；它不包含
 Virtual Edge、LinkSession/wire、Composition、MediaStream data path 或 platform adapter。
-K230D conformance target 已完成 host-side cross-build 与 image inspection，但板端 execution
-仍为 `NOT_RUN`。各 primitive fixture 与 four-kind in-process fixture 的 Host 验证范围见
-[系统进展](docs/system-report.md)；这些测试不构成 remote backend、LinkSession 或 target
-evidence。
+K230D conformance target 已完成 host-side cross-build、image inspection，并在
+`CanMV-K230D-Zero V1.1` 上得到七套 suite 全部通过的 `BOARD_VERIFIED` evidence。这个状态只
+覆盖 Resource semantic core v0 的单进程 target runner，不构成 remote backend、LinkSession、
+Composition、MediaStream、完整冷启动或产品 Profile evidence。各层验证范围见
+[系统进展](docs/system-report.md)。
 
 以下重基线前模块继续作为 legacy behavior/workload evidence：
 
