@@ -25,13 +25,6 @@ K230D conformance target 已完成 host-side cross-build、image inspection，�
 Composition、MediaStream、完整冷启动或产品 Profile evidence。各层验证范围见
 [系统进展](docs/system-report.md)。
 
-以下重基线前模块继续作为 legacy behavior/workload evidence：
-
-- `meiso_latest_state` 验证固定容量 newest-wins、pending、ACK、重复/冲突与 session 重发；
-- `meiso_slice` 验证 frame identity、姿态/时效 gate、lease 与 fail-closed 合成 workload。
-
-这些 legacy 符号、ABI 和 slot layout 不构成新 SDK 兼容面。
-
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
 ```powershell
@@ -39,8 +32,6 @@ cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
 ```
-
-生成的 `build/slice_preview.ppm` 只是 legacy fixture 可视化，不是产品显示模型。
 
 ## 文档
 

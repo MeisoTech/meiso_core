@@ -128,6 +128,5 @@ Core 当前不定义：
 这是 Resource semantic core，不是 application-facing Resource Runtime，也不是本页所定义的
 完整 Meiso Core。Virtual Edge、Link、Composition、MediaStream、capability discovery、
 platform adapter 与产品级 target runtime 尚未实现；Resource semantic core v0 的准确
-conformance image 已在 K230D 上人工执行并通过，但这不实现上述缺失层。
-`meiso_latest_state` 和 `meiso_slice` 仍只作为 legacy evidence，不享有兼容承诺。实现状态和
-平台证据见[系统进展](system-report.md)。
+conformance image 已在 K230D 上人工执行并通过，但这不实现上述缺失层。实现状态和平台证据
+见[系统进展](system-report.md)。

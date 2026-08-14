@@ -8,7 +8,7 @@
 
 产品规范现已直接使用 `State / Stream / Action / Blob`、Virtual Edge 和 transport-
 independent Session boundary。旧公共 API、旧私有 wire 和旧术语没有兼容承诺。新的
-portable Resource semantic core、legacy fixture 与板级实验各自只有下文明确列出的 evidence
+portable Resource semantic core 与板级实验各自只有下文明确列出的 evidence
 范围，不能互相替代。
 
 规范入口是 [docs/index.md](index.md)。本报告不规定 platform、runtime、sensor、frontend、
@@ -36,18 +36,7 @@ portable in-process 实现通过了对应 Host fixture，不表示 remote、targ
 ASan/UBSan 配置下完成 warnings-as-errors build 和 CTest，并通过 AppleClang 静态分析与
 portable-library forbidden-symbol 审计。测试 inventory 以该提交的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
-固化为长期事实。Core fixture 与下面的 legacy fixture 必须分开解释。
-
-## Legacy evidence
-
-以下模块早于当前 Resource 规范，继续保留为可执行 behavior/workload evidence。其文件名、
-C symbol、slot layout 和 ABI 不是新的 Resource semantic core，也没有兼容承诺。
-
-| 内容 | 已证明 | 未证明 |
-|---|---|---|
-| `meiso_latest_state` | 固定容量完整 snapshot、newest-wins、pending、精确 ACK、duplicate/conflict、version wrap gate 与新 session 重发 | 新 State ABI、Resource Runtime、Session identity、wire、scheduler、concurrency、persistence 或 actual application |
-| `meiso_slice` | 确定性 frame identity、pose/freshness/uncertainty gate、lease、session isolation 与 fail-closed workload | Virtual Edge、真实 MediaStream、platform adapter 或产品 Composition |
-| synthetic demo | 固定 camera-like frame、模拟姿态/检测与 PPM 输出 | 真实 camera、sensor、codec、network、display 或 target performance |
+固化为长期事实。
 
 ## 代理平台实验
 

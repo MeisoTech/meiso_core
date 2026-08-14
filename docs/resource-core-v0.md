@@ -326,6 +326,6 @@ cold-boot capture，因此该结果不证明启动时序、LinkSession reset 或
 不含该 payload，仍不能作为 Meiso OTA candidate。具体介质、启动与证据限制见
 [系统进展](system-report.md)。
 
-旧实现会暂时并存，避免把“新文件能编译”和“旧行为已迁移完整”混为同一个不可审阅
-提交。只有行为向量覆盖和替代关系另行审阅后，才单独退役 `meiso_latest_state` 或
-`meiso_slice` demo。
+重基线前的 prototype 已在逐项处置审阅后从活动树退役；删除的旧行为不构成现行兼容承诺，
+Composition/Rendering workload 在对应新结构实现时重新建立。Git 历史保留其来源，不形成
+现行 API、ABI、构建目标或兼容面。

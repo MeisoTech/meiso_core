@@ -9,7 +9,7 @@ This target builds the same seven current Resource Core suites used on the host:
 `resource`, `state`, `stream`, `action`, `blob`, `descriptor_set`, and
 `four_kind`. Each test source is compiled once more with its `main` symbol
 renamed, then linked behind the platform-neutral conformance runner. It does not
-include the legacy `meiso_slice` or `meiso_latest_state` sources or tests.
+include any retired pre-rebaseline sources or tests.
 
 The Resource Core itself has no heap, socket, thread, clock, device, `stdio`, or
 `libm` dependency. The conformance process uses the RT-Smart userspace C runtime
