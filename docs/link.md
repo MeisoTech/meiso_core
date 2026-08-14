@@ -56,6 +56,12 @@ adapter，但不得改变 Resource 语义。
 一个字段不能代替另一层 identity。Host 本地帧号不能替代 Edge stream identity；连接地址
 不能替代 peer/session identity；transport 重连也不能自动证明仍是原 Session。
 
+一个 peer 内部可以有多个 producer clock/runtime。内部 producer 重启时，它的 producer
+incarnation 必须更新，受影响的 Stream 使用新 stream epoch；只有 source clock continuity
+无法证明时才使用新 clock epoch。只要对外 peer/boot 与有界 Session 状态的连续性仍可
+证明，不必仅因内部 runtime 重启而新建 LinkSession。peer Resource Runtime 重启、整机
+重启或无法证明连续性时，必须使用新 boot/incarnation 并建立新 Session。
+
 ## 建立与恢复
 
 一个实现的 handshake 至少要在使用业务 Resource 前完成：
@@ -71,6 +77,10 @@ adapter，但不得改变 Resource 语义。
 只有实现能证明双方仍处于同一 Session，并仍保留所需的有界恢复状态时，才允许 Session
 resume；不能证明时必须创建新 Session。实现不必采用上述编号作为 wire message，也不要求
 所有 endpoint 按某个固定顺序启动。
+
+当一个 Edge 的不同 network interface 提供同一公开 peer 时，它们是 transport 选择，
+不是不同 Edge。未定义 transport migration/resume 的实现在切换 interface 时建立新
+Session，不得用相同 device identity 伪装旧 Session 已连续恢复。
 
 ## Resource 交付
 
@@ -100,12 +110,13 @@ transport ACK 或 Link delivery acceptance 只表示对端协议层已经接受�
 
 ## 时间
 
-实时 Resource 使用 sender monotonic timestamp 与 clock epoch。跨端时间估计至少提供
-offset 与 uncertainty；同步精度未知或超出 Profile 预算时，上层不能把两端时钟当成同一
-时间轴。
+实时 Resource 使用 producer/source monotonic timestamp 与 source clock epoch。relay 必须
+保留 source time，并将 relay/receive time 分开表达。每个需要跨时钟比较的公开 source
+clock 都必须提供到协商时间轴的 mapping 与 uncertainty；缺少映射、连续性未知或精度超出
+Profile 预算时，上层不能把这些时钟当成同一时间轴。
 
 liveness 交换可以复用时钟观测，但本规范不规定 NTP、PTP、message layout 或 clock
-filter。peer 重启、monotonic epoch 变化和 stream epoch 变化必须对上层可见。
+filter。peer 重启、source clock epoch 变化和 stream epoch 变化必须对上层可见。
 
 ## 有界资源与调度
 

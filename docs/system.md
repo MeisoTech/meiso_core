@@ -21,6 +21,12 @@ Meiso Glass 面向分体式 XR/AR：把受重量、功耗和散热约束的设�
 Host 与 Edge 是协议角色，不是 CPU core、进程、板卡或操作系统。Host Runtime、daemon、
 CLI、Dashboard、simulator 和调试工具只是角色的实现或包装，不构成第三个公开角色。
 
+一个物理 Edge 可以由多个 core、OS、进程或固件域共同实现，但它对 Host 仍暴露
+一个受控的 Edge identity、capability 和 Resource Graph。内部 IPC 不自动构成新的
+Host/Edge 关系或公开 LinkSession。内部 runtime 重启或 bridge continuity 无法证明时，
+必须按受影响 Resource 的 lifecycle 与 identity 规则显式暴露 discontinuity，不得用旧
+缓存伪装连续。
+
 ## 系统边界
 
 ```text

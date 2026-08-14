@@ -43,3 +43,5 @@ ctest --preset windows-msvc-debug
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)
 - [系统进展](docs/system-report.md)
+- [Host/Edge 并行开发模型](docs/development-model.md)
+- [K230D Linux Edge 开发基线](docs/k230d-linux-edge-development-baseline.md)

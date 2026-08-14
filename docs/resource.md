@@ -52,8 +52,9 @@ Stream 的稳定规则：
 
 - sequence 只在自己的 stream epoch 内解释；新 producer incarnation 或无法连续恢复时
   建立新 epoch；
-- sample 使用 sender monotonic time 与 clock epoch；跨端比较必须同时携带时间估计及
-  uncertainty；
+- sample 使用 producer/source monotonic time 与 clock epoch；中继必须保留 source time，
+  并将 relay/receive time 与 uncertainty 分开表达；跨端比较必须同时携带
+  时间估计及 uncertainty；
 - QoS/Profile 声明 deadline、history、loss、ordering 与 backpressure 行为；
 - queue/history 有界，过期或允许丢失的 sample 不得阻塞更新数据；
 - 需要可靠到 deadline 的 event 可以报告缺口或失败，但不因此成为 Action；

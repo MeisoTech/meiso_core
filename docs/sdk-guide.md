@@ -61,6 +61,26 @@ API 不承诺 transport 数量。backend 看到一个 transport-independent Sess
 Profile/adapter 自己选择 transport arrangement。本规范不定义 Host switching、跨 Session
 authority handoff 或 topology migration，也不对这些能力作支持或兼容承诺。
 
+## 一个 Edge、多个本地 runtime
+
+一个 Edge implementation 可以横跨多个 core、OS 或进程。只有对外 Edge Runtime 管理
+公开 peer/boot identity、capability/Resource Registry 和 LinkSession；内部 runtime 通过
+platform-private 的有界 bridge 交付 sample、status 或本地 operation。
+
+内部 bridge 至少明确 schema/version、producer incarnation、clock/stream epoch、capacity、
+overflow 和 restart behavior。外层 adapter 保留 source identity/time，并在内部 endpoint 断开
+时更新 actual status。它不得把内部 RPC/queue 当成第二套公开 Resource 或 Link wire。
+
+## 独立 Host 开发
+
+Host 开发包只依赖公开 Profile、schema/wire、Virtual Edge API、deterministic simulator
+和 conformance vectors；不依赖板级 SDK、驱动 header 或内部 IPC。从 simulator 切换到
+physical Edge 时，Host 业务 API 不改变，只替换 backend 与已声明的 Profile/configuration。
+
+允许独立实现的 contract bundle 必须同时冻结 protocol/schema version、上限、golden
+encoding/failure vectors 和一条完整 Session trace。只有概念文档或某个 C struct 不足以让
+另一端独立实现 wire。
+
 ## Endpoint adapter 模式
 
 runtime 发现的 sensor、input、audio、media、presentation、codec 或 compute endpoint 使用
