@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="meiso-csrf" content="__MEISO_CSRF_TOKEN__">
+    <title>Meiso K230D 四语意实验面板</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MEISO DEV TOOL · LOCAL ONLY</p>
+        <h1>K230D 四语意实验面板</h1>
+        <p class="subtitle">Session、网络 telemetry 与 State / Stream / Action / Blob 验证</p>
+      </div>
+      <div class="status-stack" aria-live="polite">
+        <span id="overall-status" class="badge neutral">NOT RUN</span>
+        <span class="badge warning">UNAUTHENTICATED LAB TCP</span>
+        <span class="badge neutral">NO ADDRESS / SSID / MAC</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="control-bar" aria-label="测试控制">
+        <div class="control-copy">
+          <strong>真实 verdict 来自 native probe</strong>
+          <span>本页只展示脱敏事件，不实现 Meiso wire。</span>
+        </div>
+        <div class="buttons">
+          <button type="button" data-test="state">运行 State</button>
+          <button type="button" data-test="stream">运行 Stream</button>
+          <button type="button" data-test="action">运行 Action</button>
+          <button type="button" data-test="blob">运行 Blob</button>
+          <button type="button" data-test="all" class="primary">运行全部</button>
+        </div>
+        <p id="request-error" class="request-error" role="alert"></p>
+      </section>
+
+      <section class="grid identity-grid" aria-label="连接状态">
+        <article class="card">
+          <div class="card-heading">
+            <h2>Session</h2>
+            <span id="session-state" class="badge neutral">NEW</span>
+          </div>
+          <dl class="facts">
+            <div><dt>Failure</dt><dd id="session-failure">NONE</dd></div>
+            <div><dt>Remote identity</dt><dd id="identity-known">unknown</dd></div>
+            <div><dt>Expected peer</dt><dd id="identity-match">not checked</dd></div>
+            <div><dt>Session identity</dt><dd id="session-id-known">unknown</dd></div>
+            <div><dt>Protocol / Profile</dt><dd id="protocol-profile">configured exact-match</dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <h2>Negotiated limits</h2>
+            <span class="scope">Core snapshot</span>
+          </div>
+          <dl class="facts">
+            <div><dt>Frame bytes</dt><dd id="limit-frame">—</dd></div>
+            <div><dt>Runtime payload</dt><dd id="limit-runtime">—</dd></div>
+            <div><dt>Registry entries</dt><dd id="limit-registry">—</dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <h2>Registry</h2>
+            <span id="registry-state" class="badge neutral">UNKNOWN</span>
+          </div>
+          <dl class="facts">
+            <div><dt>Entries</dt><dd id="registry-entries">—</dd></div>
+            <div><dt>Capacity</dt><dd id="registry-capacity">—</dd></div>
+            <div><dt>Source</dt><dd id="registry-source">unknown</dd></div>
+          </dl>
+          <p id="registry-notice" class="note"></p>
+        </article>
+      </section>
+
+      <section class="section-heading">
+        <div>
+          <p class="eyebrow">FOUR RESOURCE SEMANTICS</p>
+          <h2>实际交换与接收结果</h2>
+        </div>
+        <p>State/Stream/Blob 不伪装成 RPC；只有 Action 展示 request/result。</p>
+      </section>
+
+      <section class="grid resource-grid" aria-label="四语意结果">
+        <article class="card resource-card state-card">
+          <div class="card-heading">
+            <div>
+              <p class="kind-label">STATE · EDGE → HOST</p>
+              <h2>Aggregate EdgeState</h2>
+            </div>
+            <span id="state-status" class="badge neutral">NOT RUN</span>
+          </div>
+          <dl class="facts compact">
+            <div><dt>Version</dt><dd id="state-version">—</dd></div>
+            <div><dt>Window id</dt><dd id="state-window">—</dd></div>
+            <div><dt>Wi‑Fi interface</dt><dd id="state-interface">no</dd></div>
+            <div><dt>Wi‑Fi carrier</dt><dd id="state-carrier">no</dd></div>
+            <div><dt>On-die corrected</dt><dd id="state-temperature">—</dd></div>
+            <div><dt>Uncertainty</dt><dd id="state-temperature-uncertainty">—</dd></div>
+          </dl>
+          <p class="note">不显示 SSID、IP、MAC 或完整设备标识。</p>
+        </article>
+
+        <article class="card resource-card stream-card">
+          <div class="card-heading">
+            <div>
+              <p class="kind-label">STREAM · EDGE → HOST</p>
+              <h2>Aggregate TelemetrySample</h2>
+            </div>
+            <span id="stream-status" class="badge neutral">NOT RUN</span>
+          </div>
+          <dl class="facts compact">
+            <div><dt>Epoch / sequence</dt><dd id="stream-key">—</dd></div>
+            <div><dt>Source monotonic</dt><dd id="stream-time">—</dd></div>
+            <div><dt>Window id</dt><dd id="stream-window">—</dd></div>
+            <div><dt>Elapsed</dt><dd id="stream-elapsed">—</dd></div>
+            <div><dt>RX bytes</dt><dd id="stream-rx-bytes">—</dd></div>
+            <div><dt>TX bytes</dt><dd id="stream-tx-bytes">—</dd></div>
+            <div><dt>RX packets</dt><dd id="stream-rx-packets">—</dd></div>
+            <div><dt>TX packets</dt><dd id="stream-tx-packets">—</dd></div>
+            <div><dt>RX dropped</dt><dd id="stream-rx-dropped">—</dd></div>
+            <div><dt>TX dropped</dt><dd id="stream-tx-dropped">—</dd></div>
+            <div><dt>Signal bucket</dt><dd id="stream-signal">UNKNOWN</dd></div>
+            <div><dt>On-die corrected</dt><dd id="stream-temperature">—</dd></div>
+            <div><dt>Uncertainty</dt><dd id="stream-temperature-uncertainty">—</dd></div>
+          </dl>
+          <p class="note">Signal bucket 由 Host 从 wire mBm 派生；不声明真实 IMU/camera sensor。</p>
+        </article>
+
+        <article class="card resource-card action-card">
+          <div class="card-heading">
+            <div>
+              <p class="kind-label">ACTION · HOST → EDGE → HOST</p>
+              <h2>Bounded operation</h2>
+            </div>
+            <span id="action-status" class="badge neutral">NOT RUN</span>
+          </div>
+          <dl class="facts compact">
+            <div><dt>Operation</dt><dd id="action-operation">—</dd></div>
+            <div><dt>Delivery accepted</dt><dd id="action-delivery">no</dd></div>
+            <div><dt>Edge accepted</dt><dd id="action-accepted">no</dd></div>
+            <div><dt>Executed once</dt><dd id="action-once">no</dd></div>
+            <div><dt>Result</dt><dd id="action-result">—</dd></div>
+          </dl>
+        </article>
+
+        <article class="card resource-card blob-card">
+          <div class="card-heading">
+            <div>
+              <p class="kind-label">BLOB · EDGE → HOST</p>
+              <h2>Immutable content</h2>
+            </div>
+            <span id="blob-status" class="badge neutral">NOT RUN</span>
+          </div>
+          <dl class="facts compact">
+            <div><dt>Label</dt><dd id="blob-label">—</dd></div>
+            <div><dt>Content bytes</dt><dd id="blob-size">—</dd></div>
+            <div><dt>Integrity</dt><dd id="blob-integrity">not verified</dd></div>
+            <div><dt>Published</dt><dd id="blob-published">no</dd></div>
+            <div><dt>Duplicate</dt><dd id="blob-duplicate">no</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="grid lower-grid">
+        <article class="card">
+          <div class="card-heading">
+            <h2>Endpoint / sensor evidence</h2>
+            <span class="badge pass">1 SENSOR VERIFIED</span>
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Kind</th><th>Evidence</th></tr></thead>
+            <tbody id="sensor-rows"></tbody>
+          </table>
+          <p class="note">Wi‑Fi 是真实 network endpoint，不是 physical sensor。温度只展示校正值与未裁剪 uncertainty，不把 raw sysfs 当作 °C。</p>
+        </article>
+
+        <article class="card event-card">
+          <div class="card-heading">
+            <h2>Sanitized event stream</h2>
+            <span id="event-count" class="scope">0 events</span>
+          </div>
+          <div id="event-log" class="event-log" role="log" aria-live="polite" aria-label="脱敏事件日志" tabindex="0"></div>
+          <p class="note">有界内存 ring；未知字段、地址和完整 identity 不进入浏览器。</p>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      <span>Local Dev Tool · HTTP is not a Meiso product protocol</span>
+      <span id="last-refresh">waiting for snapshot</span>
+    </footer>
+  </body>
+</html>

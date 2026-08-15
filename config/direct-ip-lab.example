@@ -1,0 +1,4 @@
+# Lab-only locator indirection. Keep the numeric address in process memory.
+address_env=MEISO_LAB_EDGE_ADDRESS
+expected_edge=four-kind-lab-edge-v0
+port=27640

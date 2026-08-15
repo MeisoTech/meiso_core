@@ -51,6 +51,17 @@ meiso_enable_warnings(meiso_session_core)
 add_library(meiso_core INTERFACE)
 target_link_libraries(meiso_core INTERFACE meiso_resource_core meiso_session_core)
 
+add_library(
+    meiso_four_kind_lab_protocol
+    profiles/four-kind-lab-v0/lab_protocol.c
+)
+target_include_directories(
+    meiso_four_kind_lab_protocol
+    PUBLIC profiles/four-kind-lab-v0
+)
+target_link_libraries(meiso_four_kind_lab_protocol PUBLIC meiso_resource_core)
+meiso_enable_warnings(meiso_four_kind_lab_protocol)
+
 if(UNIX)
     add_library(meiso_posix_tcp_adapter adapters/posix/meiso_posix_tcp.c)
     target_include_directories(
@@ -59,6 +70,30 @@ if(UNIX)
     )
     target_link_libraries(meiso_posix_tcp_adapter PUBLIC meiso_session_core)
     meiso_enable_warnings(meiso_posix_tcp_adapter)
+
+    add_executable(
+        meiso_four_kind_lab
+        devtools/four_kind_lab/four_kind_lab.c
+    )
+    target_link_libraries(
+        meiso_four_kind_lab
+        PRIVATE meiso_posix_tcp_adapter meiso_four_kind_lab_protocol
+    )
+    meiso_enable_warnings(meiso_four_kind_lab)
+
+    add_executable(
+        meiso_four_kind_lab_internal_test
+        devtools/four_kind_lab/four_kind_lab.c
+    )
+    target_compile_definitions(
+        meiso_four_kind_lab_internal_test
+        PRIVATE MEISO_LAB_INTERNAL_TEST=1
+    )
+    target_link_libraries(
+        meiso_four_kind_lab_internal_test
+        PRIVATE meiso_posix_tcp_adapter meiso_four_kind_lab_protocol
+    )
+    meiso_enable_warnings(meiso_four_kind_lab_internal_test)
 endif()
 
 add_executable(meiso_resource_test tests/test_resource.c)
@@ -97,6 +132,16 @@ meiso_enable_warnings(meiso_session_test)
 add_executable(meiso_session_four_kind_test tests/test_session_four_kind.c)
 target_link_libraries(meiso_session_four_kind_test PRIVATE meiso_core)
 meiso_enable_warnings(meiso_session_four_kind_test)
+
+add_executable(
+    meiso_four_kind_lab_protocol_test
+    tests/test_four_kind_lab_protocol.c
+)
+target_link_libraries(
+    meiso_four_kind_lab_protocol_test
+    PRIVATE meiso_four_kind_lab_protocol
+)
+meiso_enable_warnings(meiso_four_kind_lab_protocol_test)
 
 if(TARGET meiso_posix_tcp_adapter)
     add_executable(meiso_posix_tcp_test tests/test_posix_tcp.c)
@@ -171,8 +216,18 @@ add_test(NAME meiso_action_test COMMAND meiso_action_test)
 add_test(NAME meiso_four_kind_test COMMAND meiso_four_kind_test)
 add_test(NAME meiso_session_test COMMAND meiso_session_test)
 add_test(NAME meiso_session_four_kind_test COMMAND meiso_session_four_kind_test)
+add_test(
+    NAME meiso_four_kind_lab_protocol_test
+    COMMAND meiso_four_kind_lab_protocol_test
+)
 if(TARGET meiso_posix_tcp_test)
     add_test(NAME meiso_posix_tcp_test COMMAND meiso_posix_tcp_test)
+endif()
+if(TARGET meiso_four_kind_lab_internal_test)
+    add_test(
+        NAME meiso_four_kind_lab_internal_test
+        COMMAND meiso_four_kind_lab_internal_test --self-test
+    )
 endif()
 add_test(NAME meiso_conformance COMMAND meiso_conformance)
 if(TARGET meiso_resource_short_enum_test)
