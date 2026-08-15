@@ -1,6 +1,6 @@
 # 系统设计
 
-> 状态：产品设计文档。定义角色、Virtual Edge、Core/Profile 边界与产品不变量；
+> 状态：产品设计文档。定义角色、Core/Runtime/SDK/Profile 边界与产品不变量；
 > Resource、Link 和 Composition 的技术语义分别由对应规范定义。
 
 ## 目标
@@ -32,19 +32,18 @@ Host/Edge 关系或公开 LinkSession。内部 runtime 重启或 bridge continui
 ```text
 Host applications / services / frontends
     ↓
-Virtual Edge / EdgeHandle
+Host SDK: Virtual Edge / EdgeHandle
     ↓
-Resource Runtime
+Host Runtime: Resource Graph / policy / control
     ↓
-LinkSession
-    ↓
-Profile-selected transport implementation
+Host Core: identity / Session / Resource delivery
+    ↕ Profile-selected transport implementation
+Edge Core: identity / Session / Resource delivery
+    ↑
+Edge Runtime: Resource Graph / policy / control
+    ↑
+capability / platform adapters / actual endpoints
 
-Edge Resource Runtime
-    ↓
-policy / capability / platform adapters
-    ↓
-actual sensor / media / presentation / device endpoints
 ```
 
 这是一组责任边界，不要求每层都是独立进程，也不要求所有 payload 经过同一复制或内存
@@ -52,7 +51,7 @@ actual sensor / media / presentation / device endpoints
 
 ## Virtual Edge
 
-Virtual Edge 是 Host 侧对远端或模拟 Edge Resource Graph 的本地、版本化、能力受限投影。
+Virtual Edge 是 Host SDK 对远端或模拟 Edge Resource Graph 的本地、版本化、能力受限投影。
 应用通过 `EdgeHandle` 一类 facade 发现 capability、读取 State、订阅 Stream、调用 Action
 和引用 Blob。
 
@@ -76,18 +75,23 @@ Virtual Edge 不是透明远程内存：
   才能在对应边界激活。
 - session、boot/clock epoch、resource identity 和 stream epoch 不互相替代。
 
-## Core、Capability 与 Profile
+## Core、Runtime、SDK 与 Profile
 
-`Meiso Core` 只稳定：
+`Meiso Core` 拥有跨端协议内核：
 
-- Host/Edge 角色与 truth ownership；
-- Virtual Edge 的显式异步边界；
-- `State / Stream / Action / Blob` 语义；
-- identity、Session、time、failure 与 bounded-resource 规则；
-- Composition 的 layer、generation、激活和 Edge final authority。
+- Host/Edge 角色、peer/boot/Session identity 与精确 protocol/Profile；
+- connection、handshake、Session lifecycle、liveness、failure 与 bounded limits；
+- 版本化 wire 与 `State / Stream / Action / Blob` 的 transport-independent delivery
+  primitive 和语义。
 
-runtime capability 声明当前实际存在的 sensor、media、display、codec、input、compute 或
-其他 endpoint。Core 不为 camera、IMU、microphone、某块开发板或某个 frontend 建立特例。
+Runtime 拥有 Resource Graph：声明 capability/descriptor、实例化 Resource、绑定 owner/schema/QoS，
+并执行本地 policy、control 和 endpoint adapter。Core 不声明 sensor，不为 camera、IMU、
+microphone、某块开发板或某个 frontend 建立特例。Core `READY` 只允许 Runtime 交换；
+它不表示 Registry 已匹配或任何 endpoint 已 `READY`。
+
+Host SDK 拥有 Virtual Edge、typed async API 与 application view；它不拥有 socket、
+handshake 或物理设备控制。Composition 是 SDK/Runtime 消费的产品契约，不是 Session
+Core 的连接职责。
 
 Profile 选择一组已验证的 Host/Edge implementation、capability、Resource/QoS、transport
 arrangement 和 Composition behavior。系统只保证声明并验证过的组合，不承诺任意组合的
@@ -108,9 +112,9 @@ arrangement 和 Composition behavior。系统只保证声明并验证过的组�
 
 ## 通信边界
 
-应用只使用 Virtual Edge、Resource 与 Composition，不拥有 socket、port、packet 或设备
-网卡。LinkSession 负责 peer/session identity、time、delivery/failure 与 Resource 可见性；
-其公开语义不依赖具体 transport。
+应用只使用 SDK 的 Virtual Edge、Resource 与 Composition，不拥有 socket、port、
+packet 或设备网卡。Core LinkSession 负责 peer/session identity、time 与
+delivery/failure；Resource 可见性和 endpoint lifecycle 属于 Runtime。
 
 transport 的类型、拓扑、数量和切换能力由 Profile/实现决定。本版 Core 不承诺 binding
 cardinality、运行中 transport migration 或通用 transport-topology scheduler。完整契约见
@@ -132,7 +136,10 @@ Core 当前不定义：
 固定 immutable descriptor snapshot，以及四种 bounded in-process Resource primitive。
 
 这是 Resource semantic core，不是 application-facing Resource Runtime，也不是本页所定义的
-完整 Meiso Core。Virtual Edge、Link、Composition、MediaStream、capability discovery、
-platform adapter 与产品级 target runtime 尚未实现；Resource semantic core v0 的准确
-conformance image 已在 K230D 上人工执行并通过，但这不实现上述缺失层。实现状态和平台证据
-见[系统进展](system-report.md)。
+完整产品系统。当前 `meiso_session_core` 已实现 exact protocol/Profile、四步 handshake、
+bounded wire 和 Runtime-message gate；fresh Host CTest `11/11` 通过，支持
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。Virtual Edge、Resource
+Registry/endpoint control、Composition Runtime、MediaStream、TCP/security adapter 与产品级
+target runtime 尚未实现。Resource semantic core v0 的准确 conformance image 已在 K230D
+上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
+[系统进展](system-report.md)；Session 边界见 [Session Core v0](session-core-v0.md)。

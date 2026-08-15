@@ -7,28 +7,29 @@
 
 ```text
 Application / Composition
-  -> Virtual Edge / Resource Runtime
-  -> LinkSession
+  -> Host SDK / Virtual Edge
+  -> Resource Runtime
+  -> Core / LinkSession
   -> Profile-selected transport implementation
 ```
 
-Application 不感知 socket、port、packet、MTU 或 transport topology。Resource Runtime
-解释 State/Stream/Action/Blob；LinkSession 在 peer 之间维护可验证的生命周期、时间与交付
-边界；transport implementation 只负责当前 Profile 所需的数据移动。
+Application 不感知 socket、port、packet、MTU 或 transport topology。SDK 拥有
+Virtual Edge；Runtime 声明并解释 Resource Graph；Core LinkSession 在 peer 之间
+维护可验证的 identity、lifecycle 与 delivery boundary；transport 只移动字节。
 
 ## LinkSession
 
 LinkSession 的公共责任是：
 
-- peer、protocol/version、session identity、liveness 与关闭；
-- capability 与 Resource Registry snapshot 的协商/可见性；
+- peer/boot/Session identity、精确 protocol/Profile、liveness 与关闭；
+- handshake、有界 limits、Session-bound framing 和 Runtime-message gate；
 - delivery acceptance、去重、flow control、backpressure 与失败状态；
 - clock offset、drift/uncertainty 的持续估计；
-- 短暂中断恢复的证据，或无法证明连续性时建立新 Session；
 - 所有 queue、retry、reassembly 和恢复状态的边界与 telemetry。
 
-Session ready 不表示每个 Resource endpoint 都 running。sensor、Stream、decoder、presentation
-或其他 endpoint 有自己的 State/lifecycle；它们通过 capability 和 Resource 状态表达。
+Capability、Resource Registry snapshot、owner 协调、endpoint 启动和控制逻辑属于
+Runtime。Core `READY` 只表示 Runtime message 可以交换；Runtime endpoint `READY`
+必须由 Registry 和该 endpoint 的自身 lifecycle 独立证明。
 
 ## Transport 边界
 
@@ -39,6 +40,10 @@ Profile 选择 transport arrangement；本规范不规定其类型、数量、�
 当前 Core 不公开 binding cardinality，也不承诺通用 transport-topology scheduler。实现可以
 从满足当前 Profile 的最小 transport adapter 开始。未来媒体、功耗或物理链路需求可以扩展
 adapter，但不得改变 Resource 语义。
+
+Bootstrap/transport adapter 向 Core 提供 typed locator 与完整 frame。Core 不解析配置、
+IP、port 或 socket；locator 不是 peer identity。具体 direct-TCP 开发选择见
+[Host/Edge 并行开发模型](development-model.md)。
 
 ## Identity
 
@@ -64,23 +69,22 @@ incarnation 必须更新，受影响的 Stream 使用新 stream epoch；只有 s
 
 ## 建立与恢复
 
-一个实现的 handshake 至少要在使用业务 Resource 前完成：
+当前 [Session Core v0](session-core-v0.md) 用四步 exact-match handshake：
 
-1. 发现或选择候选 peer；发现不等于可信 Session；
-2. 建立 Profile 要求的认证和安全 transport；
-3. 协商 protocol/schema、peer/boot identity 与资源上限；
-4. 判定恢复已有 Session 还是创建新 Session；
-5. 建立 clock estimate 与 uncertainty；
-6. 交换 capability 与 Resource Registry snapshot；
-7. 协调 owner 当前 State，并分别启动选中的 endpoint。
+1. Host 发 `OPEN`：本地 peer/incarnation/nonce、期望 Edge identity、精确
+   protocol/Profile 和本地 limits；
+2. Edge 验证后发 `ACCEPT`：对等 identity/incarnation/nonce、nonce echo、相同
+   protocol/Profile 和 Edge local limits；双方按字段取 negotiated minimum；
+3. Host 验证完整 transcript 后发 `CONFIRM(SessionId)`；
+4. Edge 验证后发 `READY(SessionId)`；Core 进入 `READY`。
 
-只有实现能证明双方仍处于同一 Session，并仍保留所需的有界恢复状态时，才允许 Session
-resume；不能证明时必须创建新 Session。实现不必采用上述编号作为 wire message，也不要求
-所有 endpoint 按某个固定顺序启动。
+v0 不支持 resume；每次 transport 重连都使用新 nonce、新 SessionId 和新 Session
+handle。Core `READY` 前 Runtime message 不得发出或交付。Core `READY` 后 Runtime
+交换 Registry/capability，各 endpoint 再独立进入自己的 `READY`。
 
 当一个 Edge 的不同 network interface 提供同一公开 peer 时，它们是 transport 选择，
-不是不同 Edge。未定义 transport migration/resume 的实现在切换 interface 时建立新
-Session，不得用相同 device identity 伪装旧 Session 已连续恢复。
+不是不同 Edge。切换 interface 时 v0 建立新 Session，不得用相同 device identity
+伪装旧 Session 连续恢复。
 
 ## Resource 交付
 

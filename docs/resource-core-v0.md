@@ -307,10 +307,17 @@ Stream receive/consume、Action delivery/accepted/result 与 Blob staging/publis
 backend、MediaStream external-buffer path 或板级 adapter，因此 `HOST_VERIFIED` 不能解释为
 完整 Meiso Core、Resource Runtime、Profile 或 K230D 通过。
 
+后续 [Session Core v0](session-core-v0.md) 保持这些 primitive API 不变，并以独立
+`session_four_kind` fixture 证明同一 codec 的当前 SessionId/READY gate 后才能执行
+test-only remote dispatch；未声明 ResourceId、wrong kind 与旧 Session copy 均被拒绝。
+该新增证据不包含 Registry generation，也不把测试 envelope 晋升为产品 Runtime wire；
+它不改变本页 primitive 可离线运行的契约。
+
 | 层级 | 状态 | 边界 |
 |---|---|---|
 | common、四类 primitive、descriptor snapshot | `IMPLEMENTED / HOST_VERIFIED` | portable、in-process、caller-owned arena |
 | four-kind fixture | `HOST_VERIFIED` | test-only orthogonality，不是 runtime dispatcher |
+| Session-gated four-kind fixture | `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED` | test-only route envelope；不是 TCP 或产品 Runtime |
 | target build | `HOST_VERIFIED` | exact CanMV v1.8 graph 的 RISC-V ELF 与 fresh full image 已完成 host inspection |
 | K230D execution | `BOARD_VERIFIED` | 锁定 candidate 的 boot-critical prefix/payload identity 在 `CanMV-K230D-Zero V1.1` 上人工执行；七套 aggregate suite 全部 `rc=0`，仅覆盖本页 semantic core |
 

@@ -4,7 +4,7 @@
 
 以下四份文档共同拥有通用产品语义；各自只拥有一个问题域：
 
-1. [系统设计](system.md)：角色、Virtual Edge、Core/Profile 与产品不变量；
+1. [系统设计](system.md)：角色、Virtual Edge、Core/Runtime/SDK/Profile 与产品不变量；
 2. [Resource 契约](resource.md)：State、Stream、Action、Blob、ownership、lifecycle 与 QoS；
 3. [Link 契约](link.md)：identity、Session、time、delivery、failure 与 transport-independent
    boundary；
@@ -19,6 +19,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [SDK 设计与开发指南](sdk-guide.md)：实现边界、adapter pattern、conformance 与工作单元；
 - [Resource semantic core v0](resource-core-v0.md)：当前 portable primitives、内存模型与
   conformance 矩阵；这是实现基线，不是第五份产品规范；
+- [Session Core v0](session-core-v0.md)：当前 portable handshake、wire、limits、lifecycle
+  与 Runtime-message gate；不包含 TCP、安全 transport 或 Resource Registry；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator

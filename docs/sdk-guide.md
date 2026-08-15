@@ -8,17 +8,18 @@
 ```text
 Host application / service / frontend
     ↓
-EdgeHandle / Virtual Edge API
+Host SDK: EdgeHandle / Virtual Edge API
     ↓
-portable Resource Runtime
+Host Runtime: Resource Graph / policy / control
     ↓
-LinkSession backend interface
-    ↓
-transport and platform adapters
+Core: identity / Session / Resource delivery
+    ↕ transport adapter
+Edge Core
+    ↑
+Edge Runtime: Resource Graph / policy / control
+    ↑
+capability / platform / endpoint adapters
 
-Edge Resource Runtime
-    ↓
-capability / policy / endpoint adapters
 ```
 
 这个分层不要求 daemon、多进程或通用 plugin framework。第一份实现可以在单进程中证明
@@ -27,6 +28,15 @@ capability / policy / endpoint adapters
 SDK 不把 socket、packet、driver handle 或 platform buffer 暴露为 Host application 的
 业务接口。反过来，Core 也不要求所有 payload 复制进通用 byte container；adapter 可以
 提供满足相同 Resource lifecycle 的 zero/low-copy path。
+
+| 层 | 拥有 | 不拥有 |
+|---|---|---|
+| Core | identity、handshake、Session、bounded wire、Resource delivery primitive | Resource 声明、sensor/control、Virtual Edge |
+| Runtime | Resource Registry/instance、capability、owner/schema/QoS、policy/control/adapter | peer handshake、application facade |
+| Host SDK | Virtual Edge、typed async API、application view | socket/IP、platform adapter、physical truth |
+
+Bootstrap 可以解析本地 direct-IP/TCP 配置并向 Core transport adapter 注入 typed
+options；该配置不是 SDK 业务 API 或 Core 协议，IP 也不是 peer identity。
 
 ## 数据如何选择
 
@@ -41,7 +51,7 @@ SDK 不把 socket、packet、driver handle 或 platform buffer 暴露为 Host ap
 不要为了覆盖四种类型虚构业务。大型当前事实仍是引用 Blob 的 State；已经发生的 button
 event 是 Stream；连续 frame 不是 Blob；desired State 的 ACK 不是 Action result。
 
-## Virtual Edge 实现
+## Host SDK / Virtual Edge
 
 Host-facing API 对 simulated、loopback、recorded 和 remote backend 使用同一业务语义。
 最小 facade 应能表达：
@@ -63,9 +73,9 @@ authority handoff 或 topology migration，也不对这些能力作支持或兼�
 
 ## 一个 Edge、多个本地 runtime
 
-一个 Edge implementation 可以横跨多个 core、OS 或进程。只有对外 Edge Runtime 管理
-公开 peer/boot identity、capability/Resource Registry 和 LinkSession；内部 runtime 通过
-platform-private 的有界 bridge 交付 sample、status 或本地 operation。
+一个 Edge implementation 可以横跨多个 core、OS 或进程。对外 Core 管理公开
+peer/boot/Session identity；Edge Runtime 管理 capability/Resource Registry 与 endpoint
+lifecycle。内部 runtime 通过 platform-private 的有界 bridge 交付 sample、status 或本地 operation。
 
 内部 bridge 至少明确 schema/version、producer incarnation、clock/stream epoch、capacity、
 overflow 和 restart behavior。外层 adapter 保留 source identity/time，并在内部 endpoint 断开

@@ -1,6 +1,6 @@
 # 系统进展
 
-> 日期：2026-08-13
+> 日期：2026-08-15
 > 状态：公开、已脱敏的 evidence report；不是产品规范，不包含原始日志、地址、凭据、
 > 唯一设备标识或本机路径。
 
@@ -8,7 +8,7 @@
 
 产品规范现已直接使用 `State / Stream / Action / Blob`、Virtual Edge 和 transport-
 independent Session boundary。旧公共 API、旧私有 wire 和旧术语没有兼容承诺。新的
-portable Resource semantic core 与板级实验各自只有下文明确列出的 evidence
+portable Resource semantic core、Session Core 与板级实验各自只有下文明确列出的 evidence
 范围，不能互相替代。
 
 规范入口是 [docs/index.md](index.md)。本报告不规定 platform、runtime、sensor、frontend、
@@ -32,9 +32,22 @@ portable in-process 实现通过了对应 Host fixture，不表示 remote、targ
 | Blob | bounded staging、callback verification、完整后原子 publish、duplicate/conflict/capacity/abort、zero length 与 reentrancy guard | Core 内置 hash、chunk/resume、persistence、eviction、授权或 Session transfer |
 | four-kind fixture | 同一 descriptor snapshot 下四类真实 public contract 的独立初始化、正交状态以及逐类容量失败隔离 | Resource Runtime、generic dispatcher、LinkSession、remote backend 或产品 Profile |
 
-该提交在 AppleClang 17、CMake 4.2、Ninja 1.13 的 clean out-of-tree Debug、Release 与
-ASan/UBSan 配置下完成 warnings-as-errors build 和 CTest，并通过 AppleClang 静态分析与
-portable-library forbidden-symbol 审计。测试 inventory 以该提交的
+当前分支另实现 `meiso_session_core`：caller-owned arena、显式 big-endian wire v1、
+`OPEN / ACCEPT / CONFIRM / READY`、exact protocol/Profile、bounded limits、一次性 Session
+和 READY 前 Runtime-message gate。两个独立 arena 经同一 codec 完成 loopback；旧 Session、
+错误 identity/version/Profile/limits、畸形 frame、提前 Runtime、close 和 transport loss 均有
+明确失败。`session_four_kind` fixture 进一步用 test-only envelope 证明四类跨 peer 测试消息
+只有在当前 SessionId/READY、已声明 ResourceId 且 kind 匹配后才进入 typed primitive；
+旧 Session copy、未声明 ID 与错误 kind 均被拒绝。
+
+该 fixture 的 Resource envelope 明确是 test-only；当前没有 Registry generation、产品
+Runtime codec、TCP adapter、认证、安全 transport 或 K230D Session evidence。因此它只支持
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`，不构成 `TRANSPORT_VERIFIED`。
+
+当前 Session source tree 在 AppleClang 17、CMake 4.2、Ninja 1.13 的 clean out-of-tree
+Debug、Release 与 ASan/UBSan 配置下完成 warnings-as-errors build 和 CTest，并通过
+AppleClang 静态分析与 portable-library forbidden-symbol 审计。测试 inventory 以该
+source tree 的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
 固化为长期事实。
 
@@ -112,7 +125,7 @@ IMU、codec/KPU workload、network data path、clock quality、usable memory bud
 - 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
 - application-facing Resource Runtime、capability/endpoint registry lifecycle 与 backend
   orchestration；
-- 生产 LinkSession handshake、安全 transport、公共 wire、time/reconnect 参数；
+- TCP/安全 transport、Runtime Registry wire、time estimator 与 reconnect/resume 参数；
 - capability/endpoint discovery 和真实 platform adapter；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；

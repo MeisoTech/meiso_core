@@ -11,13 +11,15 @@ Edge 开发和 Host 开发应能并行，不以某块板、某条网络或某个
 负责将真实设备、本地 policy 与同一契约对接。
 
 ```text
-Host application                  Edge implementation
-       |                                  |
-       +---- Virtual Edge contract -------+
-       |                                  |
- macOS simulator / replay          Linux runtime / adapters
-       |                                  |
-       +------ shared conformance --------+
+Host application
+       ↓
+Host SDK / Virtual Edge
+       ↓
+Host Runtime                         Edge Runtime / adapters
+       ↓                                  ↑
+Host Core ──── Session/wire contract ──── Edge Core
+       ↑                                  ↑
+macOS Host harness                    K230D Linux target
 ```
 
 ## 双方稳定边界
@@ -32,6 +34,8 @@ Host 开发者可以依赖：
 
 Host 业务代码不得依赖 K230D 的 core 分工、Linux/NuttX、driver handle、串口节点、
 硬编码地址或某个具体 transport。这些只存在于 Edge adapter、连接配置和 Profile。
+Virtual Edge 是 Host SDK 契约，不是跨端 wire；跨端稳定边界是 Core Session/wire
+与 Runtime Resource 契约。
 
 ## 使 Host 可独立开发的交付物
 
@@ -59,10 +63,11 @@ Host 业务代码不得依赖 K230D 的 core 分工、Linux/NuttX、driver handl
 
 开发不按“先写完 Host，再写完 Edge”推进，而是一次打通一条可运行路径：
 
-1. **Session milestone**：macOS simulator 和 Linux Edge 分别实现同一最小 Session
-   契约，交换 identity、capability 和 descriptor snapshot；
-2. **Resource slice**：在隔离的 conformance/test namespace 中端到端验证四类
-   Resource、断线与资源耗尽；这些 synthetic fixture 不声明任何 physical capability；
+1. **Session milestone**：macOS Host harness 和 Linux Edge 实现同一最小 Core Session
+   契约，只交换 identity、protocol/Profile、limits 和 Session state；
+2. **Resource slice**：Core `READY` 后由 Runtime 交换 Registry/capability，在隔离的
+   conformance/test namespace 中端到端验证四类 Resource、断线与资源耗尽；
+   synthetic fixture 不声明任何 physical capability；
 3. **Sensor slice**：先用 recorded/synthetic Stream，再替换一个真实 sensor adapter；
 4. **Rendering slice**：先用 synthetic input 得到 off-screen render result，再接入
    Composition activation 和真实 display；
@@ -78,16 +83,17 @@ macOS 重现的 Host evidence 与它真正要声明的 Edge evidence。一个 mi
 
 当前只选择 `Session milestone`，并拆成三个原子工作单元：
 
-1. **本地契约**：冻结开发 Profile 的 identity/version、最小 handshake/wire、认证与安全
-   transport、资源上限、失败码和 golden trace；macOS Host 与 deterministic simulator
-   通过同一组向量。认证与安全选择尚未被接受时，只能称为 pre-Link lab transport，不能
-   报告 LinkSession conformance；
-2. **Linux / Wi-Fi**：Edge 上启动最小 Linux Runtime，只发布隔离 test namespace 中的
-   synthetic capability；同一 Host backend 经 Wi-Fi/IP 完成显式连接和 Session snapshot。
-   首版人工给出地址，不同时建设 discovery、媒体或真实 sensor；
+1. **本地契约**：冻结 [Session Core v0](session-core-v0.md) 的 identity、exact
+   protocol/Profile、`OPEN/ACCEPT/CONFIRM/READY`、limits、wire、failure 和 golden
+   trace；macOS Host harness 与 deterministic peer 使用同一 codec/vector；
+2. **Linux / direct IP**：bootstrap 从本地配置向 direct-TCP adapter 注入 `IP:port`
+   与 expected peer identity；Edge 启动最小 Core/Runtime。IP 不是 identity，首版不建设
+   discovery、配网、transport migration、媒体或真实 sensor；
 3. **连续性与故障**：分别验证正常断开、network loss、重连和 Edge reboot；每个结果都有
-   明确上限、Session identity 和可重现 fixture。
+   明确上限、Session identity 和可重现 fixture。v0 每次重连都建立新 Session，
+   不 resume 或自动 replay。
 
-USB 当前只作串口恢复与调试；USB network 在电气角色和 runtime capability 实证后再用
-同一 Link 契约加入。三个工作单元完成前，不声称 Link、sensor、Edge-side Rendering
-Runtime 或产品互操作 Profile 已实现。
+TCP、认证和 K230D 只能按各自实测证据声明；HOST semantic/wire 测试不证明
+network、security 或 target。USB network 在电气角色和 runtime capability 实证后再用同一
+Core 契约加入。三个工作单元完成前，不声称 sensor、Rendering Runtime 或产品
+互操作 Profile 已实现。

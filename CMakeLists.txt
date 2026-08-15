@@ -43,6 +43,14 @@ add_library(meiso_resource_core
 target_include_directories(meiso_resource_core PUBLIC include)
 meiso_enable_warnings(meiso_resource_core)
 
+add_library(meiso_session_core src/meiso_session.c)
+target_include_directories(meiso_session_core PUBLIC include)
+target_link_libraries(meiso_session_core PUBLIC meiso_resource_core)
+meiso_enable_warnings(meiso_session_core)
+
+add_library(meiso_core INTERFACE)
+target_link_libraries(meiso_core INTERFACE meiso_resource_core meiso_session_core)
+
 add_executable(meiso_resource_test tests/test_resource.c)
 target_link_libraries(meiso_resource_test PRIVATE meiso_resource_core)
 target_include_directories(meiso_resource_test PRIVATE src)
@@ -71,6 +79,14 @@ meiso_enable_warnings(meiso_action_test)
 add_executable(meiso_four_kind_test tests/test_four_kind.c)
 target_link_libraries(meiso_four_kind_test PRIVATE meiso_resource_core)
 meiso_enable_warnings(meiso_four_kind_test)
+
+add_executable(meiso_session_test tests/test_session.c)
+target_link_libraries(meiso_session_test PRIVATE meiso_session_core)
+meiso_enable_warnings(meiso_session_test)
+
+add_executable(meiso_session_four_kind_test tests/test_session_four_kind.c)
+target_link_libraries(meiso_session_four_kind_test PRIVATE meiso_core)
+meiso_enable_warnings(meiso_session_four_kind_test)
 
 function(meiso_add_conformance_suite suite_name source_file)
     set(target_name meiso_conformance_${suite_name}_suite)
@@ -122,6 +138,8 @@ add_test(NAME meiso_blob_test COMMAND meiso_blob_test)
 add_test(NAME meiso_descriptor_set_test COMMAND meiso_descriptor_set_test)
 add_test(NAME meiso_action_test COMMAND meiso_action_test)
 add_test(NAME meiso_four_kind_test COMMAND meiso_four_kind_test)
+add_test(NAME meiso_session_test COMMAND meiso_session_test)
+add_test(NAME meiso_session_four_kind_test COMMAND meiso_session_four_kind_test)
 add_test(NAME meiso_conformance COMMAND meiso_conformance)
 if(TARGET meiso_resource_short_enum_test)
     add_test(NAME meiso_resource_short_enum_test COMMAND meiso_resource_short_enum_test)

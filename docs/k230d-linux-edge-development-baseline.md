@@ -1,7 +1,8 @@
 # K230D Linux Edge 开发基线
 
 > 状态：`SELECTED_IMPLEMENTATION_BASELINE / PROFILE_NOT_DEFINED /
-> BOARD_DUAL_OS_BOOT_OBSERVED / NETWORK_ACCESS_PENDING`。
+> BOARD_DUAL_OS_BOOT_OBSERVED / MAINTENANCE_WIFI_SSH_OBSERVED /
+> MEISO_TRANSPORT_NOT_RUN`。
 > 本页定义当前 K230D 候选实现的责任分工与验收边界，不改变 Host/Edge、Resource、Link
 > 或 Composition 语义，也不是 Host 可直接编码的互操作 Profile。
 
@@ -18,8 +19,9 @@ small core / NuttX sensor plane        Linux platform adapters
        bounded internal bridge                       |
               +------------------+-------------------+
                                  |
-                    big core / Linux Edge Runtime
-                    +-- Resource + capability + LinkSession
+                    big core / Linux Edge implementation
+                    +-- Core: identity + LinkSession + Resource delivery
+                    +-- Runtime: Resource Graph + capability + control
                     +-- Wi-Fi / future USB network adapters
                     +-- Composition + Edge-side Rendering Runtime
 ```
@@ -29,14 +31,14 @@ small core / NuttX sensor plane        Linux platform adapters
 | 域 | 当前责任 | 明确不负责 |
 |---|---|---|
 | 小核 NuttX | 对确有必要的 sensor 做采集、最早可靠时间戳、小型有界缓冲和健康状态 | 不建立 Host LinkSession，不拥有 Wi-Fi/USB 产品协议，不运行第二套 Resource Runtime 或 Composition |
-| 大核 Linux | Edge identity/incarnation、capability/Resource Runtime、LinkSession、Wi-Fi 与未来经验证的 USB network、高带宽 media、Composition、Edge-side rendering 与大部分 platform adapter | 不把内部 core/OS 结构泄漏给 Host API |
-| macOS Host | Virtual Edge、Host SDK、simulator/replay、应用与协议测试 | 不直接操作 NuttX IPC、Linux driver handle 或物理 sensor bus |
+| 大核 Linux | Core 的 Edge identity/incarnation/LinkSession；Runtime 的 capability/Resource Graph/control；Wi-Fi、media、Composition、rendering 与 platform adapter | 不把内部 core/OS 结构泄漏给 Host API |
+| macOS Host | Host SDK/Virtual Edge、simulator/replay、应用与协议测试 | 不直接操作 NuttX IPC、Linux driver handle 或物理 sensor bus |
 
 因此选中小核采集时，“`sensor -> 小核 -> Wi-Fi -> Host`”在实现上是：
 
 ```text
-sensor -> NuttX acquisition -> internal bridge -> Linux Resource Runtime
-       -> Linux-owned LinkSession -> Wi-Fi (or future USB network) -> Host
+sensor -> NuttX acquisition -> internal bridge -> Linux Runtime
+       -> Linux Core/LinkSession -> Wi-Fi (or future USB network) -> Host
 ```
 
 Wi-Fi 当前由 Linux 管理。把 Wi-Fi stack 也下放到小核会引入第二套网络、安全和
@@ -73,18 +75,18 @@ Session lifecycle，当前没有需求支持这个成本。
 | 事件 | 对外结果 |
 |---|---|
 | 整板/A-B boot | device identity 可保持；Edge boot/runtime incarnation、LinkSession、source clock epoch 和所有 stream epoch 全新 |
-| Linux Edge Runtime 重启 | 新 Edge runtime incarnation 与新 LinkSession；即使 NuttX 存活，外部 Stream 也以新 epoch 开始 |
+| Linux Edge implementation 重启 | 新 Edge incarnation 与新 Core Session；即使 NuttX 存活，外部 Stream 也以新 epoch 开始 |
 | NuttX/sensor plane 重启或 heartbeat 超时 | Linux LinkSession 可保持；受影响 endpoint 先变为 degraded/unavailable，重建后使用新 producer incarnation 和 stream epoch |
 | 内部 bridge continuity 无法证明 | 丢弃旧 queue/cache，更新 bridge generation 和受影响 stream epoch；不补造 sample |
-| Wi-Fi/IP 变化 | 地址不是 identity；只有对等方与有界恢复状态能证明连续性时才 resume，否则新 Session |
+| Wi-Fi/IP 变化或 TCP 重连 | 地址不是 identity；Session v0 一律建立新 Session，不 resume |
 
 network 断开时，小核只能保留已经配置并对外声明的有界 history；overflow/drop 必须向
 Linux 和 Host 可观察，不得无限缓存。
 
 ## Network 与 Host 测试
 
-Linux Edge Runtime 拥有公开 LinkSession。Wi-Fi 和将来经实证的 USB network 只是
-可替换 carrier：
+Linux Edge implementation 的 Core 拥有公开 LinkSession；Runtime 拥有 Resource Graph。
+Wi-Fi 和将来经实证的 USB network 只是可替换 carrier：
 
 - 同一 handshake、Session identity、schema、Resource 和 failure 必须在两者上成立；
 - Host 应用不根据 carrier 分叉业务逻辑；
@@ -114,9 +116,11 @@ RX-only 串口捕获分别取得已缓冲的 Linux `Welcome to Buildroot`，以�
 NuttShell prompt。这些 marker 支持两个执行域曾启动至各自 userland/shell，但没有捕获完整
 boot transition 或证明持续 liveness。
 
-这次观察没有固定完整 Linux build identity，也没有证明 Linux login、Wi-Fi association、SSH、
-USB network、sensor bridge、Rendering Runtime 或任何产品 Link。当前 USB 证据仍只是双串口，
-不能解释为 USB network。
+后续受控 bring-up 已验证 Linux 串口登录、Wi-Fi association/DHCP/default route、sshd 与
+public-key-only SSH；首次 host key 经串口交叉核对。该结果只证明维护部署路径，不证明
+Meiso transport、Session 或 Runtime。当前仍未固定完整 Linux build identity，也未证明
+USB network、sensor bridge 或 Rendering Runtime；USB 证据仍只是双串口，不能解释为
+USB network。
 
 该镜像中的 NuttX 仍是预编译启动 payload；当前项目没有冻结的 NuttX sensor
 source/config、可用的 Linux↔NuttX bridge 或 lifecycle supervisor。内核出现 generic IPC
