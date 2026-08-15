@@ -51,6 +51,16 @@ meiso_enable_warnings(meiso_session_core)
 add_library(meiso_core INTERFACE)
 target_link_libraries(meiso_core INTERFACE meiso_resource_core meiso_session_core)
 
+if(UNIX)
+    add_library(meiso_posix_tcp_adapter adapters/posix/meiso_posix_tcp.c)
+    target_include_directories(
+        meiso_posix_tcp_adapter
+        PUBLIC adapters/posix
+    )
+    target_link_libraries(meiso_posix_tcp_adapter PUBLIC meiso_session_core)
+    meiso_enable_warnings(meiso_posix_tcp_adapter)
+endif()
+
 add_executable(meiso_resource_test tests/test_resource.c)
 target_link_libraries(meiso_resource_test PRIVATE meiso_resource_core)
 target_include_directories(meiso_resource_test PRIVATE src)
@@ -87,6 +97,27 @@ meiso_enable_warnings(meiso_session_test)
 add_executable(meiso_session_four_kind_test tests/test_session_four_kind.c)
 target_link_libraries(meiso_session_four_kind_test PRIVATE meiso_core)
 meiso_enable_warnings(meiso_session_four_kind_test)
+
+if(TARGET meiso_posix_tcp_adapter)
+    add_executable(meiso_posix_tcp_test tests/test_posix_tcp.c)
+    target_link_libraries(
+        meiso_posix_tcp_test
+        PRIVATE meiso_posix_tcp_adapter
+    )
+    meiso_enable_warnings(meiso_posix_tcp_test)
+endif()
+
+if(APPLE AND TARGET meiso_posix_tcp_adapter)
+    add_executable(
+        meiso_session_tcp_loopback
+        devtools/macos/session_tcp_loopback.c
+    )
+    target_link_libraries(
+        meiso_session_tcp_loopback
+        PRIVATE meiso_posix_tcp_adapter
+    )
+    meiso_enable_warnings(meiso_session_tcp_loopback)
+endif()
 
 function(meiso_add_conformance_suite suite_name source_file)
     set(target_name meiso_conformance_${suite_name}_suite)
@@ -140,6 +171,9 @@ add_test(NAME meiso_action_test COMMAND meiso_action_test)
 add_test(NAME meiso_four_kind_test COMMAND meiso_four_kind_test)
 add_test(NAME meiso_session_test COMMAND meiso_session_test)
 add_test(NAME meiso_session_four_kind_test COMMAND meiso_session_four_kind_test)
+if(TARGET meiso_posix_tcp_test)
+    add_test(NAME meiso_posix_tcp_test COMMAND meiso_posix_tcp_test)
+endif()
 add_test(NAME meiso_conformance COMMAND meiso_conformance)
 if(TARGET meiso_resource_short_enum_test)
     add_test(NAME meiso_resource_short_enum_test COMMAND meiso_resource_short_enum_test)

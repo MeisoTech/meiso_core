@@ -137,9 +137,11 @@ Core 当前不定义：
 
 这是 Resource semantic core，不是 application-facing Resource Runtime，也不是本页所定义的
 完整产品系统。当前 `meiso_session_core` 已实现 exact protocol/Profile、四步 handshake、
-bounded wire 和 Runtime-message gate；fresh Host CTest `11/11` 通过，支持
-`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。Virtual Edge、Resource
-Registry/endpoint control、Composition Runtime、MediaStream、TCP/security adapter 与产品级
-target runtime 尚未实现。Resource semantic core v0 的准确 conformance image 已在 K230D
+bounded wire 和 Runtime-message gate；命名的状态机/wire/integration tests 支持
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。POSIX platform layer 另有 caller-owned
+connected-stream adapter，并在 macOS `AF_INET` loopback TCP 上通过 bounded partial-I/O、
+failure 与双向 payload 测试。Virtual Edge、Resource Registry/endpoint control、Composition
+Runtime、MediaStream、direct-IP bootstrap、security adapter 与产品级 target runtime 尚未实现。
+Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；Session 边界见 [Session Core v0](session-core-v0.md)。

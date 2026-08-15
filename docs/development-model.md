@@ -81,19 +81,23 @@ macOS 重现的 Host evidence 与它真正要声明的 Edge evidence。一个 mi
 
 ## 当前第一切片
 
-当前只选择 `Session milestone`，并拆成三个原子工作单元：
+当前只选择 `Session milestone`，并拆成四个原子工作单元：
 
 1. **本地契约**：冻结 [Session Core v0](session-core-v0.md) 的 identity、exact
    protocol/Profile、`OPEN/ACCEPT/CONFIRM/READY`、limits、wire、failure 和 golden
    trace；macOS Host harness 与 deterministic peer 使用同一 codec/vector；
-2. **Linux / direct IP**：bootstrap 从本地配置向 direct-TCP adapter 注入 `IP:port`
-   与 expected peer identity；Edge 启动最小 Core/Runtime。IP 不是 identity，首版不建设
-   discovery、配网、transport migration、媒体或真实 sensor；
-3. **连续性与故障**：分别验证正常断开、network loss、重连和 Edge reboot；每个结果都有
+2. **本机 TCP preflight**：POSIX adapter 与 macOS Dev Tool 已通过真实 `AF_INET` loopback、
+   bounded partial I/O、双向 Runtime payload 和 close；该工具不属于 Core/Runtime/SDK，也不
+   证明 remote network；
+3. **Linux / direct IP**：bootstrap 从本地配置读取 `IP:port` 并完成 connect，再向
+   connected-stream adapter 注入 fd、以 expected peer identity 配置 Session；Edge 启动最小
+   Core/Runtime。IP 不是 identity，首版不建设 discovery、配网、transport migration、媒体或
+   真实 sensor；
+4. **连续性与故障**：分别验证正常断开、network loss、重连和 Edge reboot；每个结果都有
    明确上限、Session identity 和可重现 fixture。v0 每次重连都建立新 Session，
    不 resume 或自动 replay。
 
 TCP、认证和 K230D 只能按各自实测证据声明；HOST semantic/wire 测试不证明
 network、security 或 target。USB network 在电气角色和 runtime capability 实证后再用同一
-Core 契约加入。三个工作单元完成前，不声称 sensor、Rendering Runtime 或产品
+Core 契约加入。四个工作单元完成前，不声称 sensor、Rendering Runtime 或产品
 互操作 Profile 已实现。

@@ -22,13 +22,18 @@ Virtual Edge 与应用 API。IP、port 和 TCP adapter 属于 bootstrap/transpor
 source-level implementation API，不冻结二进制 ABI。
 
 当前还包含 caller-owned arena 上的 `meiso_session_core`：exact protocol/Profile、
-`OPEN/ACCEPT/CONFIRM/READY`、bounded wire 与 Runtime-message gate。fresh Host build
-的 CTest `11/11` 通过，支持 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`；该结果
-不声明 TCP、认证、安全 transport 或 target evidence。
+`OPEN/ACCEPT/CONFIRM/READY`、bounded wire 与 Runtime-message gate。命名的 Session
+状态机、wire 与 four-kind integration tests 支持
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。
+
+POSIX build 另含 platform-layer connected-stream adapter。它借用 already-connected、
+nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完整 Session frame；
+真实 macOS `AF_INET` loopback TCP unit test 与 Dev Tool 支持该条件下的
+`TRANSPORT_VERIFIED`。这不证明 remote/direct-IP、Wi-Fi、K230D 或安全 transport。
 
 这套实现仍不是 application-facing Resource Runtime 或完整产品系统；它不包含
 Virtual Edge、Resource Registry/endpoint control、Composition Runtime、MediaStream data path、
-TCP adapter 或 platform adapter。
+direct-IP bootstrap/connect/listen、认证或产品 platform adapter。
 K230D conformance target 已完成 host-side cross-build、image inspection，并在
 `CanMV-K230D-Zero V1.1` 上得到七套 suite 全部通过的 `BOARD_VERIFIED` evidence。这个状态只
 覆盖 Resource semantic core v0 的单进程 target runner，不构成 remote backend、LinkSession、

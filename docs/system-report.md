@@ -1,6 +1,6 @@
 # 系统进展
 
-> 日期：2026-08-15
+> 日期：2026-08-16
 > 状态：公开、已脱敏的 evidence report；不是产品规范，不包含原始日志、地址、凭据、
 > 唯一设备标识或本机路径。
 
@@ -41,7 +41,7 @@ portable in-process 实现通过了对应 Host fixture，不表示 remote、targ
 旧 Session copy、未声明 ID 与错误 kind 均被拒绝。
 
 该 fixture 的 Resource envelope 明确是 test-only；当前没有 Registry generation、产品
-Runtime codec、TCP adapter、认证、安全 transport 或 K230D Session evidence。因此它只支持
+Runtime codec、认证、安全 transport 或 K230D Session evidence。因此它只支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`，不构成 `TRANSPORT_VERIFIED`。
 
 当前 Session source tree 在 AppleClang 17、CMake 4.2、Ninja 1.13 的 clean out-of-tree
@@ -50,6 +50,19 @@ AppleClang 静态分析与 portable-library forbidden-symbol 审计。测试 inv
 source tree 的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
 固化为长期事实。
+
+当前 POSIX platform layer 另实现 connected-stream adapter：借用 caller-owned、already-
+connected、nonblocking `SOCK_STREAM` fd 和 Session；RX/TX 各由 `max_frame_bytes` 限制，
+每 step 至多一次 `recv/send` 且不超过 `max_io_bytes_per_step`。adapter 不创建、连接、监听或
+关闭 socket，不解析 IP/DNS/config，不拥有 event loop、认证或 Runtime route。
+
+`meiso_posix_tcp_test` 使用真实 macOS `AF_INET` loopback TCP 验证 nonblocking requirement、
+read would-block、write backpressure 不提前确认、一字节 handshake/full-duplex、连续 Runtime
+frame、非法长度、半帧 EOF、adapter capacity、partial-prefix terminal 和 reset/no-SIGPIPE。
+macOS Dev Tool 另以 `poll`、7-byte step 和每阶段 5-second watchdog 完成 handshake、双向
+opaque Runtime payload 与正常 close。因此证据为
+`TRANSPORT_VERIFIED(macOS 15.5 arm64, AF_INET loopback TCP, max_frame=256)`；它不证明
+remote/direct-IP、Wi-Fi、K230D、bootstrap policy、TLS/auth、Runtime dispatch 或产品 Profile。
 
 ## 代理平台实验
 
@@ -125,7 +138,8 @@ IMU、codec/KPU workload、network data path、clock quality、usable memory bud
 - 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
 - application-facing Resource Runtime、capability/endpoint registry lifecycle 与 backend
   orchestration；
-- TCP/安全 transport、Runtime Registry wire、time estimator 与 reconnect/resume 参数；
+- direct-IP bootstrap/connect/listen、安全 transport、Runtime Registry wire、time estimator
+  与 reconnect/resume 参数；
 - capability/endpoint discovery 和真实 platform adapter；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；

@@ -173,12 +173,13 @@ transport 将 authenticated peer 绑定到 `PeerId`。
 | `TRANSPORT_VERIFIED` | 指定 adapter 与条件下的数据移动 | authentication、K230D、产品 Profile |
 | `BOARD_VERIFIED` | 指定 image/board/adapter 的实测 | 未声明 transport 或 endpoint |
 
-在对应测试和报告存在前不得使用上述验证标签。当前 fresh AppleClang
-Debug build 的 CTest `11/11` 通过；其中 `meiso_session_test` 对七种 frame 提供独立
+在对应测试和报告存在前不得使用上述验证标签。当前 fresh AppleClang build 中，
+`meiso_session_test` 对七种 frame 提供独立
 golden bytes，并验证状态机、nonce/Session binding、failure、truncation、length 和 limits；
 `meiso_session_four_kind_test` 使用明确的 test-only envelope 验证 READY/SessionId gate、
 undeclared ResourceId、wrong kind、旧 Session copy，以及四类 primitive 集成。它不验证
-Registry generation 或产品 Runtime codec。该结果只支持两个 HOST 标签。
+Registry generation 或产品 Runtime codec。该结果只支持两个 HOST 标签；POSIX transport
+adapter 的条件化证据由 [系统进展](system-report.md) 单独记录，不改变 Session Core 边界。
 
 ## 最小验收
 
