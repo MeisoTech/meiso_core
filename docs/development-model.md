@@ -1,7 +1,7 @@
 # Host/Edge 并行开发模型
 
 > 状态：当前实施与协作指南。产品语义仍只由
-> [系统](system.md)、[Resource](resource.md)、[Link](link.md) 和
+> [系统](system.md)、[Resource](resource.md)、[Runtime](runtime.md)、[Link](link.md) 和
 > [Composition](composition.md) 规范定义。
 
 ## 目标
@@ -65,10 +65,12 @@ Virtual Edge 是 Host SDK 契约，不是跨端 wire；跨端稳定边界是 Cor
 
 1. **Session milestone**：macOS Host harness 和 Linux Edge 实现同一最小 Core Session
    契约，只交换 identity、protocol/Profile、limits 和 Session state；
-2. **Resource slice**：Core `READY` 后由 Runtime 交换 Registry/capability，在隔离的
-   conformance/test namespace 中端到端验证四类 Resource、断线与资源耗尽；
+2. **Runtime slice**：Core `READY` 后由 Edge 发布完整 catalog，Host 接受后提交
+   desired/subscription，Edge 发布 actual 并只对 `ACTIVE` route 开放 Resource data；
+   在隔离的 conformance/test namespace 中验证 catalog update、参数 reject、断线和资源耗尽；
    synthetic fixture 不声明任何 physical capability；
-3. **Sensor slice**：先用 recorded/synthetic Stream，再替换一个真实 sensor adapter；
+3. **Sensor slice**：先用 recorded/synthetic endpoint bundle，再替换一个真实 sensor
+   adapter；Host 仍只见 catalog/desired/actual/data，不见板级配置或 driver；
 4. **Rendering slice**：先用 synthetic input 得到 off-screen render result，再接入
    Composition activation 和真实 display；
 5. **Media slice**：在 lifecycle 成立后引入 MediaStream 数据面，不用大 payload 反向
@@ -79,25 +81,17 @@ Virtual Edge 是 Host SDK 契约，不是跨端 wire；跨端稳定边界是 Cor
 macOS 重现的 Host evidence 与它真正要声明的 Edge evidence。一个 milestone 可以拆成
 多个独立提交和验收的小工作单元。
 
-## 当前第一切片
+## 当前 Runtime 切片
 
-当前只选择 `Session milestone`，并拆成四个原子工作单元：
+Session Core 已有 Host semantic/wire evidence；POSIX adapter 只有指定 macOS loopback
+transport evidence。当前主线是 [Runtime negotiation core v0](runtime-core-v0.md)：
 
-1. **本地契约**：冻结 [Session Core v0](session-core-v0.md) 的 identity、exact
-   protocol/Profile、`OPEN/ACCEPT/CONFIRM/READY`、limits、wire、failure 和 golden
-   trace；macOS Host harness 与 deterministic peer 使用同一 codec/vector；
-2. **本机 TCP preflight**：POSIX adapter 与 macOS Dev Tool 已通过真实 `AF_INET` loopback、
-   bounded partial I/O、双向 Runtime payload 和 close；该工具不属于 Core/Runtime/SDK，也不
-   证明 remote network；
-3. **Linux / direct IP**：bootstrap 从本地配置读取 `IP:port` 并完成 connect，再向
-   connected-stream adapter 注入 fd、以 expected peer identity 配置 Session；Edge 启动最小
-   Core/Runtime。IP 不是 identity，首版不建设 discovery、配网、transport migration、媒体或
-   真实 sensor；
-4. **连续性与故障**：分别验证正常断开、network loss、重连和 Edge reboot；每个结果都有
-   明确上限、Session identity 和可重现 fixture。v0 每次重连都建立新 Session，
-   不 resume 或自动 replay。
+1. 冻结 catalog、desired/actual、subscription 与 route gate 的有界 portable 合同；
+2. 用同一真实 Session frame 验证 catalog 原子切换、参数请求、actual 与 stale route；
+3. 在 K230D Linux Edge 侧把私有配置与 adapter probe 映射成 catalog，不把板级字段泄漏给
+   Host；
+4. 接入一个真实 endpoint adapter，并让 macOS Host fixture 只依赖相同 catalog/schema；
+5. 再验证插拔、catalog update、network loss、新 Session 重协商和资源耗尽。
 
-TCP、认证和 K230D 只能按各自实测证据声明；HOST semantic/wire 测试不证明
-network、security 或 target。USB network 在电气角色和 runtime capability 实证后再用同一
-Core 契约加入。四个工作单元完成前，不声称 sensor、Rendering Runtime 或产品
-互操作 Profile 已实现。
+旧 four-kind lab 是固定顺序 evidence，不是正式 Runtime。TCP、认证、K230D、真实 endpoint
+和 SDK 只能按各自实测声明；Host semantic/wire 测试不证明 network、security 或 target。

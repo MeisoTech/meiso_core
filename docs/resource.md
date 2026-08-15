@@ -67,9 +67,10 @@ Stream 的 identity、epoch、timestamp、deadline、bounded backpressure 与 li
 额外声明 codec/raw format、dimensions、dependency/recovery information 和关联的
 Composition source。
 
-MediaStream 必须注册在同一 Resource Registry 中，共享 Session、capability、权限、时钟、
-调度预算与 telemetry。编码、packetization、hardware buffer、recovery point 和 transport
-arrangement 由 Profile/adapter 决定；这不要求媒体 payload 经过通用 State/Blob 复制路径。
+MediaStream 必须注册在同一 accepted Runtime catalog / Resource Graph 中，共享 Session、
+capability、权限、时钟、调度预算与 telemetry。编码、packetization、hardware buffer、
+recovery point 和 transport arrangement 由 Profile/adapter 决定；这不要求媒体 payload 经过
+通用 State/Blob 复制路径。
 
 连续 camera、audio 或 projection frame 是 MediaStream。它们不能因为“大”就变成 Blob，
 也不能要求每帧最终送达。
@@ -114,6 +115,11 @@ sensor、input、audio、media、display、codec 或其他 endpoint。一个具�
 camera、IMU、microphone 只是 endpoint 例子。型号、format、sample rate、axis、calibration、
 clock relationship 和 platform handle 属于 descriptor、adapter 或 Profile，不进入 Core，
 也不产生固定的实现顺序。
+
+Endpoint 的存在、capability、desired/actual 配置、subscription、动态插拔和 data route
+由 [Runtime 契约](runtime.md)定义。Runtime 必须先在当前 Core Session 中协商 endpoint bundle，
+再把其 Resource data 交给本页定义的 typed primitive；未激活的 route 不得因为本地
+driver 或 Resource handle 存在就向 Host 送数据。
 
 ## 验收条件
 

@@ -8,7 +8,7 @@
 
 产品规范现已直接使用 `State / Stream / Action / Blob`、Virtual Edge 和 transport-
 independent Session boundary。旧公共 API、旧私有 wire 和旧术语没有兼容承诺。新的
-portable Resource semantic core、Session Core 与板级实验各自只有下文明确列出的 evidence
+portable Resource semantic core、Session Core、Runtime negotiation core 与板级实验各自只有下文明确列出的 evidence
 范围，不能互相替代。
 
 规范入口是 [docs/index.md](index.md)。本报告不规定 platform、runtime、sensor、frontend、
@@ -25,7 +25,7 @@ portable in-process 实现通过了对应 Host fixture，不表示 remote、targ
 
 | 内容 | 当前 Host evidence | 尚未证明 |
 |---|---|---|
-| common / descriptor set | typed identity、SHA-256 ContentId 形状、descriptor 校验；fixed-capacity register/seal/value-copy lookup、duplicate/conflict/capacity | capability registry lifecycle、generation/permission/schema negotiation、wire 或 runtime dispatch |
+| common / descriptor set | typed identity、SHA-256 ContentId 形状、descriptor 校验；fixed-capacity register/seal/value-copy lookup、duplicate/conflict/capacity | Runtime catalog/capability lifecycle、generation/permission/schema negotiation、wire 或 runtime dispatch |
 | State | bounded publisher/replica、完整 snapshot、owner/version、duplicate/conflict/stale/wrap、best-effort/convergent、delivery generation 与 ACK/actual 分离 | Session adapter、真实物理 application、remote backend、线程安全或持久化 |
 | Stream | `STRICT_MONOTONIC`、producer/epoch/sequence、bounded queue/history、gap/stale/conflict、drop/reject 与 deadline admission | reorder/reliable Profile、clock estimator、MediaStream external-buffer/codec/recovery 或 remote delivery |
 | Action | bounded caller/executor、ActionId dedup/conflict、delivery ACK/executor acceptance/terminal result 分离、deadline、indeterminate 与 no eviction | 真实 operation、persistent dedup/exactly-once、Session 自动恢复、cancel/progress/DAG |
@@ -40,8 +40,8 @@ portable in-process 实现通过了对应 Host fixture，不表示 remote、targ
 只有在当前 SessionId/READY、已声明 ResourceId 且 kind 匹配后才进入 typed primitive；
 旧 Session copy、未声明 ID 与错误 kind 均被拒绝。
 
-该 fixture 的 Resource envelope 明确是 test-only；当前没有 Registry generation、产品
-Runtime codec、认证、安全 transport 或 K230D Session evidence。因此它只支持
+该 fixture 的 Resource envelope 明确是 test-only；它自身没有 catalog generation 或正式
+Runtime route codec，也没有认证、安全 transport 或 K230D Session evidence。因此它只支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`，不构成 `TRANSPORT_VERIFIED`。
 
 当前 Session source tree 在 AppleClang 17、CMake 4.2、Ninja 1.13 的 clean out-of-tree
@@ -50,6 +50,26 @@ AppleClang 静态分析与 portable-library forbidden-symbol 审计。测试 inv
 source tree 的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
 固化为长期事实。
+
+当前分支另实现 portable `meiso_runtime`；`meiso_runtime` 依赖 `meiso_core`，不把 Runtime
+反向纳入 Core。它永久绑定一个 READY Session，并实现双-bank 原子 catalog、
+`ANNOUNCED / HOST_SUBSCRIPTION` route、Host desired、Edge actual、严格 request id、route
+epoch，以及 Session/catalog/endpoint/resource/kind/schema/request/epoch 的完整数据门。
+Catalog 使用单一 bounded frame；被拒绝的 generation 保留 monotonic high-water；Host 容量
+较小时仍能发送 capacity reject；Core 终止使所有 route 失效。
+
+`meiso_runtime_test` 已验证 arena/limits、accept/reject/update、非对称容量、TX-busy retry、
+desired 与 actual 分离、route failure 和 Core close；`meiso_runtime_session_test` 经真实 Session
+frame 和 test-only Stream payload 验证 Runtime route 后进入 Stream primitive，并拒绝 stale generation 与旧 Session
+message。`meiso_runtime_wire_test` 另以独立 literal golden bytes 冻结六类 frame，并覆盖每个
+截断点、trailing byte、reserved 字段与 big-endian decode。该结果支持
+`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`；不构成 transport、target 或产品
+Profile evidence。准确边界见
+[Runtime negotiation core v0](runtime-core-v0.md)。
+
+这只是正式 Runtime 的 negotiation 子集：没有 endpoint facet/direction/QoS/permission 产品
+schema、真实 config/probe/hotplug adapter、typed dispatcher、Host orchestration/SDK、MediaStream、
+target service 或 K230D Runtime evidence。
 
 当前 POSIX platform layer 另实现 connected-stream adapter：借用 caller-owned、already-
 connected、nonblocking `SOCK_STREAM` fd 和 Session；RX/TX 各由 `max_frame_bytes` 限制，
@@ -79,8 +99,9 @@ temperature 经 vendor conversion 后为 `59.002 °C ±3 °C`。Action 只重置
 window，Blob 是 401-byte 固定脱敏 manifest。camera 与 IMU 没有被注册为可用 endpoint。
 
 本地 Dashboard 只渲染 native Host probe 的固定 NDJSON allowlist，不解析 Meiso wire。该结果
-证明一个有界四语意数据交换切片可以在当前 Wi-Fi 环境运行；它没有测吞吐、延迟分布、长稳、
-重连、认证、加密、产品 Runtime/Registry、SDK/Virtual Edge 或 NuttX bridge。
+证明一个有界四语意数据交换切片可以在当前 Wi-Fi 环境运行；该 fixture 早于且没有使用
+`meiso_runtime`，不能作为正式 catalog/desired/actual evidence。它也没有测吞吐、延迟分布、
+长稳、重连、认证、加密、SDK/Virtual Edge 或 NuttX bridge。
 
 ## 代理平台实验
 
@@ -155,11 +176,11 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 ## 未实现与未知
 
 - 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
-- application-facing Resource Runtime、capability/endpoint registry lifecycle 与 backend
-  orchestration；
-- 产品 direct-IP bootstrap/config ownership、安全 transport、Runtime Registry wire、time
-  estimator 与 reconnect/resume 参数；
-- capability/endpoint discovery 和真实 platform adapter；
+- product Runtime 的 endpoint facet/direction/QoS/permission schema、adapter-driven
+  config/probe/hotplug、Host orchestration 与 typed dispatcher；
+- 产品 direct-IP bootstrap/config ownership、安全 transport、time estimator 与
+  reconnect/resume 参数；
+- capability/endpoint discovery、真实 platform adapter 与 Runtime target evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；
 - 任一完整、声明并验证过的产品 Profile；

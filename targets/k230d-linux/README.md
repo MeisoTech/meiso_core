@@ -3,6 +3,8 @@
 This target builds the bounded native Edge/Host fixture selected by
 [`four-kind-lab-v0`](../../profiles/four-kind-lab-v0/README.md). It is a manual lab executable, not
 a daemon, boot service, board image, product Runtime, discovery mechanism, or security transport.
+It remains evidence for the earlier fixed transcript and is not the K230D implementation entry for
+the formal [Runtime contract](../../docs/runtime.md).
 
 ## Build
 

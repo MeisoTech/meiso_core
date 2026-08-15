@@ -26,14 +26,20 @@ source-level implementation API，不冻结二进制 ABI。
 状态机、wire 与 four-kind integration tests 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。
 
+portable `meiso_runtime` 在 Core `READY` 之上实现 Runtime negotiation core v0：原子
+catalog、`ANNOUNCED / HOST_SUBSCRIPTION` route、Host desired、Edge actual，以及绑定当前
+Session/catalog/endpoint/request/route epoch 的数据门。它不硬编码 sensor；Edge 调用方把
+私有配置与 adapter probe 的结果映射为 catalog。
+
 POSIX build 另含 platform-layer connected-stream adapter。它借用 already-connected、
 nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完整 Session frame；
 真实 macOS `AF_INET` loopback TCP unit test 与 Dev Tool 支持该条件下的
 `TRANSPORT_VERIFIED`。这不证明 remote/direct-IP、Wi-Fi、K230D 或安全 transport。
 
-这套实现仍不是 application-facing Resource Runtime 或完整产品系统；它不包含
-Virtual Edge、Resource Registry/endpoint control、Composition Runtime、MediaStream data path、
-direct-IP bootstrap/connect/listen、认证或产品 platform adapter。
+这套实现仍不是 application-facing 完整产品 Runtime 或产品系统；它不包含 endpoint
+facet/direction/QoS/permission schema、真实 probe/hotplug adapter、typed dispatcher、Virtual
+Edge/SDK、Composition Runtime、MediaStream data path、direct-IP bootstrap/connect/listen、
+认证或产品 platform adapter。
 K230D conformance target 已完成 host-side cross-build、image inspection，并在
 `CanMV-K230D-Zero V1.1` 上得到七套 suite 全部通过的 `BOARD_VERIFIED` evidence。这个状态只
 覆盖 Resource semantic core v0 的单进程 target runner，不构成 remote backend、LinkSession、
@@ -53,8 +59,10 @@ ctest --preset windows-msvc-debug
 - [文档入口与权威关系](docs/index.md)
 - [系统设计](docs/system.md)
 - [Resource 契约](docs/resource.md)
+- [Runtime 契约](docs/runtime.md)
 - [Link 契约](docs/link.md)
 - [Session Core v0 实现契约](docs/session-core-v0.md)
+- [Runtime negotiation core v0 实现契约](docs/runtime-core-v0.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)

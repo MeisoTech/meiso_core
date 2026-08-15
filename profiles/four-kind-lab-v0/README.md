@@ -3,6 +3,10 @@
 > Status: bounded lab Profile and executable codec contract. It is not a product Profile, security
 > transport, application Runtime, SDK API, discovery protocol, or sensor catalog.
 
+This fixture predates the formal [Runtime contract](../../docs/runtime.md). Its fixed Registry and
+one-shot order are retained only as board/data-exchange evidence; product endpoints must use the
+Runtime catalog/desired/actual/route negotiation and must not extend `M4L1` into a parallel Runtime.
+
 ## Question and evidence boundary
 
 This Profile answers one question: after a real Wi-Fi TCP connection and Core Session `READY`, can a

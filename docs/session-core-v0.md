@@ -12,7 +12,7 @@ descriptor/instance、owner/schema/QoS、endpoint 和控制逻辑。Host SDK 拥
 
 `meiso_resource_core` 的四类 primitive 保持 session-agnostic；它们允许本地 truth、capture
 或已发布 Blob 在离线时继续存在。跨 peer 路由由 Runtime 强制：只有 Core
-`READY` 且 Registry route 有效时，remote message 才能进入对应 typed primitive。
+`READY` 且 Runtime route 有效时，remote message 才能进入对应 typed primitive。
 
 ## Identity 与配置
 
@@ -43,7 +43,7 @@ Handshake 协商三个 non-zero `u32` 上限：
 |---|---|
 | `max_frame_bytes` | header 在内的单帧上限 |
 | `max_runtime_payload_bytes` | `RUNTIME` 中除 `SessionId` 外的 payload 上限 |
-| `max_registry_entries` | Core 协商并交给 Runtime 的 Registry admission ceiling；Core 不解析 Registry |
+| `max_registry_entries` | Core 交给 Runtime 的 catalog admission ceiling；当前 Runtime v0 解释为 endpoint + route 总数，Core 不解析 catalog |
 
 双方在 `OPEN/ACCEPT` 中各发 local limits，再按字段取 `min(local, remote)`。
 Local limits 必须满足 `max_frame_bytes >= 104`、`max_runtime_payload_bytes <=
@@ -96,7 +96,7 @@ offset  size  field
 
 读取 payload 前必须检查 magic、version、reserved、完整长度和本地
 `max_frame_bytes`。未知 type、trailing bytes、错误 SessionId 或超限 payload 都是明确
-failure。`RUNTIME` payload 对 Session Core 不透明；Registry 和四类 Resource envelope
+failure。`RUNTIME` payload 对 Session Core 不透明；Runtime catalog/route 和四类 Resource envelope
 由 Runtime codec 处理。
 
 ## Handshake
@@ -130,17 +130,19 @@ nonce 不匹配是 `SESSION_MISMATCH`；READY 或其他非法阶段收到 `REJEC
 ```text
 transport connected
   -> Core OPEN / ACCEPT / CONFIRM / READY
-  -> Runtime RegistrySnapshot / RegistryAccepted
+  -> Runtime CatalogSnapshot / CatalogAccept
   -> per-endpoint READY
   -> Resource delivery
 ```
 
 Core `READY` 只开放 opaque Runtime message gate；每次交付同时返回已经验证的
-`SessionId`。未来 Runtime 契约必须另行冻结 route 与当前 Session、版本化 Registry snapshot、
-ResourceId 和 kind 的绑定；未声明 ID、kind 不匹配或旧 route 不得进入 typed primitive。
-本页不定义 Registry generation 字段或产品 route codec。Core 关闭时
+`SessionId`。[Runtime 契约](runtime.md) 要求 route 绑定当前 Session、catalog generation、
+EndpointId/incarnation、ResourceId、kind/schema，并对 subscription 继续绑定 request id 与
+route epoch；未声明 ID、kind/schema 不匹配或旧 route 不得
+进入 typed primitive。本页仍不定义 catalog 字段或 Runtime route codec。Core 关闭时
 Runtime 显式执行各 Resource lifecycle：State 的有效 truth 在新 Session 重新 offer；Stream
-默认新 epoch；未知副作用的 Action 进入 `indeterminate`；partial Blob transfer 取消，
+仅在 continuity 可证明且 Profile 允许时延续 epoch，否则使用新 epoch；未知副作用的 Action
+进入 `indeterminate`；partial Blob transfer 取消，
 已验证 publish 的 Blob 不删除。
 
 ## 终止与失败
@@ -177,8 +179,8 @@ transport 将 authenticated peer 绑定到 `PeerId`。
 `meiso_session_test` 对七种 frame 提供独立
 golden bytes，并验证状态机、nonce/Session binding、failure、truncation、length 和 limits；
 `meiso_session_four_kind_test` 使用明确的 test-only envelope 验证 READY/SessionId gate、
-undeclared ResourceId、wrong kind、旧 Session copy，以及四类 primitive 集成。它不验证
-Registry generation 或产品 Runtime codec。该结果只支持两个 HOST 标签；POSIX transport
+undeclared ResourceId、wrong kind、旧 Session copy，以及四类 primitive 集成。该 fixture
+不验证正式 Runtime catalog generation 或 route codec。该结果只支持两个 HOST 标签；POSIX transport
 adapter 的条件化证据由 [系统进展](system-report.md) 单独记录，不改变 Session Core 边界。
 
 ## 最小验收
@@ -195,5 +197,6 @@ adapter 的条件化证据由 [系统进展](system-report.md) 单独记录，�
 
 ## 非目标
 
-v0 不定义 discovery、IP 以下网络、socket API、TLS/密码系统、clock estimator、
-Registry/capability schema、endpoint control、Virtual Edge、resume、multipath 或 transport migration。
+Session Core v0 自身不定义 discovery、IP 以下网络、socket API、TLS/密码系统、clock
+estimator、catalog/capability schema、endpoint control、Virtual Edge、resume、multipath 或
+transport migration。

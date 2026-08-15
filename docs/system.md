@@ -1,7 +1,7 @@
 # 系统设计
 
 > 状态：产品设计文档。定义角色、Core/Runtime/SDK/Profile 边界与产品不变量；
-> Resource、Link 和 Composition 的技术语义分别由对应规范定义。
+> Resource、Runtime、Link 和 Composition 的技术语义分别由对应规范定义。
 
 ## 目标
 
@@ -84,10 +84,13 @@ Virtual Edge 不是透明远程内存：
 - 版本化 wire 与 `State / Stream / Action / Blob` 的 transport-independent delivery
   primitive 和语义。
 
-Runtime 拥有 Resource Graph：声明 capability/descriptor、实例化 Resource、绑定 owner/schema/QoS，
-并执行本地 policy、control 和 endpoint adapter。Core 不声明 sensor，不为 camera、IMU、
-microphone、某块开发板或某个 frontend 建立特例。Core `READY` 只允许 Runtime 交换；
-它不表示 Registry 已匹配或任何 endpoint 已 `READY`。
+Runtime 拥有 Resource Graph：Edge 从私有配置、adapter 实测、policy 和 Profile 交集生成
+catalog；Host 接受 catalog 后提交 desired configuration/subscription；Edge 做 admission、
+adapter apply 并发布 actual/effective status。只有当前 Session/catalog/endpoint incarnation 下
+已激活的 route 才能传输 Resource data。Core 不声明 sensor，不为 camera、
+IMU、microphone、某块开发板或某个 frontend 建立特例。Core `READY` 只允许
+Runtime 交换；它不表示 catalog 已接受或任何 endpoint 已 `READY`。完整契约见
+[Runtime 契约](runtime.md)。
 
 Host SDK 拥有 Virtual Edge、typed async API 与 application view；它不拥有 socket、
 handshake 或物理设备控制。Composition 是 SDK/Runtime 消费的产品契约，不是 Session
@@ -118,7 +121,7 @@ delivery/failure；Resource 可见性和 endpoint lifecycle 属于 Runtime。
 
 transport 的类型、拓扑、数量和切换能力由 Profile/实现决定。本版 Core 不承诺 binding
 cardinality、运行中 transport migration 或通用 transport-topology scheduler。完整契约见
-[Resource 契约](resource.md)和[Link 契约](link.md)。
+[Resource 契约](resource.md)、[Runtime 契约](runtime.md)和[Link 契约](link.md)。
 
 ## 非目标
 
@@ -135,13 +138,17 @@ Core 当前不定义：
 当前公开 C11 实现已经包含 `meiso_resource_core`：共同值类型与 descriptor validation、
 固定 immutable descriptor snapshot，以及四种 bounded in-process Resource primitive。
 
-这是 Resource semantic core，不是 application-facing Resource Runtime，也不是本页所定义的
-完整产品系统。当前 `meiso_session_core` 已实现 exact protocol/Profile、四步 handshake、
+这是 Resource semantic core，不是本页所定义的完整产品系统。当前 `meiso_session_core`
+已实现 exact protocol/Profile、四步 handshake、
 bounded wire 和 Runtime-message gate；命名的状态机/wire/integration tests 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。POSIX platform layer 另有 caller-owned
 connected-stream adapter，并在 macOS `AF_INET` loopback TCP 上通过 bounded partial-I/O、
-failure 与双向 payload 测试。Virtual Edge、Resource Registry/endpoint control、Composition
-Runtime、MediaStream、direct-IP bootstrap、security adapter 与产品级 target runtime 尚未实现。
+failure 与双向 payload 测试。portable `meiso_runtime` 已实现 READY Session 绑定、原子
+catalog、`ANNOUNCED / HOST_SUBSCRIPTION`、desired/actual 与完整 route gate 的协商子集。
+它仍不包含产品 facet/direction/QoS/permission schema、真实 probe/adapter/hotplug、typed
+dispatcher、SDK/Virtual Edge、MediaStream、direct-IP bootstrap、security adapter 或 target
+deployment。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
-[系统进展](system-report.md)；Session 边界见 [Session Core v0](session-core-v0.md)。
+[系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与
+[Runtime negotiation core v0](runtime-core-v0.md)。

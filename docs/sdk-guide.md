@@ -1,7 +1,7 @@
 # SDK 设计与开发指南
 
 > 状态：实现与验证指南。稳定语义以[系统设计](system.md)、[Resource 契约](resource.md)、
-> [Link 契约](link.md)和[Composition 契约](composition.md)为准。
+> [Runtime 契约](runtime.md)、[Link 契约](link.md)和[Composition 契约](composition.md)为准。
 
 ## SDK 边界
 
@@ -32,11 +32,15 @@ SDK 不把 socket、packet、driver handle 或 platform buffer 暴露为 Host ap
 | 层 | 拥有 | 不拥有 |
 |---|---|---|
 | Core | identity、handshake、Session、bounded wire、Resource delivery primitive | Resource 声明、sensor/control、Virtual Edge |
-| Runtime | Resource Registry/instance、capability、owner/schema/QoS、policy/control/adapter | peer handshake、application facade |
+| Runtime | catalog/endpoint instance、desired/actual、subscription/route、policy/control/adapter | peer handshake、application facade |
 | Host SDK | Virtual Edge、typed async API、application view | socket/IP、platform adapter、physical truth |
 
 Bootstrap 可以解析本地 direct-IP/TCP 配置并向 Core transport adapter 注入 typed
 options；该配置不是 SDK 业务 API 或 Core 协议，IP 也不是 peer identity。
+
+Host SDK 不从板卡型号推断 sensor 清单。Host Runtime 只把当前 Session 已接受的
+catalog、Edge actual 与有效 route 投影给 Virtual Edge；App 的 enable/configure/subscribe 需求
+由 Host Runtime 汇总，再依 [Runtime 契约](runtime.md) 与 Edge 协商。
 
 ## 数据如何选择
 
@@ -74,7 +78,7 @@ authority handoff 或 topology migration，也不对这些能力作支持或兼�
 ## 一个 Edge、多个本地 runtime
 
 一个 Edge implementation 可以横跨多个 core、OS 或进程。对外 Core 管理公开
-peer/boot/Session identity；Edge Runtime 管理 capability/Resource Registry 与 endpoint
+peer/boot/Session identity；Edge Runtime 管理 capability/Runtime catalog 与 endpoint
 lifecycle。内部 runtime 通过 platform-private 的有界 bridge 交付 sample、status 或本地 operation。
 
 内部 bridge 至少明确 schema/version、producer incarnation、clock/stream epoch、capacity、

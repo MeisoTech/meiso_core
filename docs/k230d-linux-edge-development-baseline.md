@@ -57,6 +57,12 @@ Session lifecycle，当前没有需求支持这个成本。
   status；只有 source clock continuity 无法证明时才更新 source clock epoch。如果 Linux
   Edge identity 与公开 Session 连续性仍可证明，不必因内部重启自动新建 LinkSession。
 
+K230D 的 endpoint 清单不写进 Core 或 Host。Linux Edge 的私有配置声明允许的逻辑
+endpoint/mode/driver owner，adapter 动态探测当前 availability；Edge Runtime 把两者交集
+发布为 catalog。Host 只依 [Runtime 契约](runtime.md) 接受 catalog、提交 desired/subscription、
+观察 Edge actual，只有 `ACTIVE` route 接收数据。NuttX bridge 与 Linux driver 都是该流程的
+adapter，不能绕过 Runtime 直接向 Host 发 sample。
+
 ## 内部桥的最小要求
 
 核间 IPC/shared memory/RPMsg 是 platform-private bridge，不是公开 Link wire。首版只需：

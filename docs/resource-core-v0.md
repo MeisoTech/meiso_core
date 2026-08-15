@@ -8,13 +8,13 @@
 > 兼容性：本工作分支上的 C11 source API；不冻结二进制 ABI，也不兼容旧实验 API。
 
 本文把[Resource 契约](resource.md)映射为第一份可执行的 portable primitive 与 conformance
-package。产品语义仍由 `system.md / resource.md / link.md / composition.md` 定义；本文拥有
+package。产品语义仍由 `system.md / resource.md / runtime.md / link.md / composition.md` 定义；本文拥有
 模块边界、内存模型、v0 API 选择和测试映射，不能反向修改产品含义。
 
 ## 完成定义与非目标
 
 本工作单元的完成边界是 **Resource semantic core**，包括四个相互独立的
-`State / Stream / Action / Blob` 状态机、共同值类型、descriptor 校验、固定容量 catalog
+`State / Stream / Action / Blob` 状态机、共同值类型、descriptor 校验、固定容量 descriptor set
 和纯进程内 conformance fixture。
 
 它不是完整的 Meiso Core。以下内容明确留在后续工作单元：
@@ -40,7 +40,7 @@ meiso_resource.h + meiso_resource.c
         └── meiso_blob.h + meiso_blob.c
 
 meiso_descriptor_set.h + meiso_descriptor_set.c
-    fixed immutable registry snapshot; no generic state-machine dispatcher
+    fixed immutable descriptor snapshot; no generic state-machine dispatcher
 
 tests/
     per-kind conformance + cross-kind in-process fixture
@@ -239,11 +239,11 @@ staging buffer，不把 transport chunk protocol 放进 Core。
 ## 固定 descriptor set snapshot
 
 descriptor set builder 接受调用者提供的 descriptor slot 数，允许在 seal 前注册，seal 后作为
-一个 immutable registry snapshot。以下情况
+一个 immutable descriptor snapshot。以下情况
 显式失败：invalid descriptor、重复 identity 的相同 descriptor、重复 identity 的不同 kind/
 schema/owner、capacity exhausted 和 seal 后 mutation。snapshot 不拥有四种 runtime handle，
-不表达 endpoint 当前 availability，也不阻止 runtime 在下一 capability generation 发布新的
-snapshot。
+不表达 endpoint 当前 availability，也不阻止上层 Runtime 在下一 catalog generation 发布新的
+descriptor snapshot。
 
 v0 允许 capacity 为零，以表达可 seal、可查询但永远为空的 snapshot；builder 阶段 lookup
 显式返回 not-sealed，避免消费者观察半构造集合。seal 是幂等边界，重复 seal 返回
@@ -301,7 +301,7 @@ forbidden-symbol 审计。测试 inventory 以该提交的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准，不在文档中固化测试
 总数。
 
-four-kind fixture 使用真实 public contracts 证明 catalog identity、State delivery/actual、
+four-kind fixture 使用真实 public contracts 证明 descriptor identity、State delivery/actual、
 Stream receive/consume、Action delivery/accepted/result 与 Blob staging/publish 彼此独立，并
 逐类验证容量失败不污染其他 kind。它不包含 serialization、socket、LinkSession、remote
 backend、MediaStream external-buffer path 或板级 adapter，因此 `HOST_VERIFIED` 不能解释为
@@ -310,14 +310,19 @@ backend、MediaStream external-buffer path 或板级 adapter，因此 `HOST_VERI
 后续 [Session Core v0](session-core-v0.md) 保持这些 primitive API 不变，并以独立
 `session_four_kind` fixture 证明同一 codec 的当前 SessionId/READY gate 后才能执行
 test-only remote dispatch；未声明 ResourceId、wrong kind 与旧 Session copy 均被拒绝。
-该新增证据不包含 Registry generation，也不把测试 envelope 晋升为产品 Runtime wire；
+该新增证据不包含 Runtime catalog generation，也不把测试 envelope 晋升为产品 Runtime wire；
 它不改变本页 primitive 可离线运行的契约。
+
+后续 [Runtime negotiation core v0](runtime-core-v0.md) 已用正式 catalog/desired/actual/route
+gate 把 opaque Profile payload 绑定到当前 Session；它依赖本页 primitive，但不把 endpoint
+lifecycle 或远端 route 反向塞入 primitive handle。
 
 | 层级 | 状态 | 边界 |
 |---|---|---|
 | common、四类 primitive、descriptor snapshot | `IMPLEMENTED / HOST_VERIFIED` | portable、in-process、caller-owned arena |
 | four-kind fixture | `HOST_VERIFIED` | test-only orthogonality，不是 runtime dispatcher |
 | Session-gated four-kind fixture | `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED` | test-only route envelope；不是 TCP 或产品 Runtime |
+| Runtime negotiation core v0 | `IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED` | catalog/desired/actual/route 子集；不是 SDK、adapter 或完整产品 Runtime |
 | target build | `HOST_VERIFIED` | exact CanMV v1.8 graph 的 RISC-V ELF 与 fresh full image 已完成 host inspection |
 | K230D execution | `BOARD_VERIFIED` | 锁定 candidate 的 boot-critical prefix/payload identity 在 `CanMV-K230D-Zero V1.1` 上人工执行；七套 aggregate suite 全部 `rc=0`，仅覆盖本页 semantic core |
 

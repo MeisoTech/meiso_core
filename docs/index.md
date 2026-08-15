@@ -2,13 +2,14 @@
 
 ## 产品规范
 
-以下四份文档共同拥有通用产品语义；各自只拥有一个问题域：
+以下五份文档共同拥有通用产品语义；各自只拥有一个问题域：
 
 1. [系统设计](system.md)：角色、Virtual Edge、Core/Runtime/SDK/Profile 与产品不变量；
 2. [Resource 契约](resource.md)：State、Stream、Action、Blob、ownership、lifecycle 与 QoS；
-3. [Link 契约](link.md)：identity、Session、time、delivery、failure 与 transport-independent
+3. [Runtime 契约](runtime.md)：catalog、endpoint、desired/actual、subscription、插拔与 data route；
+4. [Link 契约](link.md)：identity、Session、time、delivery、failure 与 transport-independent
    boundary；
-4. [Composition 契约](composition.md)：layer、generation、激活和 Edge final authority。
+5. [Composition 契约](composition.md)：layer、generation、激活和 Edge final authority。
 
 被接受且版本化的 Profile/wire 契约可以填充上述规范明确委托的开放参数，但不能覆盖
 通用语义。除此之外不存在第二份“总体唯一规范”；overview、实现指南、报告、源码注释或
@@ -18,9 +19,11 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 
 - [SDK 设计与开发指南](sdk-guide.md)：实现边界、adapter pattern、conformance 与工作单元；
 - [Resource semantic core v0](resource-core-v0.md)：当前 portable primitives、内存模型与
-  conformance 矩阵；这是实现基线，不是第五份产品规范；
+  conformance 矩阵；这是实现基线，不是产品规范；
 - [Session Core v0](session-core-v0.md)：当前 portable handshake、wire、limits、lifecycle
-  与 Runtime-message gate；不包含 TCP、安全 transport 或 Resource Registry；
+  与 Runtime-message gate；Runtime catalog/route codec 不属于 Session Core；
+- [Runtime negotiation core v0](runtime-core-v0.md)：当前 portable catalog、desired/actual、
+  subscription 与 route gate 子集；不是 SDK 或完整产品 Runtime；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator

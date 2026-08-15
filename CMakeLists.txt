@@ -49,7 +49,15 @@ target_link_libraries(meiso_session_core PUBLIC meiso_resource_core)
 meiso_enable_warnings(meiso_session_core)
 
 add_library(meiso_core INTERFACE)
-target_link_libraries(meiso_core INTERFACE meiso_resource_core meiso_session_core)
+target_link_libraries(
+    meiso_core
+    INTERFACE meiso_resource_core meiso_session_core
+)
+
+add_library(meiso_runtime src/meiso_runtime.c)
+target_include_directories(meiso_runtime PUBLIC include)
+target_link_libraries(meiso_runtime PUBLIC meiso_core)
+meiso_enable_warnings(meiso_runtime)
 
 add_library(
     meiso_four_kind_lab_protocol
@@ -132,6 +140,20 @@ meiso_enable_warnings(meiso_session_test)
 add_executable(meiso_session_four_kind_test tests/test_session_four_kind.c)
 target_link_libraries(meiso_session_four_kind_test PRIVATE meiso_core)
 meiso_enable_warnings(meiso_session_four_kind_test)
+
+add_executable(meiso_runtime_test tests/test_runtime.c)
+target_link_libraries(meiso_runtime_test PRIVATE meiso_runtime)
+target_include_directories(meiso_runtime_test PRIVATE tests)
+meiso_enable_warnings(meiso_runtime_test)
+
+add_executable(meiso_runtime_session_test tests/test_runtime_session.c)
+target_link_libraries(meiso_runtime_session_test PRIVATE meiso_runtime)
+target_include_directories(meiso_runtime_session_test PRIVATE tests)
+meiso_enable_warnings(meiso_runtime_session_test)
+
+add_executable(meiso_runtime_wire_test tests/test_runtime_wire.c)
+target_link_libraries(meiso_runtime_wire_test PRIVATE meiso_runtime)
+meiso_enable_warnings(meiso_runtime_wire_test)
 
 add_executable(
     meiso_four_kind_lab_protocol_test
@@ -216,6 +238,9 @@ add_test(NAME meiso_action_test COMMAND meiso_action_test)
 add_test(NAME meiso_four_kind_test COMMAND meiso_four_kind_test)
 add_test(NAME meiso_session_test COMMAND meiso_session_test)
 add_test(NAME meiso_session_four_kind_test COMMAND meiso_session_four_kind_test)
+add_test(NAME meiso_runtime_test COMMAND meiso_runtime_test)
+add_test(NAME meiso_runtime_session_test COMMAND meiso_runtime_session_test)
+add_test(NAME meiso_runtime_wire_test COMMAND meiso_runtime_wire_test)
 add_test(
     NAME meiso_four_kind_lab_protocol_test
     COMMAND meiso_four_kind_lab_protocol_test

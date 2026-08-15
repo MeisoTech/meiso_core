@@ -27,9 +27,10 @@ LinkSession 的公共责任是：
 - clock offset、drift/uncertainty 的持续估计；
 - 所有 queue、retry、reassembly 和恢复状态的边界与 telemetry。
 
-Capability、Resource Registry snapshot、owner 协调、endpoint 启动和控制逻辑属于
+Capability、Runtime catalog snapshot、owner 协调、endpoint 启动和控制逻辑属于
 Runtime。Core `READY` 只表示 Runtime message 可以交换；Runtime endpoint `READY`
-必须由 Registry 和该 endpoint 的自身 lifecycle 独立证明。
+必须由 catalog 接受、Host desired/subscription、Edge actual 和该 endpoint lifecycle 独立
+证明。完整协商与 route 规则见 [Runtime 契约](runtime.md)。
 
 ## Transport 边界
 
@@ -80,7 +81,7 @@ incarnation 必须更新，受影响的 Stream 使用新 stream epoch；只有 s
 
 v0 不支持 resume；每次 transport 重连都使用新 nonce、新 SessionId 和新 Session
 handle。Core `READY` 前 Runtime message 不得发出或交付。Core `READY` 后 Runtime
-交换 Registry/capability，各 endpoint 再独立进入自己的 `READY`。
+交换 catalog/capability，各 endpoint 再独立发布 actual，route 再进入 `ACTIVE`。
 
 当一个 Edge 的不同 network interface 提供同一公开 peer 时，它们是 transport 选择，
 不是不同 Edge。切换 interface 时 v0 建立新 Session，不得用相同 device identity

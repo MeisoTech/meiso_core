@@ -2,7 +2,7 @@
 
 ## Authority
 
-- Start with [`docs/index.md`](docs/index.md). Generic product semantics are owned by the four
+- Start with [`docs/index.md`](docs/index.md). Generic product semantics are owned by the five
   normative documents it lists.
 - An accepted, versioned Profile or wire contract may select the open parameters those documents
   delegate to it, but it must not override them. Reports, implementation guides, tests and source
