@@ -1,6 +1,7 @@
 # K230D Linux Edge 开发基线
 
-> 状态：`SELECTED_IMPLEMENTATION_BASELINE / PROFILE_NOT_DEFINED / BOARD_BOOT_PENDING`。
+> 状态：`SELECTED_IMPLEMENTATION_BASELINE / PROFILE_NOT_DEFINED /
+> BOARD_DUAL_OS_BOOT_OBSERVED / NETWORK_ACCESS_PENDING`。
 > 本页定义当前 K230D 候选实现的责任分工与验收边界，不改变 Host/Edge、Resource、Link
 > 或 Composition 语义，也不是 Host 可直接编码的互操作 Profile。
 
@@ -108,9 +109,14 @@ renderer 或第二套 Composition。
 ## 当前证据边界
 
 当前已选择一份包含 Linux/NuttX、A/B rootfs、串口恢复、Wi-Fi 配置和公钥 SSH 的
-K230D 私人开发镜像。它已完成介质写入与精确 source-span 读回，但尚未在当前
-板上完成首次 Linux boot，也没有证明 sensor bridge、Wi-Fi association、SSH、USB network、
-Rendering Runtime 或任何产品 Link。
+K230D 私人开发镜像。它已完成介质写入与精确 source-span 读回；本次上电后的同时、有限
+RX-only 串口捕获分别取得已缓冲的 Linux `Welcome to Buildroot`，以及 NuttX 12.4.0
+NuttShell prompt。这些 marker 支持两个执行域曾启动至各自 userland/shell，但没有捕获完整
+boot transition 或证明持续 liveness。
+
+这次观察没有固定完整 Linux build identity，也没有证明 Linux login、Wi-Fi association、SSH、
+USB network、sensor bridge、Rendering Runtime 或任何产品 Link。当前 USB 证据仍只是双串口，
+不能解释为 USB network。
 
 该镜像中的 NuttX 仍是预编译启动 payload；当前项目没有冻结的 NuttX sensor
 source/config、可用的 Linux↔NuttX bridge 或 lifecycle supervisor。内核出现 generic IPC
