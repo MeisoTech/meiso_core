@@ -59,3 +59,14 @@ values and digests.
   driver, route, thermal hardware, Session, kernel counters, or persistent state.
 - Plain TCP and fixed public lab PeerIds provide exact Profile/role matching, not authentication,
   confidentiality or integrity. Use only on a controlled lab network.
+
+## 2026-08-16 validation
+
+The 96104-byte RISC-V Linux ELF
+(`sha256:41a7a7b3930d2b738c42fb127d2628b7b3b623a74952ca061b41703f247f738b`)
+was deployed temporarily to `/tmp` on K230D. One macOS-to-Edge Wi-Fi run completed the Session and
+reported State `3/3`, Stream `3/3`, Action `4/4` and Blob `3/3` PASS. The sanitized sample included
+Wi-Fi carrier/counters/signal and corrected on-die junction temperature (`59.002 °C ±3 °C`).
+
+This is a semantics/data-exchange result, not a throughput, latency, soak, reconnect, security,
+product Runtime, camera, IMU or NuttX-bridge result.

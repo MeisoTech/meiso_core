@@ -24,6 +24,7 @@ or `all`. If the placeholder is absent, the server appends `--test <kind>`.
 ```sh
 python3 devtools/web/four_kind_dashboard/server.py \
   --probe-command /path/to/meiso_four_kind_lab \
+  --host \
   --config /path/to/gitignored-lab-config \
   --test '{test}'
 ```

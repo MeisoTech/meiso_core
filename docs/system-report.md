@@ -64,6 +64,24 @@ opaque Runtime payload 与正常 close。因此证据为
 `TRANSPORT_VERIFIED(macOS 15.5 arm64, AF_INET loopback TCP, max_frame=256)`；它不证明
 remote/direct-IP、Wi-Fi、K230D、bootstrap policy、TLS/auth、Runtime dispatch 或产品 Profile。
 
+## K230D Linux four-kind lab
+
+2026-08-16 的一次受控实验把同一 Session Core、POSIX connected-stream adapter 和固定
+[`four-kind-lab-v0`](../profiles/four-kind-lab-v0/README.md) fixture 运行在 macOS Host 与
+K230D 大核 Linux Edge 之间。Edge ELF 为 96104 bytes，SHA-256
+`41a7a7b3930d2b738c42fb127d2628b7b3b623a74952ca061b41703f247f738b`；它从维护通道临时部署到
+`/tmp`，没有刷机、安装服务或 autostart。
+
+一次 Wi-Fi plain-TCP Session 中，Host 与 Edge 均返回成功；State、Stream、Action、Blob
+分别通过 `3/3`、`3/3`、`4/4`、`3/3` 检查。Host 正常本地关闭，Edge 观察到 peer close。
+State/Stream 展示了真实 Wi-Fi interface/carrier、脱敏计数与 signal bucket；K230 片上 junction
+temperature 经 vendor conversion 后为 `59.002 °C ±3 °C`。Action 只重置进程内 telemetry
+window，Blob 是 401-byte 固定脱敏 manifest。camera 与 IMU 没有被注册为可用 endpoint。
+
+本地 Dashboard 只渲染 native Host probe 的固定 NDJSON allowlist，不解析 Meiso wire。该结果
+证明一个有界四语意数据交换切片可以在当前 Wi-Fi 环境运行；它没有测吞吐、延迟分布、长稳、
+重连、认证、加密、产品 Runtime/Registry、SDK/Virtual Edge 或 NuttX bridge。
+
 ## 代理平台实验
 
 一个 640×480 lab workload 曾在 i.MX8MM Edge proxy 与 Orin Host 间得到：
@@ -114,8 +132,9 @@ reset；静态 image inspection 只证明 Meiso target 没有新增 startup hook
 升温且可接受，但没有校准数值、环境条件、功耗或 soak，所以这不是 thermal validation。
 
 当前公开 evidence 尚未证明该板实例的 camera module、display panel、touch、microphone、
-IMU、codec/KPU workload、network data path、clock quality、usable memory budget、持续温度、
-功耗或任何产品 Profile。firmware 中包含 driver/API 也不等于物理 endpoint 存在。
+IMU、codec/KPU workload、clock quality、usable memory budget、持续温度、功耗或任何产品
+Profile。上面的 Wi-Fi lab 只证明一个固定 plain-TCP 数据路径，不证明产品 network stack；
+firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 
 系统通过通用 capability/endpoint discovery 表达这些组件，不为 K230D Zero 或某种 sensor
 建立 Core 特例。CanMV、native runtime、SDK sample 或其他镜像都可以用于后续实验；结果
@@ -138,8 +157,8 @@ IMU、codec/KPU workload、network data path、clock quality、usable memory bud
 - 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
 - application-facing Resource Runtime、capability/endpoint registry lifecycle 与 backend
   orchestration；
-- direct-IP bootstrap/connect/listen、安全 transport、Runtime Registry wire、time estimator
-  与 reconnect/resume 参数；
+- 产品 direct-IP bootstrap/config ownership、安全 transport、Runtime Registry wire、time
+  estimator 与 reconnect/resume 参数；
 - capability/endpoint discovery 和真实 platform adapter；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；

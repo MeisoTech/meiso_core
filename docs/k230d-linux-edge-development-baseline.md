@@ -1,8 +1,7 @@
 # K230D Linux Edge 开发基线
 
-> 状态：`SELECTED_IMPLEMENTATION_BASELINE / PROFILE_NOT_DEFINED /
-> BOARD_DUAL_OS_BOOT_OBSERVED / MAINTENANCE_WIFI_SSH_OBSERVED /
-> MEISO_TRANSPORT_NOT_RUN`。
+> 状态：`SELECTED_IMPLEMENTATION_BASELINE / PRODUCT_PROFILE_NOT_DEFINED /
+> FOUR_KIND_LAB_BOARD_VERIFIED / MAINTENANCE_WIFI_SSH_OBSERVED`。
 > 本页定义当前 K230D 候选实现的责任分工与验收边界，不改变 Host/Edge、Resource、Link
 > 或 Composition 语义，也不是 Host 可直接编码的互操作 Profile。
 
@@ -117,17 +116,21 @@ NuttShell prompt。这些 marker 支持两个执行域曾启动至各自 userlan
 boot transition 或证明持续 liveness。
 
 后续受控 bring-up 已验证 Linux 串口登录、Wi-Fi association/DHCP/default route、sshd 与
-public-key-only SSH；首次 host key 经串口交叉核对。该结果只证明维护部署路径，不证明
-Meiso transport、Session 或 Runtime。当前仍未固定完整 Linux build identity，也未证明
-USB network、sensor bridge 或 Rendering Runtime；USB 证据仍只是双串口，不能解释为
-USB network。
+public-key-only SSH；首次 host key 经串口交叉核对。另一个固定、非产品的
+[`four-kind-lab-v0`](../profiles/four-kind-lab-v0/README.md) 已在 macOS Host 与大核 Linux
+Edge 间经 Wi-Fi plain TCP 完成 Session，以及 State / Stream / Action / Blob 四项语意交换。
+它展示真实 Wi-Fi telemetry 与片上 junction temperature，并全部返回 PASS。
+
+这仍不是产品 Runtime/Profile，也没有测性能、长稳、重连或安全 transport。当前仍未固定
+完整 Linux build identity，也未证明 USB network、NuttX sensor bridge 或 Rendering Runtime；
+USB 证据仍只是双串口，不能解释为 USB network。
 
 该镜像中的 NuttX 仍是预编译启动 payload；当前项目没有冻结的 NuttX sensor
 source/config、可用的 Linux↔NuttX bridge 或 lifecycle supervisor。内核出现 generic IPC
 configuration 不等于板上 IPC 已可用。第一个 bridge 工作单先用 synthetic counter 证明
 容量、时间、重启和丢失，再选一个真实低带宽 sensor。
 
-因此本页只冻结开发分工。它必须在获得稳定 Profile ID/version、Resource/capability catalog、
+因此本页冻结开发分工和一个窄 lab 切片。产品实现仍必须在获得稳定 Profile ID/version、Resource/capability catalog、
 QoS/limits、handshake/wire、authentication/security、failure codes、golden vectors、完整 trace、
 simulator artifact 和相应板端 evidence 后，才能晋升为互操作 Profile。每个能力仍按实际
 capability 和对应 physical/integration evidence 逐项晋升。

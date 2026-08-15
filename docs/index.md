@@ -28,6 +28,14 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [K230D Linux Edge 开发基线](k230d-linux-edge-development-baseline.md)：当前候选实现中
   大小核、Linux、NuttX、sensor、network 与 rendering 的责任分工；它不是互操作 Profile。
 
+## 当前实验入口
+
+- [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
+  Blob 实验契约；不是产品 Profile；
+- [K230D Linux lab endpoint](../targets/k230d-linux/README.md)：板端/Host 同源手动 fixture；
+- [本地实验面板](../devtools/web/four_kind_dashboard/README.md)：macOS 上的脱敏可视化 Dev Tool，
+  不实现 wire，也不属于 SDK。
+
 规范说明必须成立的行为；指南说明如何实现和验证；报告只陈述特定版本、平台、条件和
 时间窗口下的 evidence。组件、frontend、runtime、system image 和开发顺序由 capability、
 Profile 与当前工作问题决定，不进入 Core。
