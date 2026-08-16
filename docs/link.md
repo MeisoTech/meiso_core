@@ -29,8 +29,9 @@ LinkSession 的公共责任是：
 
 Capability、Runtime catalog snapshot、owner 协调、endpoint 启动和控制逻辑属于
 Runtime。Core `READY` 只表示 Runtime message 可以交换；Runtime endpoint `READY`
-必须由 catalog 接受、Host desired/subscription、Edge actual 和该 endpoint lifecycle 独立
-证明。完整协商与 route 规则见 [Runtime 契约](runtime.md)。
+必须由 catalog 接受、Host desired State、Edge actual State 和该 endpoint lifecycle 独立
+证明。desired/actual/data 分别使用 Core State/State/Stream，不存在 Link subscription
+control plane。完整协商与 route 规则见 [Runtime 契约](runtime.md)。
 
 ## Transport 边界
 
@@ -81,7 +82,8 @@ incarnation 必须更新，受影响的 Stream 使用新 stream epoch；只有 s
 
 v0 不支持 resume；每次 transport 重连都使用新 nonce、新 SessionId 和新 Session
 handle。Core `READY` 前 Runtime message 不得发出或交付。Core `READY` 后 Runtime
-交换 catalog/capability，各 endpoint 再独立发布 actual，route 再进入 `ACTIVE`。
+交换 catalog/capability；catalog 只激活 route identity，Host desired State 与 Edge actual State
+再决定 production。只有 actual 的 effective state 允许时才生产 Core Stream。
 
 当一个 Edge 的不同 network interface 提供同一公开 peer 时，它们是 transport 选择，
 不是不同 Edge。切换 interface 时 v0 建立新 Session，不得用相同 device identity

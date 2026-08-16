@@ -51,10 +51,9 @@ source tree 的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
 固化为长期事实。
 
-当前分支另实现 portable `meiso_runtime`；`meiso_runtime` 依赖 `meiso_core`，不把 Runtime
-反向纳入 Core。它永久绑定一个 READY Session，并实现双-bank 原子 catalog、
-`ANNOUNCED / HOST_SUBSCRIPTION` route、Host desired、Edge actual、严格 request id、route
-epoch，以及 Session/catalog/endpoint/resource/kind/schema/request/epoch 的完整数据门。
+上一版 portable `meiso_runtime` 依赖 `meiso_core`，不把 Runtime 反向纳入 Core。它曾实现
+READY Session 绑定、双-bank 原子 catalog、`ANNOUNCED / HOST_SUBSCRIPTION`、独立 desired/
+actual 与 request/route epoch 数据门。
 Catalog 使用单一 bounded frame；被拒绝的 generation 保留 monotonic high-water；Host 容量
 较小时仍能发送 capacity reject；Core 终止使所有 route 失效。
 
@@ -63,8 +62,10 @@ desired 与 actual 分离、route failure 和 Core close；`meiso_runtime_sessio
 frame 和 test-only Stream payload 验证 Runtime route 后进入 Stream primitive，并拒绝 stale generation 与旧 Session
 message。`meiso_runtime_wire_test` 另以独立 literal golden bytes 冻结六类 frame，并覆盖每个
 截断点、trailing byte、reserved 字段与 big-endian decode。该结果支持
-`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`；不构成 transport、target 或产品
-Profile evidence。准确边界见
+该代码和 wire 的测试事实仍可复现，但 subscription/actual 平行控制路径已经被产品
+[Runtime 契约](runtime.md)废止，故不再支持当前 Runtime 的 `IMPLEMENTED` 或
+`HOST_*_VERIFIED` 标签。替代实现必须让 desired/actual 通过 Core State、data 通过 Core
+Stream，并重新建立自己的语义与 wire evidence。历史边界见
 [Runtime negotiation core v0](runtime-core-v0.md)。
 
 这只是正式 Runtime 的 negotiation 子集：没有 endpoint facet/direction/QoS/permission 产品

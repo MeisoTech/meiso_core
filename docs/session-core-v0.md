@@ -137,8 +137,8 @@ transport connected
 
 Core `READY` 只开放 opaque Runtime message gate；每次交付同时返回已经验证的
 `SessionId`。[Runtime 契约](runtime.md) 要求 route 绑定当前 Session、catalog generation、
-EndpointId/incarnation、ResourceId、kind/schema，并对 subscription 继续绑定 request id 与
-route epoch；未声明 ID、kind/schema 不匹配或旧 route 不得
+EndpointId/incarnation、ResourceId、kind/schema；production-gated data 继续绑定 actual
+State 所声明的 production epoch。未声明 ID、kind/schema 不匹配或旧 route 不得
 进入 typed primitive。本页仍不定义 catalog 字段或 Runtime route codec。Core 关闭时
 Runtime 显式执行各 Resource lifecycle：State 的有效 truth 在新 Session 重新 offer；Stream
 仅在 continuity 可证明且 Profile 允许时延续 epoch，否则使用新 epoch；未知副作用的 Action

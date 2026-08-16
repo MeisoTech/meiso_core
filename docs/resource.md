@@ -116,10 +116,11 @@ camera、IMU、microphone 只是 endpoint 例子。型号、format、sample rate
 clock relationship 和 platform handle 属于 descriptor、adapter 或 Profile，不进入 Core，
 也不产生固定的实现顺序。
 
-Endpoint 的存在、capability、desired/actual 配置、subscription、动态插拔和 data route
-由 [Runtime 契约](runtime.md)定义。Runtime 必须先在当前 Core Session 中协商 endpoint bundle，
-再把其 Resource data 交给本页定义的 typed primitive；未激活的 route 不得因为本地
-driver 或 Resource handle 存在就向 Host 送数据。
+Endpoint 的存在、capability、desired/actual 关联、production lifecycle、动态插拔和 data
+route 由 [Runtime 契约](runtime.md)定义。desired/actual 仍由本页 State 语义传递，sensor data
+仍由本页 Stream 语义传递；Runtime 不定义平行 primitive。Runtime 必须先在当前 Core Session
+中协商 endpoint bundle，再把 Resource 交给对应 typed primitive；未激活的 route 不得因为
+本地 driver 或 Resource handle 存在就向 Host 送数据。
 
 ## 验收条件
 

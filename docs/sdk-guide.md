@@ -32,15 +32,16 @@ SDK 不把 socket、packet、driver handle 或 platform buffer 暴露为 Host ap
 | 层 | 拥有 | 不拥有 |
 |---|---|---|
 | Core | identity、handshake、Session、bounded wire、Resource delivery primitive | Resource 声明、sensor/control、Virtual Edge |
-| Runtime | catalog/endpoint instance、desired/actual、subscription/route、policy/control/adapter | peer handshake、application facade |
+| Runtime | catalog/endpoint instance、desired/actual 关联、production route、policy/control/adapter | peer handshake、application facade |
 | Host SDK | Virtual Edge、typed async API、application view | socket/IP、platform adapter、physical truth |
 
 Bootstrap 可以解析本地 direct-IP/TCP 配置并向 Core transport adapter 注入 typed
 options；该配置不是 SDK 业务 API 或 Core 协议，IP 也不是 peer identity。
 
 Host SDK 不从板卡型号推断 sensor 清单。Host Runtime 只把当前 Session 已接受的
-catalog、Edge actual 与有效 route 投影给 Virtual Edge；App 的 enable/configure/subscribe 需求
-由 Host Runtime 汇总，再依 [Runtime 契约](runtime.md) 与 Edge 协商。
+catalog、Edge actual 与有效 route 投影给 Virtual Edge。App 显式提交 Host desired State；SDK
+的本地 observe/subscribe 只控制 Host 内 callback、retention 与 view，不产生跨端 request，也不
+自动修改 desired。它不能让 Edge 产生数据后选择不发送。
 
 ## 数据如何选择
 

@@ -85,9 +85,10 @@ Virtual Edge 不是透明远程内存：
   primitive 和语义。
 
 Runtime 拥有 Resource Graph：Edge 从私有配置、adapter 实测、policy 和 Profile 交集生成
-catalog；Host 接受 catalog 后提交 desired configuration/subscription；Edge 做 admission、
-adapter apply 并发布 actual/effective status。只有当前 Session/catalog/endpoint incarnation 下
-已激活的 route 才能传输 Resource data。Core 不声明 sensor，不为 camera、
+catalog；Host 接受 catalog 后以 Core State 发布 desired，Edge 做 admission、adapter apply，
+再以 Core State 发布 actual/effective status。sensor data 使用 Core Stream；Runtime 不另建
+subscription 或 desired/actual wire。只有当前 Session/catalog/endpoint incarnation 与 actual
+production state 下已激活的 route 才能传输 Resource data。Core 不声明 sensor，不为 camera、
 IMU、microphone、某块开发板或某个 frontend 建立特例。Core `READY` 只允许
 Runtime 交换；它不表示 catalog 已接受或任何 endpoint 已 `READY`。完整契约见
 [Runtime 契约](runtime.md)。
@@ -143,11 +144,11 @@ Core 当前不定义：
 bounded wire 和 Runtime-message gate；命名的状态机/wire/integration tests 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。POSIX platform layer 另有 caller-owned
 connected-stream adapter，并在 macOS `AF_INET` loopback TCP 上通过 bounded partial-I/O、
-failure 与双向 payload 测试。portable `meiso_runtime` 已实现 READY Session 绑定、原子
-catalog、`ANNOUNCED / HOST_SUBSCRIPTION`、desired/actual 与完整 route gate 的协商子集。
-它仍不包含产品 facet/direction/QoS/permission schema、真实 probe/adapter/hotplug、typed
-dispatcher、SDK/Virtual Edge、MediaStream、direct-IP bootstrap、security adapter 或 target
-deployment。
+failure 与双向 payload 测试。上一版 portable `meiso_runtime` 已验证 READY Session 绑定与
+原子 catalog，但其独立 subscription/actual 路径已被产品契约废止，正在改为通用 Core
+State/Stream route；该旧路径不能作为当前 Runtime 语义证据。真实 probe/adapter/hotplug、
+SDK/Virtual Edge、MediaStream、direct-IP bootstrap、security adapter 与 target deployment
+仍未完成。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

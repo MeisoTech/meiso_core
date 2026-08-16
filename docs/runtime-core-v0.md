@@ -1,8 +1,11 @@
 # Runtime negotiation core v0
 
-> 状态：`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。本页冻结 portable `meiso_runtime` 的
-> source 行为与 wire v1；它是 [Runtime 契约](runtime.md) 的有界协商子集，不是 SDK、
-> platform adapter 或完整产品 Runtime。
+> 状态：`SUPERSEDED / HISTORICAL_IMPLEMENTATION_RECORD`。本页记录 portable `meiso_runtime`
+> 旧 source 行为与 wire v1；其中独立 subscription/actual 控制路径已被
+> [Runtime 契约](runtime.md)废止，不再代表当前产品语义或有效 Runtime evidence。
+
+替代实现必须使用普通 Core State 承载 desired/actual、普通 Core Stream 承载 sensor data，
+并重新冻结 wire 与测试。下文仅用于解释旧提交，不得作为 Host/Edge 新实现输入。
 
 ## 层级与依赖
 

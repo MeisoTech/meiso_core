@@ -66,7 +66,7 @@ Virtual Edge 是 Host SDK 契约，不是跨端 wire；跨端稳定边界是 Cor
 1. **Session milestone**：macOS Host harness 和 Linux Edge 实现同一最小 Core Session
    契约，只交换 identity、protocol/Profile、limits 和 Session state；
 2. **Runtime slice**：Core `READY` 后由 Edge 发布完整 catalog，Host 接受后提交
-   desired/subscription，Edge 发布 actual 并只对 `ACTIVE` route 开放 Resource data；
+   desired State，Edge 发布 actual State，并只在 actual production state 允许时开放 Stream route；
    在隔离的 conformance/test namespace 中验证 catalog update、参数 reject、断线和资源耗尽；
    synthetic fixture 不声明任何 physical capability；
 3. **Sensor slice**：先用 recorded/synthetic endpoint bundle，再替换一个真实 sensor
@@ -84,10 +84,11 @@ macOS 重现的 Host evidence 与它真正要声明的 Edge evidence。一个 mi
 ## 当前 Runtime 切片
 
 Session Core 已有 Host semantic/wire evidence；POSIX adapter 只有指定 macOS loopback
-transport evidence。当前主线是 [Runtime negotiation core v0](runtime-core-v0.md)：
+transport evidence。旧 [Runtime negotiation core v0](runtime-core-v0.md) 的 subscription 路径
+已废止；当前主线是 State/Stream-driven Runtime replacement：
 
-1. 冻结 catalog、desired/actual、subscription 与 route gate 的有界 portable 合同；
-2. 用同一真实 Session frame 验证 catalog 原子切换、参数请求、actual 与 stale route；
+1. 冻结 catalog、Core State desired/actual 与 production gate 的有界 portable 合同；
+2. 用同一真实 Session frame 验证 catalog 原子切换、State delivery、actual 与 stale Stream route；
 3. 在 K230D Linux Edge 侧把私有配置与 adapter probe 映射成 catalog，不把板级字段泄漏给
    Host；
 4. 接入一个真实 endpoint adapter，并让 macOS Host fixture 只依赖相同 catalog/schema；

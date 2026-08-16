@@ -6,7 +6,7 @@
 
 1. [系统设计](system.md)：角色、Virtual Edge、Core/Runtime/SDK/Profile 与产品不变量；
 2. [Resource 契约](resource.md)：State、Stream、Action、Blob、ownership、lifecycle 与 QoS；
-3. [Runtime 契约](runtime.md)：catalog、endpoint、desired/actual、subscription、插拔与 data route；
+3. [Runtime 契约](runtime.md)：catalog、endpoint、State-driven desired/actual、production 与 data route；
 4. [Link 契约](link.md)：identity、Session、time、delivery、failure 与 transport-independent
    boundary；
 5. [Composition 契约](composition.md)：layer、generation、激活和 Edge final authority。
@@ -22,8 +22,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   conformance 矩阵；这是实现基线，不是产品规范；
 - [Session Core v0](session-core-v0.md)：当前 portable handshake、wire、limits、lifecycle
   与 Runtime-message gate；Runtime catalog/route codec 不属于 Session Core；
-- [Runtime negotiation core v0](runtime-core-v0.md)：当前 portable catalog、desired/actual、
-  subscription 与 route gate 子集；不是 SDK 或完整产品 Runtime；
+- [Runtime negotiation core v0](runtime-core-v0.md)：上一版 portable 实现记录；其 subscription
+  wire 已被产品契约废止，State/Stream route 替代实现尚待形成新的 executable evidence；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator

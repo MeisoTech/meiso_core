@@ -26,10 +26,10 @@ source-level implementation API，不冻结二进制 ABI。
 状态机、wire 与 four-kind integration tests 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。
 
-portable `meiso_runtime` 在 Core `READY` 之上实现 Runtime negotiation core v0：原子
-catalog、`ANNOUNCED / HOST_SUBSCRIPTION` route、Host desired、Edge actual，以及绑定当前
-Session/catalog/endpoint/request/route epoch 的数据门。它不硬编码 sensor；Edge 调用方把
-私有配置与 adapter probe 的结果映射为 catalog。
+上一版 portable `meiso_runtime` 已证明 READY Session 绑定与原子 catalog，但其独立
+subscription/actual 路径已被 [Runtime 契约](docs/runtime.md)废止，不能作为当前产品语义。
+当前实现工作正改为：desired/actual 使用 Core State，sensor data 使用 Core Stream，Runtime
+只拥有 endpoint/catalog/production route。
 
 POSIX build 另含 platform-layer connected-stream adapter。它借用 already-connected、
 nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完整 Session frame；
