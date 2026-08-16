@@ -215,6 +215,16 @@ if(APPLE AND TARGET meiso_posix_tcp_adapter)
         PRIVATE meiso_posix_tcp_adapter
     )
     meiso_enable_warnings(meiso_session_tcp_loopback)
+
+    add_executable(
+        meiso_wifi_runtime_host
+        devtools/macos/wifi_runtime_host.c
+    )
+    target_link_libraries(
+        meiso_wifi_runtime_host
+        PRIVATE meiso_posix_tcp_adapter meiso_wifi_telemetry_profile
+    )
+    meiso_enable_warnings(meiso_wifi_runtime_host)
 endif()
 
 function(meiso_add_conformance_suite suite_name source_file)
