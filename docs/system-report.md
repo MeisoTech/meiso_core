@@ -51,26 +51,39 @@ source tree 的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
 固化为长期事实。
 
-上一版 portable `meiso_runtime` 依赖 `meiso_core`，不把 Runtime 反向纳入 Core。它曾实现
-READY Session 绑定、双-bank 原子 catalog、`ANNOUNCED / HOST_SUBSCRIPTION`、独立 desired/
-actual 与 request/route epoch 数据门。
-Catalog 使用单一 bounded frame；被拒绝的 generation 保留 monotonic high-water；Host 容量
-较小时仍能发送 capacity reject；Core 终止使所有 route 失效。
+当前 portable `meiso_runtime` 依赖 `meiso_core`，不把 Runtime 反向纳入 Core。Source v0
+永久绑定 READY Session，使用双 bank 原子 catalog；endpoint 内联 capability，route 绑定
+EndpointId/incarnation、Core Resource descriptor 与 facet。当前 catalog 只接受 Host-owned
+desired State、Edge-owned actual State 和 Edge-owned data Stream，不存在 subscription control
+plane。
 
-`meiso_runtime_test` 已验证 arena/limits、accept/reject/update、非对称容量、TX-busy retry、
-desired 与 actual 分离、route failure 和 Core close；`meiso_runtime_session_test` 经真实 Session
-frame 和 test-only Stream payload 验证 Runtime route 后进入 Stream primitive，并拒绝 stale generation 与旧 Session
-message。`meiso_runtime_wire_test` 另以独立 literal golden bytes 冻结六类 frame，并覆盖每个
-截断点、trailing byte、reserved 字段与 big-endian decode。该结果支持
-该代码和 wire 的测试事实仍可复现，但 subscription/actual 平行控制路径已经被产品
-[Runtime 契约](runtime.md)废止，故不再支持当前 Runtime 的 `IMPLEMENTED` 或
-`HOST_*_VERIFIED` 标签。替代实现必须让 desired/actual 通过 Core State、data 通过 Core
-Stream，并重新建立自己的语义与 wire evidence。历史边界见
+Desired/actual 经 `MeisoStateOffer` 传递，delivery acceptance 保持为 Core State 进展；Host
+只有在 actual 被 `StateReplica` 接受为 `RECEIVE_NEW` 并回交 Runtime 后才打开 production
+gate。Desired/actual receive candidate 均以有界副本绑定同一次 Core State event，commit 时拒绝
+相同 State identity 下的 payload 偷换；desired payload 的有界副本包含完整 canonical prefix 与
+Profile suffix。Gate 绑定当前 desired reference、effective Profile 与 production epoch；desired
+disable 本身不关门，`STOPPING` 的旧 epoch 仍可发送，`STOPPED` 才关闭。停止后重启、不连续
+Profile/desired 变化必须使用严格更新的 epoch。
+
+Bounded endpoint history 以 `(EndpointId, opaque incarnation)` pair 计数且不驱逐。Endpoint
+暂时离开 catalog 不会退役 current pair，同 pair 返回时继承 epoch high-water；任意从未见过的
+非零 incarnation 都能成为新 current 并退役旧 pair，退役 pair 返回为 `STALE_ENDPOINT`，历史
+不足为 `CAPACITY`。Catalog 激活仍清空 desired/actual/gate。
+
+`meiso_runtime_test` 覆盖 canonical State payload、v0 catalog/bundle 约束、StateReplica commit
+gate、desired/actual payload exact match、disable/stop、epoch 与 endpoint identity history
+continuity/retirement/capacity、catalog replacement 与 Core terminal；
+`meiso_runtime_session_test` 使用真实 Session、StatePublisher/Replica 和 Stream primitive 验证
+desired→actual→sample、disable cut、reconfigure/new epoch 与新 Session 重建 catalog。
+`meiso_runtime_wire_test` 以独立 literal golden bytes 冻结 wire v2 的 catalog、accept、
+reject、State offer/accept 与 Stream sample 六类 frame，并覆盖每个截断点、reserved 字段和
+malformed 时的公开状态不变。当前 source tree 的 fresh Debug/Release CTest 全量通过；这支持当前 Runtime
+`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。精确边界见
 [Runtime negotiation core v0](runtime-core-v0.md)。
 
-这只是正式 Runtime 的 negotiation 子集：没有 endpoint facet/direction/QoS/permission 产品
-schema、真实 config/probe/hotplug adapter、typed dispatcher、Host orchestration/SDK、MediaStream、
-target service 或 K230D Runtime evidence。
+这仍只是正式 Runtime 的 State/Stream negotiation 子集：Action、Blob、MediaStream route，
+产品 endpoint direction/QoS/permission schema，真实 config/probe/hotplug adapter、typed
+dispatcher、Host orchestration/SDK、direct-IP target service 与 K230D Runtime evidence 均未实现。
 
 当前 POSIX platform layer 另实现 connected-stream adapter：借用 caller-owned、already-
 connected、nonblocking `SOCK_STREAM` fd 和 Session；RX/TX 各由 `max_frame_bytes` 限制，

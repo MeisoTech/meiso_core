@@ -84,14 +84,16 @@ macOS 重现的 Host evidence 与它真正要声明的 Edge evidence。一个 mi
 ## 当前 Runtime 切片
 
 Session Core 已有 Host semantic/wire evidence；POSIX adapter 只有指定 macOS loopback
-transport evidence。旧 [Runtime negotiation core v0](runtime-core-v0.md) 的 subscription 路径
-已废止；当前主线是 State/Stream-driven Runtime replacement：
+transport evidence。[Runtime negotiation core v0](runtime-core-v0.md) 已冻结 bounded catalog、
+endpoint-incarnation history、Core State desired/actual exact commit、production gate、Core
+Stream data 与 wire v2，并以真实 Session 和 State/Stream primitive 建立 Host evidence。后续
+主线是：
 
-1. 冻结 catalog、Core State desired/actual 与 production gate 的有界 portable 合同；
-2. 用同一真实 Session frame 验证 catalog 原子切换、State delivery、actual 与 stale Stream route；
-3. 在 K230D Linux Edge 侧把私有配置与 adapter probe 映射成 catalog，不把板级字段泄漏给
+1. 以版本化 Profile 固定一个 endpoint 的 capability、desired/effective 参数与 sample schema；
+2. 在 K230D Linux Edge 侧把私有配置与 adapter probe 映射成 catalog，不把板级字段泄漏给
    Host；
-4. 接入一个真实 endpoint adapter，并让 macOS Host fixture 只依赖相同 catalog/schema；
+3. 接入一个真实 endpoint adapter，并让 macOS Host fixture 只依赖相同 catalog/schema；
+4. 经 direct-IP transport 完成 target Session/Runtime evidence；
 5. 再验证插拔、catalog update、network loss、新 Session 重协商和资源耗尽。
 
 旧 four-kind lab 是固定顺序 evidence，不是正式 Runtime。TCP、认证、K230D、真实 endpoint

@@ -1,81 +1,143 @@
-# Runtime negotiation core v0
+# Runtime negotiation core v0 实现契约
 
-> 状态：`SUPERSEDED / HISTORICAL_IMPLEMENTATION_RECORD`。本页记录 portable `meiso_runtime`
-> 旧 source 行为与 wire v1；其中独立 subscription/actual 控制路径已被
-> [Runtime 契约](runtime.md)废止，不再代表当前产品语义或有效 Runtime evidence。
+> 状态：`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。本页冻结
+> portable `meiso_runtime` source v0 与 Runtime wire v2 的当前行为；产品语义仍由
+> [Runtime 契约](runtime.md)拥有。本页不声明 transport、K230D target 或产品 Profile evidence。
 
-替代实现必须使用普通 Core State 承载 desired/actual、普通 Core Stream 承载 sensor data，
-并重新冻结 wire 与测试。下文仅用于解释旧提交，不得作为 Host/Edge 新实现输入。
-
-## 层级与依赖
+## 边界
 
 ```text
-meiso_core
-  = Resource primitives + Session Core
-        ↓
-meiso_runtime
-        ↓
-platform Runtime / Host SDK（尚未实现）
+meiso_resource_core(State / Stream types and primitives)
+                    +
+meiso_session_core(READY Session + opaque Runtime gate)
+                    ↓
+             meiso_runtime
+                    ↓
+       Profile / adapter / Host SDK（外部）
 ```
 
-Runtime 永久绑定一个已经 `READY` 的 `MeisoSession`，复制其 SessionId、role 与 negotiated
-limits。每次操作重新核对同一 Session 仍为 `READY`；close、loss、identity/limit 变化立即使
-Runtime handle、catalog、subscription 与 route 失效。Runtime payload 只能经
-`meiso_session_submit_runtime` 与 `meiso_session_receive` 进入或离开，不绕过 Core。
+一个 Runtime handle 永久绑定初始化时已经 `READY` 的 `MeisoSession`、SessionId、role 与
+negotiated limits。每次调用重新核对这些值；Session close/loss 或绑定变化使 handle 失效。
+所有 wire payload 只经 `meiso_session_submit_runtime` 和 `meiso_session_receive` 进出。
 
-Core 不理解 endpoint、sensor 或参数；Runtime 不重新实现 handshake 和四类 Resource 语义。
-Edge 调用方负责把 `Profile ∩ 私有配置 ∩ adapter probe ∩ policy/budget` 转成 catalog。
+Runtime v0 不复制 Core Resource 状态机：
 
-## v0 数据模型
+- desired/actual payload 由 Profile 填充，但跨端对象是 `MeisoStateOffer`；调用方仍以
+  `MeisoStatePublisher / MeisoStateReplica` 负责 owner、version、duplicate、stale、conflict
+  与 delivery acceptance；
+- data 跨端对象是 `MeisoStreamSample`；调用方仍以 `MeisoStream` 负责 producer/stream epoch、
+  sequence、gap 与 queue；
+- Runtime 只验证当前 Session/catalog/endpoint/Resource/facet，关联 desired reference、actual
+  production state 与 data production epoch；没有 subscription、独立 desired/actual message
+  或第二套 Resource truth。
 
-Endpoint：
+## Catalog v0
+
+Endpoint record 为：
 
 ```text
-EndpointId + endpoint_incarnation + capability_schema + opaque capability bytes
+EndpointId + endpoint_incarnation + capability_schema + inline capability bytes
 ```
 
-Route：
+Route record 为：
 
 ```text
-EndpointId/incarnation + ResourceDescriptor + delivery
-  + optional selection_schema/max_selection_bytes
+EndpointId/incarnation + MeisoResourceDescriptor + facet
 ```
 
-`ANNOUNCED` route 随 accepted catalog 激活；`HOST_SUBSCRIPTION` v0 只支持 Edge-owned Stream，
-还需 Host desired 与 Edge actual `ACTIVE`。Resource delivery 的完整 gate 为：
+当前 source v0 只接受下列 route；枚举中的其他产品 facet 不代表已有 carriage：
+
+| facet | Core kind / owner | 当前作用 |
+|---|---|---|
+| `DESIRED` | State / Host | Host 发布 enabled 与 Profile 参数 |
+| `ACTUAL` | State / Edge | Edge 发布 effective state 与 production gate |
+| `DATA` | Stream / Edge | Edge 发送当前 production epoch 的 sample |
+
+Capability 直接内联在 endpoint，`CAPABILITY` route 尚不实现。`OPERATION`、`IMMUTABLE` 以及
+非 Stream 的 `DATA` 均返回 `UNSUPPORTED_KIND`。每个 endpoint 最多一个 desired 和一个
+actual；存在任意 data route 时两者必须恰好各一个。EndpointId 与 ResourceId 分别唯一，route
+必须引用同 incarnation 的已声明 endpoint。
+
+Catalog 是一个完整、单帧 snapshot，使用双 bank staging：
 
 ```text
-SessionId + catalog_generation + EndpointId/incarnation
-  + ResourceId + kind/schema + request_id + route_epoch
+ACTIVE(g0) + STAGED(g1)
+  -> ACCEPT queued: atomically ACTIVE(g1), clear desired/actual/data gate
+  -> REJECT queued: retain ACTIVE(g0)
 ```
 
-订阅以严格递增、非零 `request_id` 区分每次 desired。`enabled=false` 是显式关闭；Edge actual
-区分 `APPLYING / ACTIVE / REJECTED / UNAVAILABLE / DISABLED`，并携带 reason、effective
-parameters。只有 `ACTIVE` 使用非零 `route_epoch`；旧 request 的迟到 actual/data 不能打开
-新 route。
+Generation 非零且在一个 handle 内严格递增；成功进入 Session TX 的 offer（包括随后被拒绝者）
+推进 high-water，`TX_BUSY` 不消耗 generation。Host 对 local capacity 或可判定的 unsupported/
+conflict 等错误保留 reject decision identity，但不暴露部分 staging catalog；malformed wire 不
+形成可接受 snapshot。Runtime 另有不驱逐的 bounded identity ledger；key 是
+`(EndpointId, opaque incarnation)`，incarnation 只有 non-zero/equality 语义，没有数值顺序：
 
-## Catalog 状态
+- catalog 暂时缺少某 EndpointId 时，其 pair 仍为 current；同一 current pair 在以后 generation
+  再出现时继承 `production_epoch_high_water`；
+- 从未见过的任意非零 incarnation 都可成为新 current pair，并永久退役同 EndpointId 的旧
+  current pair；已退役 pair 再出现返回 `STALE_ENDPOINT`；
+- 每个首次接受的 pair（包括后来退役者）永久占一个 `max_endpoint_history` slot；空间不足返回
+  `CAPACITY`。新 pair 的 epoch high-water 从零开始。
 
-Edge 每次发送一个完整 catalog；Host 在第二个固定 bank 中 staging，成功后才能接受：
+切换 catalog 始终清空 desired、actual 和 active gate。`MeisoRuntimeConfig` 分别限制
+`max_endpoints`、全 handle retained pair 数 `max_endpoint_history`、route、总 capability bytes、
+每 endpoint desired/actual Profile suffix；其中 history 至少覆盖 `max_endpoints`。Session limits
+另限制完整 frame，且 `max_endpoints + max_routes <= max_registry_entries`。
+
+## State payload 与 production gate
+
+Runtime 提供 canonical payload codec，整数使用 big-endian，Profile suffix 对 Runtime 不透明。
+
+| payload | 固定前缀 | 字段 |
+|---|---:|---|
+| desired State | 8 bytes | `enabled:u8`，7 bytes zero reserved，随后为 Profile desired bytes |
+| actual State | 56 bytes | observed/applied desired presence、owner role/incarnation/version；`apply_result`、`availability`、`production_status`、`effective_enabled`；`production_epoch:u64`、`reason:u16`、6 bytes zero reserved；随后为 Profile effective bytes |
+
+Actual codec 强制 canonical 组合：absent reference 的 owner/version 为零；`APPLY_NONE` 不带
+reference；pending/rejected/failed apply 至少带 observed desired；`APPLIED` 的 observed 与
+applied reference 相同。`RUNNING / DEGRADED / STOPPING` 必须 availability present、effective
+enabled、带 applied desired 且 production epoch 非零；`STARTING / STOPPED / FAILED` 不打开
+data gate，absent/unavailable 也不得保持 active production。
+
+Core State 与 gate 的集成顺序是实现合同的一部分：
 
 ```text
-ACTIVE(g0) + OFFER/WAIT_DECISION(g1)
-  -> ACCEPT: atomically ACTIVE(g1), clear every old subscription
-  -> REJECT: keep ACTIVE(g0)
+publisher offer
+  -> meiso_runtime_send_state_offer
+  -> Session RUNTIME frame
+  -> meiso_runtime_receive returns MeisoStateOffer
+  -> meiso_state_replica_receive
+  -> meiso_runtime_commit_state_receive(same event, receive_status)
 ```
 
-- generation 在同一 Runtime handle 内非零且单调；被拒绝的 generation 也进入 high-water，
-  不得用不同内容复用；
-- 本地 Session `TX_BUSY` 时 offer 没有进入 Core TX，generation 不被消耗，可原值重试；
-- Host 容量不足时不建立完整 staging bank，但保留 reject-only decision identity，可发送
-  `CATALOG_REJECT_CAPACITY`，不会把 Edge 卡在 pending；
-- active catalog 在新 offer staging/reject 期间保持不变；accept 原子替换；
-- v0 使用单一完整 frame，无 catalog fragmentation；
-- `endpoint_count + route_count <= negotiated max_registry_entries`；endpoint、route、capability、
-  per-route parameter 和 frame 都受 caller config/Session limit 双重约束。
+接收 `STATE_OFFER` 只暂存一个 bounded candidate；调用方必须立即把同一 offer 交给对应
+`StateReplica`，再回报 Core result。只有 `MEISO_STATE_RECEIVE_NEW` 绑定新的 desired reference
+或提交 actual production state；duplicate/stale/conflict/invalid 不改变 gate。任一 intervening
+non-const Runtime 调用都会丢弃 pending candidate。Desired 的完整 canonical payload
+（8-byte prefix + Profile suffix）受 `max_desired_profile_bytes_per_endpoint` 限制并被完整复制；
+Actual 的 Profile suffix 受 `max_actual_profile_bytes_per_endpoint` 约束。两者均在 commit 时
+逐字节复核，不能以相同 State identity 替换 desired 参数或 effective Profile 后改变 gate。
 
-Host 接受后立即切换本地 generation；Edge 收到同一有序 `ACCEPT` 后切换。切换窗口内到达的
-旧 generation data 被明确拒绝；v0 不承诺无损跨-generation cut。
+Host 发送侧只有在 desired `STATE_OFFER` 成功排入当前 Session TX 后才绑定该 State
+owner/version；Edge 接收侧只在 desired 被 `StateReplica` 接受为 `NEW` 后绑定。Actual 发送侧
+只有在 offer 成功排入当前 Session TX 后才提交本地 gate；接收侧只有在对应 actual 被
+`StateReplica` 接受为 `NEW` 且 commit 通过后才提交 gate。`STATE_ACCEPT` 只承载 Core
+delivery acceptance identity，不表示 adapter apply 或 production success。
+
+提交 actual 还必须满足：
+
+- observed desired 等于 Runtime 当前已绑定 desired；applied desired 可以等于当前 desired，
+  或等于仍在运行的上一份 applied desired，因此新 desired pending/rejected 时旧生产可继续；
+- 同一 active production epoch 只能继续相同 applied desired 与逐字节相同 effective Profile；
+- 每次从 inactive 重新进入 active，或发生不连续 reconfigure，epoch 必须大于该 endpoint
+  incarnation 的 high-water；`STOPPED` 后复用旧 epoch 被拒绝；
+- data gate 只在 actual 为 present、effective enabled、状态为
+  `RUNNING / DEGRADED / STOPPING` 且 epoch 非零时开放。
+
+因此 desired disable 本身不关门；旧 actual/epoch 在 Edge 停止 producer 并发布 `STOPPED` 前仍
+有效。`send_stream_sample` 和 receive 两侧都要求 DATA/Stream route、Edge producer、当前
+production epoch 与合法 `MeisoStreamSample` metadata；Runtime 返回 sample event 后，调用方再
+交给 `MeisoStream`。
 
 ## Source API 与内存
 
@@ -83,75 +145,82 @@ Host 接受后立即切换本地 generation；Edge 收到同一有序 `ACCEPT` �
 
 | API | 责任 |
 |---|---|
-| `alignment_required / memory_required / init` | 在 caller-owned arena 中建立固定容量 handle |
-| `offer / accept / reject_catalog` | 完整 snapshot 与 decision |
-| `staged_* / endpoint_* / route_* / find_*` | 接受前审查及 active catalog 查询 |
-| `request_subscription` | Host desired；strict request id；参数按 selection schema 解释 |
-| `report_subscription` | Edge actual/effective；打开或关闭 route epoch |
-| `send_resource / receive` | 当前 route 上的 opaque typed payload |
-| `snapshot / subscription_snapshot` | Session、catalog high-water/pending/active 与 desired/actual |
+| `desired_state_* / actual_state_*` | canonical payload size/encode/decode；decoded Profile 借用输入 |
+| `alignment_required / memory_required / init` | 在 caller-owned arena 中建立固定容量、Session-bound handle |
+| `offer_catalog / accept_catalog / reject_catalog` | 完整 snapshot 与 decision；accept 后原子换 bank |
+| `endpoint_* / route_* / find_*` | active/staged catalog 审查与查询 |
+| `send_state_offer / send_state_accept` | 传递 Core State offer 与 delivery acceptance metadata |
+| `send_stream_sample` | 在已开放 production gate 上传递 Core Stream sample |
+| `receive / commit_state_receive` | 解码 Runtime event；把 Core StateReplica 结果提交给 gate |
+| `snapshot / production_snapshot` | Session/catalog 状态与每 endpoint actual/effective/gate view |
 
-没有 heap、thread、clock、socket、filesystem 或 driver 依赖。同一 Runtime 及其 bound Session
-由一个 owner event loop 串行调用；实现不提供 locking。Runtime arena、bound Session arena
-与所有 out 参数必须互不重叠；opaque Session arena 的完整范围由 caller 保证。Capability、desired、actual 查询 view
-借用 Runtime arena，到下一次同 handle non-const 调用前有效。Resource event payload 借用
-Session RX arena，到任一相关 handle 下一次 non-const 调用前有效；需跨调用则复制。
+Arena 固定包含两套 endpoint/route/capability/actual-Profile bank、一个
+`max_endpoint_history` identity-pair ledger、一个
+`8 + max_desired_profile_bytes_per_endpoint` pending desired payload buffer、一个 pending actual
+Profile buffer，以及一个
+`max_runtime_payload_bytes` TX buffer；实现不调用 heap、thread、clock、socket、filesystem 或
+driver。一个 owner event loop 串行调用同一 Runtime/Session pair；无内部 locking。
+Runtime arena、完整 Session arena 与 out object 不得重叠。
 
-## Wire v1
+Catalog capability 与 production effective Profile view 借用 Runtime arena，到该 handle 下一次
+non-const 调用前有效。State/Stream event 中的 byte view 借用 Session RX message，到相关
+Session 或 Runtime 下一次 non-const 调用前有效；需跨调用则复制。
 
-Runtime payload 位于 Session `RUNTIME` frame 内，不重复 SessionId。整数为 big-endian；C struct
+## Runtime wire v2
+
+Runtime frame 是 Session `RUNTIME` payload，不重复 SessionId。所有整数为 big-endian，C struct
 不得直接复制到 wire。
 
 ```text
 offset  size  field
-0       4     "MRT0"
-4       1     wire_version = 1
+0       4     magic = "MRT0"
+4       1     wire_version = 2
 5       1     type
 6       2     reserved = 0
-8       4     total Runtime payload bytes
+8       4     total Runtime frame bytes
 12      ...   body
 ```
 
 | type | value | fixed body/prefix | direction / body |
 |---|---:|---:|---|
-| `CATALOG` | 1 | 16 | Edge→Host；generation, endpoint_count, route_count；48-byte endpoint record + inline capability；96-byte route record |
+| `CATALOG` | 1 | 16 | Edge→Host；generation、endpoint count、route count；每 endpoint 为 48-byte record 后跟 inline capability；每 route 为 72-byte record |
 | `CATALOG_ACCEPT` | 2 | 8 | Host→Edge；generation |
-| `CATALOG_REJECT` | 3 | 12 | Host→Edge；generation, reason, reserved |
-| `SUBSCRIPTION_DESIRED` | 4 | 64 | Host→Edge；generation, endpoint, resource, request, enabled, parameter length + bytes |
-| `SUBSCRIPTION_ACTUAL` | 5 | 72 | Edge→Host；generation, endpoint, resource, request, status/reason, route epoch, effective length + bytes |
-| `RESOURCE` | 6 | 92 | descriptor owner→peer；generation, endpoint, resource, kind/schema, request, route epoch, payload length + bytes |
+| `CATALOG_REJECT` | 3 | 12 | Host→Edge；generation、reason、3-byte reserved |
+| `STATE_OFFER` | 4 | 96 | Resource owner→peer；RouteKey、delivery generation、State owner/version、payload length/reserved、State payload |
+| `STATE_ACCEPT` | 5 | 88 | State receiver→owner；RouteKey、delivery generation、State owner/version |
+| `STREAM_SAMPLE` | 6 | 144 | Edge→Host；RouteKey、production epoch、Core Stream producer/epoch/sequence/source time/deadline、dependency/payload lengths 与 bytes |
 
-未知 type、错误 magic/version/reserved/length、trailing bytes、stale generation、错误 endpoint/
-resource/kind/schema/request/epoch 或容量超限均不进入 Resource primitive。
+共同 `RouteKey` 为 56 bytes：catalog generation、EndpointId、endpoint incarnation、ResourceId、
+facet 与 7-byte zero reserved。Endpoint record 为 48 bytes；route record 为 72 bytes，内含完整
+`MeisoResourceDescriptor` 的 id/kind/owner/schema/max payload。所有 reserved、length、role、
+identity、kind/facet、schema、capacity 和 current binding 均在生成 event 前验证。
 
-可明确映射为 capacity/unsupported 的 catalog 保留 decision token，Host 必须回相应
-`CATALOG_REJECT`。`MALFORMED / CONFLICT / UNKNOWN_ENDPOINT / STALE_ENDPOINT` 等结构错误
-不产生 decision token；调用方必须以 Core `CLOSE(PROTOCOL_ERROR)` 终止该 Session，不能等待
-一个不存在的 catalog decision。
+## Evidence 与明确边界
 
-## 已验证与边界
+当前 Host tests 分别支持以下结论：
 
-`meiso_runtime_test` 覆盖 READY/arena、catalog atomic accept/reject/high-water、不对称容量 reject、
-TX-busy retry、desired≠actual、subscription/announced route gate、identity/schema/request/epoch/
-payload failure 与 Core close invalidation。
+- `meiso_runtime_test`：desired/actual canonical codec、v0 catalog subset/bundle conflict、catalog
+  activation/generation、StateReplica commit gate、forged desired/actual payload 拒绝、desired
+  disable 不直接关门、stopped 关门、epoch high-water/reuse 拒绝、endpoint identity pair 跨
+  catalog 缺席/替换/退役与 history capacity、catalog replacement 与 Core terminal invalidation；
+- `meiso_runtime_session_test`：两个真实 Session arena 上，`StatePublisher -> Runtime ->
+  StateReplica -> acceptance` 和 `Runtime -> Stream` primitive 的完整调用链；旧 actual 在 disable
+  cut 中继续、停止后关门、新配置使用新 production/stream epoch，以及新 Session 必须重建
+  catalog；
+- `meiso_runtime_wire_test`：六类 v2 frame 的独立 literal golden bytes、每个截断点、header 与
+  body reserved 字段、big-endian decode，以及 malformed 路径不改变公开 Runtime snapshot。
 
-`meiso_runtime_session_test` 使用真实 Session frame 验证 Session→Runtime→Stream primitive 链、
-stale catalog、旧 Session message 和新 Session 重新协商。一个 test-only Profile payload 把
-producer/epoch/sequence/source time 与 sample bytes 经 Runtime route 传输，Host 解码后进入
-`MeisoStream`；这证明 route gate 与 primitive integration，不定义通用 typed dispatcher 或
-产品 Stream schema codec。
+这些结果只支持当前 portable Host semantic/wire evidence，不证明 transport、并发、fuzz、性能、
+断线恢复或 target 行为。Source v0 明确尚未实现：
 
-`meiso_runtime_wire_test` 以独立 literal golden bytes 冻结六类 Runtime frame，覆盖每个截断点、
-trailing byte、header/body reserved 字段与 big-endian decode；malformed-wire 拒绝路径保持全部
-公开 Runtime 状态不变。这支持本机 `HOST_WIRE_VERIFIED`，不等于 transport、target 或产品
-Profile 验证。
+- Action、Blob 与 MediaStream Runtime carriage；capability State/Blob route；
+- 产品 endpoint direction/QoS/permission schema、typed dispatcher、catalog fragmentation 或
+  duplicate response cache；
+- Profile-specific admission、private config/probe/hotplug adapter、Host orchestration、SDK /
+  Virtual Edge；
+- direct-IP bootstrap、socket connect/listen、认证/加密、安全 transport；
+- K230D/Linux service、真实 sensor adapter 或任何 Runtime `TARGET_VERIFIED / BOARD_VERIFIED`
+  evidence。
 
-本实现尚不包含：
-
-- endpoint facet/direction/QoS/permission 的产品 schema；
-- adapter-driven probe、hotplug supervisor、actual State bundle 与 Profile codec；
-- catalog fragmentation、duplicate replay/idempotent response cache；
-- State/Action/Blob 的 subscription mode、MediaStream data plane；
-- SDK/Virtual Edge、direct-IP bootstrap、安全 transport、target service 或 K230D Runtime evidence。
-
-这些缺口不能由 fixed four-kind lab、Dashboard、Session loopback 或板上已有 driver 代替。
+现有 four-kind lab、POSIX loopback transport、Resource Core 板测或独立 Profile codec 不能提升
+上述 Runtime evidence 等级。

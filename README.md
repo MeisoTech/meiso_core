@@ -26,10 +26,12 @@ source-level implementation API，不冻结二进制 ABI。
 状态机、wire 与 four-kind integration tests 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。
 
-上一版 portable `meiso_runtime` 已证明 READY Session 绑定与原子 catalog，但其独立
-subscription/actual 路径已被 [Runtime 契约](docs/runtime.md)废止，不能作为当前产品语义。
-当前实现工作正改为：desired/actual 使用 Core State，sensor data 使用 Core Stream，Runtime
-只拥有 endpoint/catalog/production route。
+当前 portable `meiso_runtime` 已实现 State/Stream-driven negotiation source v0 与 wire v2：
+它永久绑定 READY Session，原子接受 endpoint catalog，并以有界且不驱逐的 identity history
+保留 production epoch continuity、防止 retired pair 复活；desired/actual 作为 Core State、data
+作为 Core Stream 传递。State receive candidate 必须逐字节匹配同一次 `StateReplica` commit，
+只有被接受的 actual 才能开放 production epoch gate。三套 Host test 支持当前
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`，不构成 transport 或 target evidence。
 
 POSIX build 另含 platform-layer connected-stream adapter。它借用 already-connected、
 nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完整 Session frame；

@@ -2,6 +2,8 @@
 #define MEISO_RUNTIME_H
 
 #include "meiso_session.h"
+#include "meiso_state.h"
+#include "meiso_stream.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,8 +13,10 @@
 extern "C" {
 #endif
 
-#define MEISO_RUNTIME_WIRE_VERSION 1U
+#define MEISO_RUNTIME_WIRE_VERSION 2U
 #define MEISO_RUNTIME_WIRE_HEADER_SIZE 12U
+#define MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE 8U
+#define MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE 56U
 
 typedef struct MeisoRuntime MeisoRuntime;
 
@@ -29,29 +33,41 @@ typedef struct {
     MeisoByteView capability;
 } MeisoRuntimeEndpointDescriptor;
 
-typedef uint8_t MeisoRuntimeDelivery;
+typedef uint8_t MeisoRuntimeFacet;
 enum {
-    /* Route is available after its catalog generation becomes active. */
-    MEISO_RUNTIME_DELIVERY_ANNOUNCED = 1,
-    /* Host desired + Edge actual ACTIVE are required before delivery. */
-    MEISO_RUNTIME_DELIVERY_HOST_SUBSCRIPTION = 2
+    MEISO_RUNTIME_FACET_CAPABILITY = 1,
+    MEISO_RUNTIME_FACET_DESIRED = 2,
+    MEISO_RUNTIME_FACET_ACTUAL = 3,
+    MEISO_RUNTIME_FACET_DATA = 4,
+    MEISO_RUNTIME_FACET_OPERATION = 5,
+    MEISO_RUNTIME_FACET_IMMUTABLE = 6
 };
 
 typedef struct {
     MeisoEndpointId endpoint_id;
     uint64_t endpoint_incarnation;
     MeisoResourceDescriptor resource;
-    MeisoSchemaRef selection_schema;
-    uint32_t max_selection_bytes;
-    MeisoRuntimeDelivery delivery;
+    MeisoRuntimeFacet facet;
 } MeisoRuntimeRouteDescriptor;
+
+/* Complete identity of a route in the currently active catalog. */
+typedef struct {
+    uint64_t catalog_generation;
+    MeisoEndpointId endpoint_id;
+    uint64_t endpoint_incarnation;
+    MeisoResourceId resource_id;
+    MeisoRuntimeFacet facet;
+} MeisoRuntimeRouteKey;
 
 typedef struct {
     MeisoSession *session;
     uint32_t max_endpoints;
+    /* Retained (EndpointId, incarnation) history; must cover max_endpoints. */
+    uint32_t max_endpoint_history;
     uint32_t max_routes;
     uint32_t max_capability_bytes;
-    uint32_t max_parameter_bytes_per_route;
+    uint32_t max_desired_profile_bytes_per_endpoint;
+    uint32_t max_actual_profile_bytes_per_endpoint;
 } MeisoRuntimeConfig;
 
 typedef uint8_t MeisoRuntimeInitStatus;
@@ -84,30 +100,90 @@ enum {
     MEISO_RUNTIME_SCHEMA_MISMATCH = 15,
     MEISO_RUNTIME_UNSUPPORTED_KIND = 16,
     MEISO_RUNTIME_OWNER_MISMATCH = 17,
-    MEISO_RUNTIME_NO_DESIRED = 18,
-    MEISO_RUNTIME_REQUEST_MISMATCH = 19,
-    MEISO_RUNTIME_ROUTE_NOT_ACTIVE = 20,
-    MEISO_RUNTIME_PAYLOAD_CAPACITY = 21
+    MEISO_RUNTIME_FACET_MISMATCH = 18,
+    MEISO_RUNTIME_ROUTE_NOT_ACTIVE = 19,
+    MEISO_RUNTIME_PAYLOAD_CAPACITY = 20,
+    MEISO_RUNTIME_PRODUCTION_EPOCH_MISMATCH = 21,
+    MEISO_RUNTIME_STATE_INVALID = 22,
+    MEISO_RUNTIME_STREAM_INVALID = 23
 };
 
-typedef uint8_t MeisoRuntimeActualStatus;
+typedef uint16_t MeisoRuntimeProductionReason;
 enum {
-    MEISO_RUNTIME_ACTUAL_NONE = 0,
-    MEISO_RUNTIME_ACTUAL_APPLYING = 1,
-    MEISO_RUNTIME_ACTUAL_ACTIVE = 2,
-    MEISO_RUNTIME_ACTUAL_REJECTED = 3,
-    MEISO_RUNTIME_ACTUAL_UNAVAILABLE = 4,
-    MEISO_RUNTIME_ACTUAL_DISABLED = 5
+    MEISO_RUNTIME_PRODUCTION_REASON_NONE = 0,
+    MEISO_RUNTIME_PRODUCTION_REASON_DISABLED = 1,
+    MEISO_RUNTIME_PRODUCTION_REASON_APPLYING = 2,
+    MEISO_RUNTIME_PRODUCTION_REASON_UNSUPPORTED_PARAMETER = 3,
+    MEISO_RUNTIME_PRODUCTION_REASON_ADMISSION_DENIED = 4,
+    MEISO_RUNTIME_PRODUCTION_REASON_UNAVAILABLE = 5,
+    MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED = 6
 };
 
-typedef uint8_t MeisoRuntimeActualReason;
+typedef uint8_t MeisoRuntimeProductionStatus;
 enum {
-    MEISO_RUNTIME_ACTUAL_REASON_NONE = 0,
-    MEISO_RUNTIME_ACTUAL_REASON_UNSUPPORTED_PARAMETER = 1,
-    MEISO_RUNTIME_ACTUAL_REASON_ADMISSION_DENIED = 2,
-    MEISO_RUNTIME_ACTUAL_REASON_UNAVAILABLE = 3,
-    MEISO_RUNTIME_ACTUAL_REASON_APPLY_FAILED = 4
+    MEISO_RUNTIME_PRODUCTION_STOPPED = 1,
+    MEISO_RUNTIME_PRODUCTION_STARTING = 2,
+    MEISO_RUNTIME_PRODUCTION_RUNNING = 3,
+    MEISO_RUNTIME_PRODUCTION_DEGRADED = 4,
+    MEISO_RUNTIME_PRODUCTION_STOPPING = 5,
+    MEISO_RUNTIME_PRODUCTION_FAILED = 6
 };
+
+typedef uint8_t MeisoRuntimeApplyResult;
+enum {
+    MEISO_RUNTIME_APPLY_NONE = 1,
+    MEISO_RUNTIME_APPLY_PENDING = 2,
+    MEISO_RUNTIME_APPLY_APPLIED = 3,
+    MEISO_RUNTIME_APPLY_REJECTED = 4,
+    MEISO_RUNTIME_APPLY_FAILED = 5
+};
+
+typedef uint8_t MeisoRuntimeAvailability;
+enum {
+    MEISO_RUNTIME_AVAILABILITY_PRESENT = 1,
+    MEISO_RUNTIME_AVAILABILITY_ABSENT = 2,
+    MEISO_RUNTIME_AVAILABILITY_UNAVAILABLE = 3
+};
+
+/* Canonical payload of a DESIRED-facet Host-owned State. */
+typedef struct {
+    bool enabled;
+    MeisoByteView profile;
+} MeisoRuntimeDesiredState;
+
+typedef struct {
+    bool present;
+    MeisoOwnerScope owner;
+    uint64_t version;
+} MeisoRuntimeDesiredReference;
+
+/* Canonical payload of an ACTUAL-facet Edge-owned State. */
+typedef struct {
+    MeisoRuntimeDesiredReference observed_desired;
+    MeisoRuntimeDesiredReference applied_desired;
+    MeisoRuntimeApplyResult apply_result;
+    MeisoRuntimeAvailability availability;
+    bool effective_enabled;
+    MeisoRuntimeProductionStatus production_status;
+    MeisoRuntimeProductionReason reason;
+    uint64_t production_epoch;
+    MeisoByteView profile;
+} MeisoRuntimeActualState;
+
+typedef struct {
+    bool actual_present;
+    MeisoRuntimeDesiredReference observed_desired;
+    MeisoRuntimeDesiredReference applied_desired;
+    MeisoRuntimeApplyResult apply_result;
+    MeisoRuntimeAvailability availability;
+    bool effective_enabled;
+    MeisoRuntimeProductionStatus production_status;
+    MeisoRuntimeProductionReason reason;
+    uint64_t production_epoch;
+    uint64_t production_epoch_high_water;
+    MeisoByteView effective_profile;
+    bool data_active;
+} MeisoRuntimeProductionSnapshot;
 
 typedef uint8_t MeisoRuntimeCatalogRejectReason;
 enum {
@@ -116,54 +192,27 @@ enum {
     MEISO_RUNTIME_CATALOG_REJECT_CAPACITY = 3
 };
 
-typedef struct {
-    uint64_t request_id;
-    MeisoEndpointId endpoint_id;
-    uint64_t endpoint_incarnation;
-    MeisoResourceId resource_id;
-    bool enabled;
-    MeisoByteView parameters;
-} MeisoRuntimeSubscriptionDesired;
-
-typedef struct {
-    uint64_t request_id;
-    MeisoEndpointId endpoint_id;
-    uint64_t endpoint_incarnation;
-    MeisoResourceId resource_id;
-    MeisoRuntimeActualStatus status;
-    MeisoRuntimeActualReason reason;
-    uint64_t route_epoch;
-    MeisoByteView effective_parameters;
-} MeisoRuntimeSubscriptionActual;
-
-typedef struct {
-    MeisoEndpointId endpoint_id;
-    uint64_t endpoint_incarnation;
-    MeisoResourceId resource_id;
-    MeisoResourceKind kind;
-    MeisoSchemaRef schema;
-    uint64_t request_id;
-    uint64_t route_epoch;
-    MeisoByteView payload;
-} MeisoRuntimeResourceMessage;
-
 typedef uint8_t MeisoRuntimeEventType;
 enum {
     MEISO_RUNTIME_EVENT_CATALOG_OFFERED = 1,
     MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED = 2,
     MEISO_RUNTIME_EVENT_CATALOG_REJECTED = 3,
-    MEISO_RUNTIME_EVENT_SUBSCRIPTION_DESIRED = 4,
-    MEISO_RUNTIME_EVENT_SUBSCRIPTION_ACTUAL = 5,
-    MEISO_RUNTIME_EVENT_RESOURCE = 6
+    MEISO_RUNTIME_EVENT_STATE_OFFER = 4,
+    MEISO_RUNTIME_EVENT_STATE_ACCEPT = 5,
+    MEISO_RUNTIME_EVENT_STREAM_SAMPLE = 6
 };
 
 typedef struct {
     MeisoRuntimeEventType type;
     uint64_t catalog_generation;
     MeisoRuntimeCatalogRejectReason reject_reason;
-    MeisoRuntimeSubscriptionDesired desired;
-    MeisoRuntimeSubscriptionActual actual;
-    MeisoRuntimeResourceMessage resource;
+    MeisoRuntimeRouteKey route;
+    MeisoStateOffer state_offer;
+    MeisoDeliveryGeneration state_accept_generation;
+    MeisoOwnerScope state_accept_owner;
+    uint64_t state_accept_version;
+    uint64_t production_epoch;
+    MeisoStreamSample stream_sample;
 } MeisoRuntimeEvent;
 
 typedef struct {
@@ -184,18 +233,6 @@ typedef struct {
     bool core_ready;
 } MeisoRuntimeSnapshot;
 
-typedef struct {
-    bool desired_present;
-    bool desired_enabled;
-    uint64_t request_id;
-    MeisoByteView desired_parameters;
-    MeisoRuntimeActualStatus actual_status;
-    MeisoRuntimeActualReason actual_reason;
-    uint64_t route_epoch;
-    MeisoByteView effective_parameters;
-    bool route_active;
-} MeisoRuntimeSubscriptionSnapshot;
-
 /*
  * One owner must serialize every call on a Runtime and its bound Session.
  * Different Runtime/Session pairs are independent; this API provides no lock.
@@ -205,6 +242,33 @@ typedef struct {
 
 bool meiso_endpoint_id_valid(MeisoEndpointId value);
 bool meiso_endpoint_id_equal(MeisoEndpointId lhs, MeisoEndpointId rhs);
+bool meiso_runtime_facet_valid(MeisoRuntimeFacet value);
+
+/* Canonical State payload helpers; decoded profile bytes borrow input. */
+size_t meiso_runtime_desired_state_encoded_size(
+    const MeisoRuntimeDesiredState *state
+);
+bool meiso_runtime_desired_state_encode(
+    const MeisoRuntimeDesiredState *state,
+    MeisoMutableBuffer output,
+    MeisoByteView *out_payload
+);
+bool meiso_runtime_desired_state_decode(
+    MeisoByteView payload,
+    MeisoRuntimeDesiredState *out_state
+);
+size_t meiso_runtime_actual_state_encoded_size(
+    const MeisoRuntimeActualState *state
+);
+bool meiso_runtime_actual_state_encode(
+    const MeisoRuntimeActualState *state,
+    MeisoMutableBuffer output,
+    MeisoByteView *out_payload
+);
+bool meiso_runtime_actual_state_decode(
+    MeisoByteView payload,
+    MeisoRuntimeActualState *out_state
+);
 
 size_t meiso_runtime_alignment_required(void);
 size_t meiso_runtime_memory_required(const MeisoRuntimeConfig *config);
@@ -231,11 +295,7 @@ MeisoRuntimeStatus meiso_runtime_offer_catalog(
     size_t route_count
 );
 
-/*
- * Host only. Acceptance requires a complete staged catalog and atomically
- * replaces active state. Rejection is also valid for a reject-only pending
- * generation retained after a local capacity/unsupported result.
- */
+/* Host only. A successful decision is queued before local catalog mutation. */
 MeisoRuntimeStatus meiso_runtime_accept_catalog(MeisoRuntime *runtime);
 MeisoRuntimeStatus meiso_runtime_reject_catalog(
     MeisoRuntime *runtime,
@@ -243,35 +303,34 @@ MeisoRuntimeStatus meiso_runtime_reject_catalog(
 );
 
 /*
- * Host only; v0 subscription routes must be Edge-owned Streams. request_id
- * must increase strictly for each request on one active route.
+ * State and Stream metadata are the Resource Core types, not parallel Runtime
+ * semantics. The route key must name the exact active catalog route. Input
+ * byte views may be current Session RX borrows: Runtime finishes every read
+ * and bounded copy before submitting to Session invalidates such a borrow.
  */
-MeisoRuntimeStatus meiso_runtime_request_subscription(
+MeisoRuntimeStatus meiso_runtime_send_state_offer(
     MeisoRuntime *runtime,
-    const MeisoRuntimeSubscriptionDesired *desired
+    MeisoRuntimeRouteKey route,
+    const MeisoStateOffer *offer
 );
-
-/* Edge only; route_epoch is nonzero only for ACTIVE and zero otherwise. */
-MeisoRuntimeStatus meiso_runtime_report_subscription(
+MeisoRuntimeStatus meiso_runtime_send_state_accept(
     MeisoRuntime *runtime,
-    const MeisoRuntimeSubscriptionActual *actual
+    MeisoRuntimeRouteKey route,
+    MeisoDeliveryGeneration generation,
+    MeisoOwnerScope owner,
+    uint64_t version
+);
+MeisoRuntimeStatus meiso_runtime_send_stream_sample(
+    MeisoRuntime *runtime,
+    MeisoRuntimeRouteKey route,
+    uint64_t production_epoch,
+    const MeisoStreamSample *sample
 );
 
 /*
- * The resource descriptor supplies the authoritative kind/schema/max payload.
- * ANNOUNCED routes become active with their accepted catalog. A
- * HOST_SUBSCRIPTION route additionally requires the current enabled desired
- * request to have actual ACTIVE.
- */
-MeisoRuntimeStatus meiso_runtime_send_resource(
-    MeisoRuntime *runtime,
-    const MeisoRuntimeResourceMessage *message
-);
-
-/*
- * message must be the exact borrow returned by the bound Session. Resource
- * event payload borrows that message and expires before the next non-const
- * call on either handle. Desired/actual event bytes borrow the Runtime arena.
+ * message must be the exact borrow returned by the bound Session. State and
+ * Stream byte views in the event borrow that message and expire before the
+ * next non-const call on either handle.
  */
 MeisoRuntimeStatus meiso_runtime_receive(
     MeisoRuntime *runtime,
@@ -279,12 +338,24 @@ MeisoRuntimeStatus meiso_runtime_receive(
     MeisoRuntimeEvent *out_event
 );
 
+/*
+ * Immediately after applying a DESIRED/ACTUAL STATE_OFFER to its StateReplica,
+ * report the Core result for that receive event. Only RECEIVE_NEW binds the
+ * desired reference or changes the production gate; rejected State never can.
+ */
+MeisoRuntimeStatus meiso_runtime_commit_state_receive(
+    MeisoRuntime *runtime,
+    MeisoRuntimeRouteKey route,
+    const MeisoStateOffer *offer,
+    MeisoStateReceiveStatus receive_status
+);
+
 bool meiso_runtime_snapshot(
     const MeisoRuntime *runtime,
     MeisoRuntimeSnapshot *out_snapshot
 );
 
-/* capability borrows the Runtime arena until its next non-const call. */
+/* Catalog views borrow the Runtime arena until its next non-const call. */
 MeisoRuntimeStatus meiso_runtime_endpoint_at(
     const MeisoRuntime *runtime,
     size_t index,
@@ -315,12 +386,10 @@ MeisoRuntimeStatus meiso_runtime_find_route(
     MeisoResourceId resource_id,
     MeisoRuntimeRouteDescriptor *out_route
 );
-
-/* Parameter views borrow the Runtime arena until its next non-const call. */
-MeisoRuntimeStatus meiso_runtime_subscription_snapshot(
+MeisoRuntimeStatus meiso_runtime_production_snapshot(
     const MeisoRuntime *runtime,
-    MeisoResourceId resource_id,
-    MeisoRuntimeSubscriptionSnapshot *out_snapshot
+    MeisoEndpointId endpoint_id,
+    MeisoRuntimeProductionSnapshot *out_snapshot
 );
 
 #ifdef __cplusplus

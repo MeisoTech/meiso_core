@@ -144,11 +144,12 @@ Core 当前不定义：
 bounded wire 和 Runtime-message gate；命名的状态机/wire/integration tests 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。POSIX platform layer 另有 caller-owned
 connected-stream adapter，并在 macOS `AF_INET` loopback TCP 上通过 bounded partial-I/O、
-failure 与双向 payload 测试。上一版 portable `meiso_runtime` 已验证 READY Session 绑定与
-原子 catalog，但其独立 subscription/actual 路径已被产品契约废止，正在改为通用 Core
-State/Stream route；该旧路径不能作为当前 Runtime 语义证据。真实 probe/adapter/hotplug、
-SDK/Virtual Edge、MediaStream、direct-IP bootstrap、security adapter 与 target deployment
-仍未完成。
+failure 与双向 payload 测试。当前 portable `meiso_runtime` 已实现 READY Session 绑定、原子
+catalog、bounded endpoint-incarnation history、Core State desired/actual exact commit gate 与
+Core Stream data route；source v0 / wire v2 的三套 Host test 支持
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。真实 probe/adapter/hotplug、Action/Blob/
+MediaStream Runtime route、SDK/Virtual Edge、direct-IP bootstrap、security adapter 与 Runtime
+target deployment 仍未完成。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

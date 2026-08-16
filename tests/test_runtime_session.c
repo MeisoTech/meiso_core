@@ -1,5 +1,4 @@
 #include "meiso_runtime.h"
-#include "meiso_stream.h"
 
 #include "meiso_test_support.h"
 
@@ -29,40 +28,48 @@ typedef struct {
     TestArena edge_session_arena;
     TestArena host_runtime_arena;
     TestArena edge_runtime_arena;
+    uint8_t transfer[8192];
     MeisoSession *host_session;
     MeisoSession *edge_session;
     MeisoRuntime *host_runtime;
     MeisoRuntime *edge_runtime;
 } RuntimePair;
 
-static const MeisoEndpointId SENSOR_ENDPOINT = {0x101U, 0x102U};
-static const MeisoResourceId SENSOR_STREAM = {0x201U, 0x202U};
+typedef struct {
+    TestArena desired_publisher_arena;
+    TestArena desired_replica_arena;
+    TestArena actual_publisher_arena;
+    TestArena actual_replica_arena;
+    TestArena stream_arena;
+    MeisoStatePublisher *desired_publisher;
+    MeisoStateReplica *desired_replica;
+    MeisoStatePublisher *actual_publisher;
+    MeisoStateReplica *actual_replica;
+    MeisoStream *stream;
+} Resources;
+
+static const MeisoEndpointId ENDPOINT = {0x101U, 0x102U};
+static const uint64_t ENDPOINT_INCARNATION = 7U;
+static const MeisoResourceId DESIRED_ID = {0x201U, 0x202U};
+static const MeisoResourceId ACTUAL_ID = {0x211U, 0x212U};
+static const MeisoResourceId DATA_ID = {0x221U, 0x222U};
 static const MeisoSchemaRef CAPABILITY_SCHEMA = {{0x301U, 0x302U}, 1U};
-static const MeisoSchemaRef STREAM_SCHEMA = {{0x401U, 0x402U}, 1U};
-static const MeisoSchemaRef SELECTION_SCHEMA = {{0x501U, 0x502U}, 1U};
+static const MeisoSchemaRef DESIRED_SCHEMA = {{0x311U, 0x312U}, 1U};
+static const MeisoSchemaRef ACTUAL_SCHEMA = {{0x321U, 0x322U}, 1U};
+static const MeisoSchemaRef DATA_SCHEMA = {{0x331U, 0x332U}, 1U};
+static const MeisoOwnerScope HOST_OWNER = {MEISO_OWNER_ROLE_HOST, 31U};
+static const MeisoOwnerScope EDGE_OWNER = {MEISO_OWNER_ROLE_EDGE, 41U};
 
-static void write_u64_be(uint8_t *target, uint64_t value)
+static MeisoResourceDescriptor descriptor(
+    MeisoResourceId id,
+    MeisoResourceKind kind,
+    MeisoSchemaRef schema,
+    MeisoOwnerRole owner,
+    size_t maximum
+)
 {
-    target[0] = (uint8_t)(value >> 56U);
-    target[1] = (uint8_t)(value >> 48U);
-    target[2] = (uint8_t)(value >> 40U);
-    target[3] = (uint8_t)(value >> 32U);
-    target[4] = (uint8_t)(value >> 24U);
-    target[5] = (uint8_t)(value >> 16U);
-    target[6] = (uint8_t)(value >> 8U);
-    target[7] = (uint8_t)value;
-}
-
-static uint64_t read_u64_be(const uint8_t *source)
-{
-    return (uint64_t)source[0] << 56U |
-        (uint64_t)source[1] << 48U |
-        (uint64_t)source[2] << 40U |
-        (uint64_t)source[3] << 32U |
-        (uint64_t)source[4] << 24U |
-        (uint64_t)source[5] << 16U |
-        (uint64_t)source[6] << 8U |
-        (uint64_t)source[7];
+    const MeisoResourceDescriptor value = {id, kind, schema, owner, maximum};
+    return value;
 }
 
 static MeisoSessionConfig session_config(
@@ -71,44 +78,42 @@ static MeisoSessionConfig session_config(
 )
 {
     MeisoSessionConfig config;
-    const MeisoPeerId host_id = {0x11U, 0x12U};
-    const MeisoPeerId edge_id = {0x21U, 0x22U};
+    const MeisoPeerId host = {0x11U, 0x12U};
+    const MeisoPeerId edge = {0x21U, 0x22U};
 
     memset(&config, 0, sizeof(config));
     config.local_role = role;
-    config.local_peer_id = role == MEISO_SESSION_ROLE_HOST ? host_id : edge_id;
-    config.expected_peer_id =
-        role == MEISO_SESSION_ROLE_HOST ? edge_id : host_id;
-    config.local_incarnation =
-        role == MEISO_SESSION_ROLE_HOST ? UINT64_C(31) : UINT64_C(41);
+    config.local_peer_id = role == MEISO_SESSION_ROLE_HOST ? host : edge;
+    config.expected_peer_id = role == MEISO_SESSION_ROLE_HOST ? edge : host;
+    config.local_incarnation = role == MEISO_SESSION_ROLE_HOST ? 31U : 41U;
     config.local_nonce = role == MEISO_SESSION_ROLE_HOST ?
-        (MeisoSessionNonce){UINT64_C(0x61), nonce_salt + 1U} :
-        (MeisoSessionNonce){UINT64_C(0x71), nonce_salt + 2U};
+        (MeisoSessionNonce){0x61U, nonce_salt + 1U} :
+        (MeisoSessionNonce){0x71U, nonce_salt + 2U};
     config.protocol = (MeisoProtocolVersion){1U, 0U};
     config.profile.id = (MeisoProfileId){0x81U, 0x82U};
     config.profile.version = 1U;
-    config.limits = (MeisoSessionLimits){4096U, 2048U, 8U};
+    config.limits = (MeisoSessionLimits){8192U, 4096U, 32U};
     return config;
 }
 
-static bool initialize_session(
+static bool init_session(
     TestArena *arena,
     const MeisoSessionConfig *config,
     MeisoSession **out_session
 )
 {
-    const size_t required = meiso_session_memory_required(config);
+    const size_t size = meiso_session_memory_required(config);
 
-    CHECK(required > 0U && required <= sizeof(arena->bytes));
+    CHECK(size != 0U && size <= sizeof(arena->bytes));
     CHECK(meiso_session_init(
-        arena->bytes, required, config, out_session
+        arena->bytes, size, config, out_session
     ) == MEISO_SESSION_INIT_OK);
     return true;
 }
 
-static bool deliver_handshake(MeisoSession *sender, MeisoSession *receiver)
+static bool handshake(MeisoSession *sender, MeisoSession *receiver)
 {
-    uint8_t frame[4096];
+    uint8_t frame[8192];
     MeisoByteView outbound;
     MeisoSessionRuntimeMessage ignored = {0};
 
@@ -123,7 +128,32 @@ static bool deliver_handshake(MeisoSession *sender, MeisoSession *receiver)
     return true;
 }
 
-static bool initialize_pair(RuntimePair *pair, uint64_t nonce_salt)
+static bool init_runtime(
+    TestArena *arena,
+    MeisoSession *session,
+    MeisoRuntime **out_runtime
+)
+{
+    MeisoRuntimeConfig config;
+    size_t size;
+
+    memset(&config, 0, sizeof(config));
+    config.session = session;
+    config.max_endpoints = 4U;
+    config.max_endpoint_history = 8U;
+    config.max_routes = 12U;
+    config.max_capability_bytes = 128U;
+    config.max_desired_profile_bytes_per_endpoint = 128U;
+    config.max_actual_profile_bytes_per_endpoint = 128U;
+    size = meiso_runtime_memory_required(&config);
+    CHECK(size != 0U && size <= sizeof(arena->bytes));
+    CHECK(meiso_runtime_init(
+        arena->bytes, size, &config, out_runtime
+    ) == MEISO_RUNTIME_INIT_OK);
+    return true;
+}
+
+static bool init_pair(RuntimePair *pair, uint64_t nonce_salt)
 {
     MeisoSessionConfig host = session_config(
         MEISO_SESSION_ROLE_HOST, nonce_salt
@@ -131,341 +161,563 @@ static bool initialize_pair(RuntimePair *pair, uint64_t nonce_salt)
     MeisoSessionConfig edge = session_config(
         MEISO_SESSION_ROLE_EDGE, nonce_salt
     );
-    MeisoRuntimeConfig runtime_config;
-    size_t required;
 
     memset(pair, 0, sizeof(*pair));
-    CHECK(initialize_session(
+    CHECK(init_session(
         &pair->host_session_arena, &host, &pair->host_session
     ));
-    CHECK(initialize_session(
+    CHECK(init_session(
         &pair->edge_session_arena, &edge, &pair->edge_session
     ));
     CHECK(meiso_session_start(pair->edge_session) ==
           MEISO_SESSION_START_STARTED);
     CHECK(meiso_session_start(pair->host_session) ==
           MEISO_SESSION_START_STARTED);
-    CHECK(deliver_handshake(pair->host_session, pair->edge_session));
-    CHECK(deliver_handshake(pair->edge_session, pair->host_session));
-    CHECK(deliver_handshake(pair->host_session, pair->edge_session));
-    CHECK(deliver_handshake(pair->edge_session, pair->host_session));
-
-    memset(&runtime_config, 0, sizeof(runtime_config));
-    runtime_config.max_endpoints = 2U;
-    runtime_config.max_routes = 2U;
-    runtime_config.max_capability_bytes = 32U;
-    runtime_config.max_parameter_bytes_per_route = 16U;
-
-    runtime_config.session = pair->host_session;
-    required = meiso_runtime_memory_required(&runtime_config);
-    CHECK(required > 0U && required <= sizeof(pair->host_runtime_arena.bytes));
-    CHECK(meiso_runtime_init(
-        pair->host_runtime_arena.bytes, required, &runtime_config,
+    CHECK(handshake(pair->host_session, pair->edge_session));
+    CHECK(handshake(pair->edge_session, pair->host_session));
+    CHECK(handshake(pair->host_session, pair->edge_session));
+    CHECK(handshake(pair->edge_session, pair->host_session));
+    CHECK(init_runtime(
+        &pair->host_runtime_arena,
+        pair->host_session,
         &pair->host_runtime
-    ) == MEISO_RUNTIME_INIT_OK);
-    runtime_config.session = pair->edge_session;
-    required = meiso_runtime_memory_required(&runtime_config);
-    CHECK(required > 0U && required <= sizeof(pair->edge_runtime_arena.bytes));
-    CHECK(meiso_runtime_init(
-        pair->edge_runtime_arena.bytes, required, &runtime_config,
+    ));
+    CHECK(init_runtime(
+        &pair->edge_runtime_arena,
+        pair->edge_session,
         &pair->edge_runtime
-    ) == MEISO_RUNTIME_INIT_OK);
+    ));
     return true;
 }
 
-static bool receive_session_runtime(
+static bool transfer(
+    RuntimePair *pair,
     MeisoSession *sender,
     MeisoSession *receiver,
-    MeisoSessionRuntimeMessage *out_message
+    MeisoRuntime *receiver_runtime,
+    MeisoRuntimeEvent *event,
+    MeisoRuntimeStatus expected
 )
 {
-    uint8_t frame[4096];
     MeisoByteView outbound;
+    MeisoSessionRuntimeMessage message = {0};
 
     CHECK(meiso_session_next_outbound(sender, &outbound));
-    CHECK(outbound.size <= sizeof(frame));
-    memmove(frame, outbound.data, outbound.size);
+    CHECK(outbound.size <= sizeof(pair->transfer));
+    memmove(pair->transfer, outbound.data, outbound.size);
     CHECK(meiso_session_mark_outbound_sent(sender) ==
           MEISO_SESSION_OUTBOUND_SENT);
     CHECK(meiso_session_receive(
-        receiver, (MeisoByteView){frame, outbound.size}, out_message
+        receiver,
+        (MeisoByteView){pair->transfer, outbound.size},
+        &message
     ) == MEISO_SESSION_RECEIVE_RUNTIME);
+    CHECK(meiso_runtime_receive(receiver_runtime, &message, event) == expected);
     return true;
 }
 
-static bool transfer_runtime(
-    MeisoSession *sender_session,
-    MeisoSession *receiver_session,
-    MeisoRuntime *receiver_runtime,
-    MeisoRuntimeEvent *out_event
-)
-{
-    MeisoSessionRuntimeMessage message = {0};
-
-    CHECK(receive_session_runtime(
-        sender_session, receiver_session, &message
-    ));
-    CHECK(meiso_runtime_receive(
-        receiver_runtime, &message, out_event
-    ) == MEISO_RUNTIME_OK);
-    return true;
-}
-
-static void sensor_catalog(
+static void catalog(
     MeisoRuntimeEndpointDescriptor *endpoint,
-    MeisoRuntimeRouteDescriptor *route
+    MeisoRuntimeRouteDescriptor routes[3]
 )
 {
-    static const uint8_t capability[] = {0xa1U, 0xa2U};
+    static const uint8_t capability[] = {0xa1U, 0xa2U, 0xa3U};
 
     memset(endpoint, 0, sizeof(*endpoint));
-    endpoint->id = SENSOR_ENDPOINT;
-    endpoint->incarnation = 11U;
+    endpoint->id = ENDPOINT;
+    endpoint->incarnation = ENDPOINT_INCARNATION;
     endpoint->capability_schema = CAPABILITY_SCHEMA;
     endpoint->capability = (MeisoByteView){capability, sizeof(capability)};
-
-    memset(route, 0, sizeof(*route));
-    route->endpoint_id = SENSOR_ENDPOINT;
-    route->endpoint_incarnation = 11U;
-    route->resource.id = SENSOR_STREAM;
-    route->resource.kind = MEISO_RESOURCE_KIND_STREAM;
-    route->resource.schema = STREAM_SCHEMA;
-    route->resource.owner = MEISO_OWNER_ROLE_EDGE;
-    route->resource.max_payload_size = 64U;
-    route->selection_schema = SELECTION_SCHEMA;
-    route->max_selection_bytes = 8U;
-    route->delivery = MEISO_RUNTIME_DELIVERY_HOST_SUBSCRIPTION;
+    memset(routes, 0, 3U * sizeof(*routes));
+    routes[0] = (MeisoRuntimeRouteDescriptor){
+        ENDPOINT, ENDPOINT_INCARNATION,
+        {DESIRED_ID, MEISO_RESOURCE_KIND_STATE, DESIRED_SCHEMA,
+         MEISO_OWNER_ROLE_HOST, 64U},
+        MEISO_RUNTIME_FACET_DESIRED
+    };
+    routes[1] = (MeisoRuntimeRouteDescriptor){
+        ENDPOINT, ENDPOINT_INCARNATION,
+        {ACTUAL_ID, MEISO_RESOURCE_KIND_STATE, ACTUAL_SCHEMA,
+         MEISO_OWNER_ROLE_EDGE, 128U},
+        MEISO_RUNTIME_FACET_ACTUAL
+    };
+    routes[2] = (MeisoRuntimeRouteDescriptor){
+        ENDPOINT, ENDPOINT_INCARNATION,
+        {DATA_ID, MEISO_RESOURCE_KIND_STREAM, DATA_SCHEMA,
+         MEISO_OWNER_ROLE_EDGE, 64U},
+        MEISO_RUNTIME_FACET_DATA
+    };
 }
 
-static bool activate_catalog(RuntimePair *pair)
+static bool activate(RuntimePair *pair)
 {
     MeisoRuntimeEndpointDescriptor endpoint;
-    MeisoRuntimeRouteDescriptor route;
+    MeisoRuntimeRouteDescriptor routes[3];
     MeisoRuntimeEvent event;
 
-    sensor_catalog(&endpoint, &route);
+    catalog(&endpoint, routes);
     CHECK(meiso_runtime_offer_catalog(
-        pair->edge_runtime, 1U, &endpoint, 1U, &route, 1U
+        pair->edge_runtime, 1U, &endpoint, 1U, routes, 3U
     ) == MEISO_RUNTIME_OK);
-    CHECK(transfer_runtime(
-        pair->edge_session, pair->host_session, pair->host_runtime, &event
+    CHECK(transfer(
+        pair, pair->edge_session, pair->host_session, pair->host_runtime,
+        &event, MEISO_RUNTIME_OK
     ));
-    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED);
     CHECK(meiso_runtime_accept_catalog(pair->host_runtime) ==
           MEISO_RUNTIME_OK);
-    CHECK(transfer_runtime(
-        pair->host_session, pair->edge_session, pair->edge_runtime, &event
+    CHECK(transfer(
+        pair, pair->host_session, pair->edge_session, pair->edge_runtime,
+        &event, MEISO_RUNTIME_OK
     ));
-    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED);
     return true;
 }
 
-static bool activate_route(RuntimePair *pair)
+static MeisoRuntimeRouteKey route_key(
+    MeisoResourceId resource,
+    MeisoRuntimeFacet facet
+)
 {
-    static const uint8_t requested_rate[] = {60U};
-    MeisoRuntimeSubscriptionDesired desired;
-    MeisoRuntimeSubscriptionActual actual;
-    MeisoRuntimeEvent event;
-
-    memset(&desired, 0, sizeof(desired));
-    desired.request_id = 101U;
-    desired.endpoint_id = SENSOR_ENDPOINT;
-    desired.endpoint_incarnation = 11U;
-    desired.resource_id = SENSOR_STREAM;
-    desired.enabled = true;
-    desired.parameters =
-        (MeisoByteView){requested_rate, sizeof(requested_rate)};
-    CHECK(meiso_runtime_request_subscription(
-        pair->host_runtime, &desired
-    ) == MEISO_RUNTIME_OK);
-    CHECK(transfer_runtime(
-        pair->host_session, pair->edge_session, pair->edge_runtime, &event
-    ));
-    CHECK(event.type == MEISO_RUNTIME_EVENT_SUBSCRIPTION_DESIRED);
-
-    memset(&actual, 0, sizeof(actual));
-    actual.request_id = desired.request_id;
-    actual.endpoint_id = SENSOR_ENDPOINT;
-    actual.endpoint_incarnation = 11U;
-    actual.resource_id = SENSOR_STREAM;
-    actual.status = MEISO_RUNTIME_ACTUAL_ACTIVE;
-    actual.route_epoch = 303U;
-    actual.effective_parameters = desired.parameters;
-    CHECK(meiso_runtime_report_subscription(
-        pair->edge_runtime, &actual
-    ) == MEISO_RUNTIME_OK);
-    CHECK(transfer_runtime(
-        pair->edge_session, pair->host_session, pair->host_runtime, &event
-    ));
-    CHECK(event.type == MEISO_RUNTIME_EVENT_SUBSCRIPTION_ACTUAL);
-    CHECK(event.actual.status == MEISO_RUNTIME_ACTUAL_ACTIVE);
-    return true;
-}
-
-static bool test_session_runtime_stream_chain(void)
-{
-    MEISO_TEST_ARENA_STORAGE RuntimePair pair;
-    MEISO_TEST_ARENA_STORAGE TestArena stream_arena;
-    const uint8_t sensor_payload[] = {0xd1U, 0xd2U, 0xd3U};
-    uint8_t stream_wire[48U + sizeof(sensor_payload)];
-    MeisoOwnerScope producer;
-    MeisoRuntimeRouteDescriptor route;
-    MeisoRuntimeEndpointDescriptor ignored_endpoint;
-    MeisoRuntimeResourceMessage resource;
-    MeisoRuntimeEvent event;
-    MeisoSessionRuntimeMessage runtime_message = {0};
-    MeisoStreamConfig stream_config;
-    MeisoStream *stream = NULL;
-    MeisoStreamSample sample;
-    MeisoStreamSample observed;
-    MeisoStreamReceiveResult result;
-    uint8_t stale_generation_payload[2048];
-    size_t required;
-
-    CHECK(initialize_pair(&pair, 100U));
-    CHECK(activate_catalog(&pair));
-    CHECK(activate_route(&pair));
-    sensor_catalog(&ignored_endpoint, &route);
-
-    memset(&stream_config, 0, sizeof(stream_config));
-    stream_config.ordering = MEISO_STREAM_ORDER_STRICT_MONOTONIC;
-    stream_config.overflow = MEISO_STREAM_OVERFLOW_DROP_OLDEST;
-    stream_config.deadline_policy = MEISO_STREAM_DEADLINE_UNSUPPORTED;
-    stream_config.queue_slots = 2U;
-    stream_config.history_slots = 2U;
-    required = meiso_stream_memory_required(&route.resource, &stream_config);
-    CHECK(required > 0U && required <= sizeof(stream_arena.bytes));
-    CHECK(meiso_stream_init(
-        stream_arena.bytes, required, &route.resource, &stream_config, &stream
-    ) == MEISO_STREAM_INIT_OK);
-    memset(stream_wire, 0, sizeof(stream_wire));
-    stream_wire[0] = MEISO_OWNER_ROLE_EDGE;
-    write_u64_be(stream_wire + 8U, 41U);
-    write_u64_be(stream_wire + 16U, 701U);
-    write_u64_be(stream_wire + 24U, 5U);
-    write_u64_be(stream_wire + 32U, 1U);
-    write_u64_be(stream_wire + 40U, 1000U);
-    memmove(stream_wire + 48U, sensor_payload, sizeof(sensor_payload));
-
-    memset(&resource, 0, sizeof(resource));
-    resource.endpoint_id = SENSOR_ENDPOINT;
-    resource.endpoint_incarnation = 11U;
-    resource.resource_id = SENSOR_STREAM;
-    resource.kind = MEISO_RESOURCE_KIND_STREAM;
-    resource.schema = STREAM_SCHEMA;
-    resource.request_id = 101U;
-    resource.route_epoch = 303U;
-    resource.payload = (MeisoByteView){stream_wire, sizeof(stream_wire)};
-    CHECK(meiso_runtime_send_resource(
-        pair.edge_runtime, &resource
-    ) == MEISO_RUNTIME_OK);
-    CHECK(receive_session_runtime(
-        pair.edge_session, pair.host_session, &runtime_message
-    ));
-    CHECK(runtime_message.payload.size >= MEISO_RUNTIME_WIRE_HEADER_SIZE + 8U);
-    CHECK(runtime_message.payload.size <= sizeof(stale_generation_payload));
-    memmove(
-        stale_generation_payload, runtime_message.payload.data,
-        runtime_message.payload.size
-    );
-    write_u64_be(
-        stale_generation_payload + MEISO_RUNTIME_WIRE_HEADER_SIZE, 2U
-    );
-    runtime_message.payload = (MeisoByteView){
-        stale_generation_payload, runtime_message.payload.size
+    const MeisoRuntimeRouteKey value = {
+        1U, ENDPOINT, ENDPOINT_INCARNATION, resource, facet
     };
-    CHECK(meiso_runtime_receive(
-        pair.host_runtime, &runtime_message, &event
-    ) == MEISO_RUNTIME_STALE_CATALOG);
+    return value;
+}
 
-    CHECK(meiso_runtime_send_resource(
-        pair.edge_runtime, &resource
+static bool init_resources(Resources *resources)
+{
+    MeisoResourceDescriptor desired = descriptor(
+        DESIRED_ID, MEISO_RESOURCE_KIND_STATE, DESIRED_SCHEMA,
+        MEISO_OWNER_ROLE_HOST, 64U
+    );
+    MeisoResourceDescriptor actual = descriptor(
+        ACTUAL_ID, MEISO_RESOURCE_KIND_STATE, ACTUAL_SCHEMA,
+        MEISO_OWNER_ROLE_EDGE, 128U
+    );
+    MeisoResourceDescriptor data = descriptor(
+        DATA_ID, MEISO_RESOURCE_KIND_STREAM, DATA_SCHEMA,
+        MEISO_OWNER_ROLE_EDGE, 64U
+    );
+    const MeisoStateConfig state_config = {
+        MEISO_STATE_DELIVERY_CONVERGENT
+    };
+    const MeisoStreamConfig stream_config = {
+        MEISO_STREAM_ORDER_STRICT_MONOTONIC,
+        MEISO_STREAM_OVERFLOW_DROP_OLDEST,
+        MEISO_STREAM_DEADLINE_UNSUPPORTED,
+        8U,
+        4U,
+        16U
+    };
+    size_t size;
+
+    memset(resources, 0, sizeof(*resources));
+    size = meiso_state_publisher_memory_required(&desired, &state_config);
+    CHECK(size != 0U && size <= sizeof(resources->desired_publisher_arena.bytes));
+    CHECK(meiso_state_publisher_init(
+        resources->desired_publisher_arena.bytes, size, &desired,
+        &state_config, &resources->desired_publisher
+    ) == MEISO_STATE_INIT_OK);
+    size = meiso_state_replica_memory_required(&desired);
+    CHECK(size != 0U && size <= sizeof(resources->desired_replica_arena.bytes));
+    CHECK(meiso_state_replica_init(
+        resources->desired_replica_arena.bytes, size, &desired,
+        &resources->desired_replica
+    ) == MEISO_STATE_INIT_OK);
+    size = meiso_state_publisher_memory_required(&actual, &state_config);
+    CHECK(size != 0U && size <= sizeof(resources->actual_publisher_arena.bytes));
+    CHECK(meiso_state_publisher_init(
+        resources->actual_publisher_arena.bytes, size, &actual,
+        &state_config, &resources->actual_publisher
+    ) == MEISO_STATE_INIT_OK);
+    size = meiso_state_replica_memory_required(&actual);
+    CHECK(size != 0U && size <= sizeof(resources->actual_replica_arena.bytes));
+    CHECK(meiso_state_replica_init(
+        resources->actual_replica_arena.bytes, size, &actual,
+        &resources->actual_replica
+    ) == MEISO_STATE_INIT_OK);
+    size = meiso_stream_memory_required(&data, &stream_config);
+    CHECK(size != 0U && size <= sizeof(resources->stream_arena.bytes));
+    CHECK(meiso_stream_init(
+        resources->stream_arena.bytes, size, &data, &stream_config,
+        &resources->stream
+    ) == MEISO_STREAM_INIT_OK);
+    CHECK(meiso_state_publisher_begin_delivery(
+        resources->desired_publisher, (MeisoDeliveryGeneration){101U}
+    ) == MEISO_STATE_DELIVERY_STARTED);
+    CHECK(meiso_state_publisher_begin_delivery(
+        resources->actual_publisher, (MeisoDeliveryGeneration){202U}
+    ) == MEISO_STATE_DELIVERY_STARTED);
+    CHECK(meiso_state_replica_begin_owner(
+        resources->desired_replica, HOST_OWNER
+    ) == MEISO_STATE_OWNER_STARTED);
+    CHECK(meiso_state_replica_begin_owner(
+        resources->actual_replica, EDGE_OWNER
+    ) == MEISO_STATE_OWNER_STARTED);
+    return true;
+}
+
+static bool deliver_state(
+    RuntimePair *pair,
+    MeisoStatePublisher *publisher,
+    MeisoStateReplica *replica,
+    MeisoRuntime *sender_runtime,
+    MeisoSession *sender_session,
+    MeisoRuntime *receiver_runtime,
+    MeisoSession *receiver_session,
+    MeisoRuntimeRouteKey key,
+    bool actual
+)
+{
+    MeisoStateOffer offer;
+    MeisoRuntimeEvent event;
+    MeisoStateReceiveStatus receive_status;
+
+    CHECK(meiso_state_publisher_next_offer(publisher, &offer));
+    CHECK(meiso_runtime_send_state_offer(
+        sender_runtime, key, &offer
     ) == MEISO_RUNTIME_OK);
-    CHECK(transfer_runtime(
-        pair.edge_session, pair.host_session, pair.host_runtime, &event
+    CHECK(transfer(
+        pair, sender_session, receiver_session, receiver_runtime,
+        &event, MEISO_RUNTIME_OK
     ));
-    CHECK(event.type == MEISO_RUNTIME_EVENT_RESOURCE);
-    CHECK(event.resource.request_id == 101U);
-    CHECK(event.resource.route_epoch == 303U);
-    CHECK(event.resource.payload.size == sizeof(stream_wire));
-    CHECK(event.resource.payload.data[0] == MEISO_OWNER_ROLE_EDGE);
-    CHECK(event.resource.payload.data[1] == 0U);
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    receive_status = meiso_state_replica_receive(
+        replica,
+        event.state_offer.state.owner,
+        event.state_offer.state.version,
+        event.state_offer.state.payload
+    );
+    CHECK(receive_status == MEISO_STATE_RECEIVE_NEW);
+    (void)actual;
+    CHECK(meiso_runtime_commit_state_receive(
+        receiver_runtime, event.route, &event.state_offer, receive_status
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_send_state_accept(
+        receiver_runtime,
+        event.route,
+        event.state_offer.generation,
+        event.state_offer.state.owner,
+        event.state_offer.state.version
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer(
+        pair, receiver_session, sender_session, sender_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT);
+    CHECK(meiso_state_publisher_mark_delivery_accepted(
+        publisher,
+        event.state_accept_generation,
+        event.state_accept_owner,
+        event.state_accept_version
+    ) == MEISO_STATE_ACCEPT_CONFIRMED);
+    return true;
+}
 
-    producer.role = event.resource.payload.data[0];
-    producer.incarnation = read_u64_be(event.resource.payload.data + 8U);
-    CHECK(meiso_stream_begin_producer(
-        stream, producer, read_u64_be(event.resource.payload.data + 16U)
-    ) == MEISO_STREAM_PRODUCER_STARTED);
+static bool publish_desired(
+    Resources *resources,
+    uint64_t version,
+    bool enabled,
+    const uint8_t *profile,
+    size_t profile_size,
+    uint8_t output[64]
+)
+{
+    MeisoRuntimeDesiredState value = {
+        enabled, {profile, profile_size}
+    };
+    MeisoByteView payload;
+
+    CHECK(meiso_runtime_desired_state_encode(
+        &value, (MeisoMutableBuffer){output, 64U}, &payload
+    ));
+    CHECK(meiso_state_publisher_publish(
+        resources->desired_publisher, HOST_OWNER, version, payload
+    ) == MEISO_STATE_PUBLISH_NEW);
+    return true;
+}
+
+static MeisoRuntimeDesiredReference desired_ref(uint64_t version)
+{
+    const MeisoRuntimeDesiredReference value = {true, HOST_OWNER, version};
+    return value;
+}
+
+static bool publish_actual(
+    Resources *resources,
+    uint64_t version,
+    MeisoRuntimeDesiredReference observed,
+    MeisoRuntimeDesiredReference applied,
+    MeisoRuntimeApplyResult result,
+    MeisoRuntimeAvailability availability,
+    bool enabled,
+    MeisoRuntimeProductionStatus production_status,
+    MeisoRuntimeProductionReason reason,
+    uint64_t epoch,
+    uint8_t output[128]
+)
+{
+    MeisoRuntimeActualState value;
+    MeisoByteView payload;
+
+    memset(&value, 0, sizeof(value));
+    value.observed_desired = observed;
+    value.applied_desired = applied;
+    value.apply_result = result;
+    value.availability = availability;
+    value.effective_enabled = enabled;
+    value.production_status = production_status;
+    value.reason = reason;
+    value.production_epoch = epoch;
+    CHECK(meiso_runtime_actual_state_encode(
+        &value, (MeisoMutableBuffer){output, 128U}, &payload
+    ));
+    CHECK(meiso_state_publisher_publish(
+        resources->actual_publisher, EDGE_OWNER, version, payload
+    ) == MEISO_STATE_PUBLISH_NEW);
+    return true;
+}
+
+static MeisoStreamSample stream_sample(
+    uint64_t stream_epoch,
+    uint64_t sequence,
+    const uint8_t *dependency,
+    size_t dependency_size,
+    const uint8_t *payload,
+    size_t payload_size
+)
+{
+    MeisoStreamSample sample;
 
     memset(&sample, 0, sizeof(sample));
-    sample.key.producer = producer;
-    sample.key.epoch = read_u64_be(event.resource.payload.data + 16U);
-    sample.key.sequence = read_u64_be(event.resource.payload.data + 24U);
-    sample.source_time.clock_epoch =
-        read_u64_be(event.resource.payload.data + 32U);
-    sample.source_time.monotonic_ns =
-        read_u64_be(event.resource.payload.data + 40U);
-    sample.payload.data = event.resource.payload.data + 48U;
-    sample.payload.size = event.resource.payload.size - 48U;
-    result = meiso_stream_receive(stream, &sample, NULL);
+    sample.key.producer = EDGE_OWNER;
+    sample.key.epoch = stream_epoch;
+    sample.key.sequence = sequence;
+    sample.source_time = (MeisoTimePoint){9U, sequence * 100U};
+    sample.dependency = (MeisoByteView){dependency, dependency_size};
+    sample.payload = (MeisoByteView){payload, payload_size};
+    return sample;
+}
+
+static bool send_stream(
+    RuntimePair *pair,
+    Resources *resources,
+    uint64_t production_epoch,
+    const MeisoStreamSample *sample,
+    bool reset_producer
+)
+{
+    MeisoRuntimeEvent event;
+    MeisoStreamReceiveResult result;
+
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->edge_runtime,
+        route_key(DATA_ID, MEISO_RUNTIME_FACET_DATA),
+        production_epoch,
+        sample
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer(
+        pair, pair->edge_session, pair->host_session, pair->host_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE);
+    if (reset_producer) {
+        const MeisoStreamProducerStatus producer = meiso_stream_begin_producer(
+            resources->stream,
+            event.stream_sample.key.producer,
+            event.stream_sample.key.epoch
+        );
+        CHECK(producer == MEISO_STREAM_PRODUCER_STARTED ||
+              producer == MEISO_STREAM_PRODUCER_SWITCHED);
+    }
+    result = meiso_stream_receive(resources->stream, &event.stream_sample, NULL);
     CHECK(result.code == MEISO_STREAM_RECEIVE_ACCEPTED);
-    CHECK((result.flags & MEISO_STREAM_RECEIVE_FLAG_GAP) != 0U);
-    CHECK(result.missing_before == 4U);
-    CHECK(meiso_stream_peek(stream, &observed));
-    CHECK(observed.key.sequence == 5U);
-    CHECK(observed.payload.size == sizeof(sensor_payload));
-    CHECK(memcmp(
-        observed.payload.data, sensor_payload, sizeof(sensor_payload)
-    ) == 0);
     return true;
 }
 
-static bool test_new_session_rejects_old_runtime_message(void)
+static bool test_state_stream_integration(void)
 {
-    MEISO_TEST_ARENA_STORAGE RuntimePair first;
-    MEISO_TEST_ARENA_STORAGE RuntimePair second;
-    MeisoRuntimeEndpointDescriptor endpoint;
-    MeisoRuntimeRouteDescriptor route;
-    MeisoSessionRuntimeMessage first_message = {0};
-    MeisoSessionRuntimeMessage copied_message;
-    MeisoRuntimeEvent event;
-    MeisoRuntimeSnapshot snapshot;
-    uint8_t copied_payload[2048];
+    RuntimePair pair;
+    Resources resources;
+    uint8_t desired_bytes[3][64];
+    uint8_t actual_bytes[5][128];
+    const uint8_t rate_low[] = {10U};
+    const uint8_t rate_high[] = {50U, 2U};
+    const uint8_t dependency[] = {0xd1U, 0xd2U};
+    const uint8_t payload[] = {0x41U, 0x42U, 0x43U};
+    MeisoStreamSample sample;
+    MeisoStreamSample observed;
+    MeisoRuntimeProductionSnapshot production;
 
-    CHECK(initialize_pair(&first, 200U));
-    sensor_catalog(&endpoint, &route);
-    CHECK(meiso_runtime_offer_catalog(
-        first.edge_runtime, 1U, &endpoint, 1U, &route, 1U
-    ) == MEISO_RUNTIME_OK);
-    CHECK(receive_session_runtime(
-        first.edge_session, first.host_session, &first_message
+    CHECK(init_pair(&pair, 0U));
+    CHECK(activate(&pair));
+    CHECK(init_resources(&resources));
+
+    CHECK(publish_desired(
+        &resources, 1U, true, rate_low, sizeof(rate_low), desired_bytes[0]
     ));
-    CHECK(first_message.payload.size <= sizeof(copied_payload));
-    memmove(copied_payload, first_message.payload.data, first_message.payload.size);
-    copied_message = first_message;
-    copied_message.payload =
-        (MeisoByteView){copied_payload, first_message.payload.size};
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(publish_actual(
+        &resources, 1U, desired_ref(1U), desired_ref(1U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, 10U, actual_bytes[0]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active && production.production_epoch == 10U);
 
-    CHECK(initialize_pair(&second, 300U));
-    CHECK(meiso_runtime_receive(
-        second.host_runtime, &copied_message, &event
-    ) == MEISO_RUNTIME_STALE_SESSION);
-    CHECK(meiso_runtime_snapshot(second.host_runtime, &snapshot));
-    CHECK(snapshot.core_ready);
-    CHECK(!snapshot.active_catalog_present);
-    CHECK(!snapshot.staged_catalog_present);
+    sample = stream_sample(
+        1U, 1U, dependency, sizeof(dependency), payload, sizeof(payload)
+    );
+    CHECK(send_stream(&pair, &resources, 10U, &sample, true));
+    CHECK(meiso_stream_peek(resources.stream, &observed));
+    CHECK(observed.key.sequence == 1U);
+    CHECK(observed.source_time.monotonic_ns == 100U);
+    CHECK(observed.dependency.size == sizeof(dependency));
+    CHECK(memcmp(
+        observed.payload.data, payload, sizeof(payload)
+    ) == 0);
 
-    CHECK(activate_catalog(&second));
-    CHECK(meiso_runtime_snapshot(second.host_runtime, &snapshot));
-    CHECK(snapshot.active_catalog_present);
-    CHECK(snapshot.active_catalog_generation == 1U);
+    CHECK(publish_desired(
+        &resources, 2U, false, NULL, 0U, desired_bytes[1]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.edge_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active);
+    sample = stream_sample(1U, 2U, NULL, 0U, payload, sizeof(payload));
+    CHECK(send_stream(&pair, &resources, 10U, &sample, false));
+
+    CHECK(publish_actual(
+        &resources, 2U, desired_ref(2U), desired_ref(1U),
+        MEISO_RUNTIME_APPLY_PENDING,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_STOPPING,
+        MEISO_RUNTIME_PRODUCTION_REASON_APPLYING, 10U, actual_bytes[1]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    sample = stream_sample(1U, 3U, NULL, 0U, payload, sizeof(payload));
+    CHECK(send_stream(&pair, &resources, 10U, &sample, false));
+
+    CHECK(publish_actual(
+        &resources, 3U, desired_ref(2U), desired_ref(2U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        false, MEISO_RUNTIME_PRODUCTION_STOPPED,
+        MEISO_RUNTIME_PRODUCTION_REASON_DISABLED, 0U, actual_bytes[2]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(!meiso_runtime_production_snapshot(
+        pair.host_runtime, ENDPOINT, &production
+    ) || !production.data_active);
+    CHECK(meiso_runtime_send_stream_sample(
+        pair.edge_runtime,
+        route_key(DATA_ID, MEISO_RUNTIME_FACET_DATA),
+        10U,
+        &sample
+    ) == MEISO_RUNTIME_ROUTE_NOT_ACTIVE);
+
+    CHECK(publish_desired(
+        &resources, 3U, true, rate_high, sizeof(rate_high), desired_bytes[2]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(publish_actual(
+        &resources, 4U, desired_ref(3U), desired_ref(2U),
+        MEISO_RUNTIME_APPLY_PENDING,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        false, MEISO_RUNTIME_PRODUCTION_STARTING,
+        MEISO_RUNTIME_PRODUCTION_REASON_APPLYING, 0U, actual_bytes[3]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(publish_actual(
+        &resources, 5U, desired_ref(3U), desired_ref(3U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, 11U, actual_bytes[4]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    sample = stream_sample(2U, 1U, NULL, 0U, payload, sizeof(payload));
+    CHECK(meiso_runtime_send_stream_sample(
+        pair.edge_runtime,
+        route_key(DATA_ID, MEISO_RUNTIME_FACET_DATA),
+        10U,
+        &sample
+    ) == MEISO_RUNTIME_PRODUCTION_EPOCH_MISMATCH);
+    CHECK(send_stream(&pair, &resources, 11U, &sample, true));
+    return true;
+}
+
+static bool test_new_session_requires_catalog(void)
+{
+    RuntimePair old_pair;
+    RuntimePair new_pair;
+    MeisoRuntimeProductionSnapshot production;
+
+    CHECK(init_pair(&old_pair, 0U));
+    CHECK(activate(&old_pair));
+    CHECK(meiso_session_close(
+        old_pair.host_session, MEISO_SESSION_CLOSE_NORMAL
+    ) == MEISO_SESSION_CLOSE_QUEUED);
+    CHECK(meiso_runtime_production_snapshot(
+        old_pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_CORE_NOT_READY);
+
+    CHECK(init_pair(&new_pair, 100U));
+    CHECK(meiso_runtime_production_snapshot(
+        new_pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_NO_CATALOG);
     return true;
 }
 
 int main(void)
 {
-    if (!test_session_runtime_stream_chain() ||
-        !test_new_session_rejects_old_runtime_message()) {
+    if (!test_state_stream_integration() ||
+        !test_new_session_requires_catalog()) {
         return 1;
     }
     (void)printf("runtime session integration tests passed\n");

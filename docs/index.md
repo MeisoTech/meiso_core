@@ -22,8 +22,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   conformance 矩阵；这是实现基线，不是产品规范；
 - [Session Core v0](session-core-v0.md)：当前 portable handshake、wire、limits、lifecycle
   与 Runtime-message gate；Runtime catalog/route codec 不属于 Session Core；
-- [Runtime negotiation core v0](runtime-core-v0.md)：上一版 portable 实现记录；其 subscription
-  wire 已被产品契约废止，State/Stream route 替代实现尚待形成新的 executable evidence；
+- [Runtime negotiation core v0](runtime-core-v0.md)：当前 portable State/Stream-driven catalog、
+  bounded endpoint identity history、exact State commit、production gate、source v0 与 wire v2
+  实现/Host evidence；不是产品规范或 target evidence；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator
