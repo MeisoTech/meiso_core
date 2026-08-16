@@ -142,6 +142,10 @@ Edge/Host 随即建立新 Session，并重新完成 catalog、desired、actual�
 normal close，双方 rc=0。这是显式 process restart recovery evidence，不证明自动 reconnect、
 resume、旧 desired/gate 继承、OS/network outage 或长稳。
 
+同日另一次 bounded cadence run 只选择 link+signal，以 100 ms desired 周期连续接收 sequence
+1..64；全部 `gap=false/missing_before=0`，actual 精确确认参数，随后 `STOPPED`、normal close，
+Host/Edge rc=0。这个约 6.4-second 窗口不是 latency/jitter、吞吐、deadline 或长稳 evidence。
+
 Direct IP 是 locator，不是 identity；plain TCP 上的 PeerId/Profile exact check 不是认证、机密性
 或完整性。不存在 subscription：Host 以 desired State 停止生产，已物化样本必须进入 Core
 Stream。完整操作规则与 evidence matrix 见
