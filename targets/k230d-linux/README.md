@@ -54,6 +54,10 @@ close，双方 rc=0；其受限 `BOARD_VERIFIED` 记录见
 [规则书的证据边界](../../docs/wifi-runtime-direct-ip-v0.md#8-证据边界)。plain TCP 的 exact
 PeerId/Profile 匹配仍不是认证、机密性或完整性；SSH/串口只属于部署与维护。
 
+另一次实机 fault run 在 production 中终止 Host；one-shot Edge 观察连接失败并非零退出。
+不重启板或 Wi-Fi，fresh Edge/Host 随即从 Session 与 catalog 重新协商，并完成 5-sample normal
+run。该结果证明显式 process restart recovery，不是自动 reconnect/resume。
+
 ## Earlier four-kind lab endpoint
 
 This target builds the bounded native Edge/Host fixture selected by

@@ -136,6 +136,12 @@ desired v2 disabled、actual STOPPED、normal close 与 requested=received，Hos
 Dashboard 只投影 Host 已校验的脱敏 NDJSON；它不解析 wire、不产生 control，也不提升上述
 `BOARD_VERIFIED` 的协议或 target 范围。
 
+同日的 target fault run 在 actual `RUNNING` 且已交换 10 个 sample 时强制终止 Host；Host 与
+one-shot Edge 均非零退出，Edge 未伪装成 `STOPPED` 或 normal close。板与 Wi-Fi 未重启，fresh
+Edge/Host 随即建立新 Session，并重新完成 catalog、desired、actual、5 个 sample、`STOPPED` 与
+normal close，双方 rc=0。这是显式 process restart recovery evidence，不证明自动 reconnect、
+resume、旧 desired/gate 继承、OS/network outage 或长稳。
+
 Direct IP 是 locator，不是 identity；plain TCP 上的 PeerId/Profile exact check 不是认证、机密性
 或完整性。不存在 subscription：Host 以 desired State 停止生产，已物化样本必须进入 Core
 Stream。完整操作规则与 evidence matrix 见

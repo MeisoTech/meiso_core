@@ -170,6 +170,7 @@ python3 devtools/web/wifi_runtime_dashboard/server.py \
 | K230D Linux Edge exact-current-source cross-build | `2ac960c`、Xuantie GCC 14.1.1、91,128-byte RISC-V ELF、SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a2b76f6` | board run、source truth、network interoperability |
 | K230D direct-IP Runtime run，2026-08-16 | K230D Buildroot Linux 6.6.36 与 macOS 完成两轮 READY、catalog、enable/RUNNING、连续 sample、disable/STOPPED、normal close；双方均 rc=0；限这两个 one-shot 参数组合的 `BOARD_VERIFIED` | 长稳、性能、network-loss、reconnect、hotplug、continuity-loss recovery、安全 transport |
 | loopback Dashboard + 正式 Host + K230D，2026-08-16 | 页面完整投影第三次 3-sample 实机 transcript；requested=received、Host/Edge rc=0、normal close，locator/identity/network secrets 未进入浏览器 | Dashboard 自身提供协议正确性、远端控制、产品 SDK 或额外 target 能力 |
+| K230D connection-loss + fresh process recovery，2026-08-16 | `RUNNING`/10 samples 后强制终止 Host，Host 与 Edge 均非零退出；不重启板、不改 Wi-Fi，fresh Edge/Host 重新完成 Session、catalog、desired、actual、5 samples 与 normal close，双方 rc=0 | 自动 reconnect/resume、旧 desired/gate 继承、OS/network outage、failure reason 跨进程持久化或 soak |
 
 本次板测的脱敏 transcript 为：catalog generation 1，1 endpoint/3 routes；Host desired v1 选择
 6 个字段、500 ms、enabled；Edge actual v1 `RUNNING`；Stream sequence 1..5、五次 present mask
@@ -180,6 +181,12 @@ disable、`STOPPED`、normal close。它直接证明 producer 的字段形状与
 State 协商，而不是 source 固定产出后再按“订阅”丢弃。
 adapter 直接观测到 wireless sysfs、carrier、signal 与累计 counters；公开 evidence 不保存实际
 locator、SSID、MAC、PeerId、credential、原始 counter 值或原始日志。
+
+随后 fault run 在 actual `RUNNING` 且已交换 10 个 sample 时强制终止 Host。Host 返回非零；Edge
+观察连接失败、停止 one-shot attempt 并返回非零，没有发布 `STOPPED` 或 normal close。板与 Wi-Fi
+均未重启，fresh Edge 进程与 fresh Host 随即建立新 Session，并从 catalog/desired/actual 重新
+协商；5 个新 sample 后 `STOPPED`、normal close，双方 rc=0。该结果只证明显式 process restart
+recovery；当前 target 仍没有自动 reconnect/resume。
 
 早期 `four-kind-lab-v0` 的 Wi-Fi/板端结果不经过当前 `meiso_runtime` catalog/desired/actual，
 不能提升本切片的 evidence 等级。后续 fault/soak 板测仍必须记录 exact source/binary identity、
