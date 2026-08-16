@@ -165,7 +165,7 @@ python3 devtools/web/wifi_runtime_dashboard/server.py \
 
 | 证据 | 当前可声明 | 不能声明 |
 |---|---|---|
-| `meiso_wifi_runtime_tcp_test`，本机真实 `AF_INET` loopback | Session + Runtime v2 + Profile + Core State/Stream 的 synthetic direct-IP 路径 | remote network、K230D、真实 Linux Wi-Fi source |
+| `meiso_wifi_runtime_tcp_test`，本机真实 `AF_INET` loopback | Session + Runtime v2 + Profile + Core State/Stream；RST 后旧 Session/gate/epoch 失效，新连接必须重新 catalog、desired、actual 后才恢复 Stream | remote network、K230D、真实 Linux Wi-Fi source |
 | macOS `meiso_wifi_runtime_host` warnings-as-errors build | Dev Tool 与当前公共接口可编译链接 | 与 Edge 互操作、SDK/Virtual Edge、板端执行 |
 | K230D Linux Edge exact-current-source cross-build | `2ac960c`、Xuantie GCC 14.1.1、91,128-byte RISC-V ELF、SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a2b76f6` | board run、source truth、network interoperability |
 | K230D direct-IP Runtime run，2026-08-16 | K230D Buildroot Linux 6.6.36 与 macOS 完成两轮 READY、catalog、enable/RUNNING、连续 sample、disable/STOPPED、normal close；双方均 rc=0；限这两个 one-shot 参数组合的 `BOARD_VERIFIED` | 长稳、性能、network-loss、reconnect、hotplug、continuity-loss recovery、安全 transport |

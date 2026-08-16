@@ -107,6 +107,13 @@ Runtime wire v2、Core State/Stream 与 POSIX adapter。真实本机 `AF_INET` �
 disable cut、actual STOPPED、unsupported desired 和新 Session 不继承 gate/actual；它使用
 synthetic telemetry，不证明 remote network、Linux sysfs 或 K230D。
 
+同一测试另在 `RUNNING` 与首个 sample 后以真实 TCP RST 终止连接：两端 Session 均进入
+`FAILED/TRANSPORT_LOST`，旧 Runtime route 与 production epoch 失效；fresh fixture 不替 Host
+自动重发 desired。
+新 `AF_INET` 连接必须重新完成 Session、catalog、desired 与 actual；旧 epoch 被拒绝，只有新
+production epoch 的 sample 才重新进入 Core Stream。该向量仍是本机 synthetic carrier evidence，
+不是 K230D network-loss 或 reconnect target evidence。
+
 macOS Host foreground Dev Tool 从私有配置读取 numeric IPv4 locator、local/expected PeerId 与
 desired，只按 accepted Profile 输出 allowlisted NDJSON；它已通过 warnings-as-errors build，
 但不是 SDK/Virtual Edge。K230D Linux Edge target 从私有
