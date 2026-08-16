@@ -39,8 +39,9 @@ unavailable 或计数器回退表示 continuity 丢失：Edge 停止新采样与
 再以 `SHUTDOWN` 关闭 Session；恢复须由新进程、新 identity 和完整重协商完成。
 
 当前已有本机真实 `AF_INET` synthetic Runtime test、macOS Host build、K230D exact-source
-cross-build，以及一次真实 direct-IP K230D board run。该 run 完成 catalog、enable/RUNNING、
-5 个连续 sample、disable/STOPPED 和 normal close，双方 rc=0；其受限 `BOARD_VERIFIED` 记录见
+cross-build，以及两次真实 direct-IP K230D board run。两组 desired 分别验证 6 fields/500 ms
+与 link+signal/1000 ms，均完成 catalog、enable/RUNNING、连续 sample、disable/STOPPED 和 normal
+close，双方 rc=0；其受限 `BOARD_VERIFIED` 记录见
 [规则书的证据边界](../../docs/wifi-runtime-direct-ip-v0.md#8-证据边界)。plain TCP 的 exact
 PeerId/Profile 匹配仍不是认证、机密性或完整性；SSH/串口只属于部署与维护。
 

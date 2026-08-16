@@ -117,9 +117,11 @@ interface/rate/field envelope 与 Linux probe 交集生成 catalog；production 
 RISC-V ELF（SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a2b76f6`），
 并在 K230D Buildroot Linux 6.6.36 上与 macOS Host 完成一次真实 Wi-Fi direct-IP 运行。双方
 依次得到 Core READY、1 endpoint/3 route catalog accept、desired v1 enable、actual RUNNING、
-5 个连续且无 gap 的真实匿名 Wi-Fi sample、desired v2 disable、actual STOPPED 与 normal close，
-双方 rc=0。公开摘要不保留 locator、SSID、MAC、PeerId、凭据或原始 counters。该结果可标
-`BOARD_VERIFIED`，但只覆盖这一个手动 one-shot Profile/配置与上述 transcript。
+真实匿名 Wi-Fi sample、desired v2 disable、actual STOPPED 与 normal close，双方 rc=0。第一轮
+选择 6 fields/500 ms 并收到 5 个连续无 gap 样本；第二轮只选择 link+signal/1000 ms 并收到
+3 个连续样本，其他字段保持 absent，证明 desired/actual 确实改变 producer 的字段形状与 cadence。
+公开摘要不保留 locator、SSID、MAC、PeerId、凭据或原始 counters。该结果可标
+`BOARD_VERIFIED`，但只覆盖这两个手动 one-shot 参数组合与上述 transcript。
 
 Direct IP 是 locator，不是 identity；plain TCP 上的 PeerId/Profile exact check 不是认证、机密性
 或完整性。不存在 subscription：Host 以 desired State 停止生产，已物化样本必须进入 Core
