@@ -11,6 +11,8 @@ logs/
 
 # Local builds and generated previews
 /build/
+__pycache__/
+*.py[cod]
 
 # Local secrets
 .env

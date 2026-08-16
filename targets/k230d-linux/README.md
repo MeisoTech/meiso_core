@@ -33,6 +33,15 @@ cmake --build build --target meiso_wifi_runtime_host
 ./build/meiso_wifi_runtime_host --config /path/to/ignored/host.local.conf
 ```
 
+需要本地页面复核时，可用 loopback-only Dashboard 启动同一 Host；它只显示脱敏结果，不新增
+Runtime control：
+
+```sh
+python3 devtools/web/wifi_runtime_dashboard/server.py \
+  --host-binary /absolute/path/to/meiso_wifi_runtime_host \
+  --config /absolute/path/to/ignored/host.local.conf
+```
+
 Edge 只读取配置 interface 的 carrier/operstate、`/proc/net/wireless` signal 与八个累计计数；
 interface/SSID/BSSID/MAC/IP/channel/driver path 不进入公开 payload。production 后 source
 unavailable 或计数器回退表示 continuity 丢失：Edge 停止新采样与新 control，排空已有 outbound，

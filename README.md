@@ -43,6 +43,9 @@ READY、catalog、Host desired State、Edge actual State、production gate 与 C
 Host Dev Tool 和 K230D Linux Edge target 使用 numeric direct-IP 私有配置；同一路径已在
 K230D Linux 与 macOS 间完成一次受控板测。构建、运行与严格证据边界见
 [Direct-IP Wi-Fi Runtime v0 实装规则书](docs/wifi-runtime-direct-ip-v0.md)。
+同一正式 Host 可由 loopback-only
+[Wi-Fi Runtime dashboard](devtools/web/wifi_runtime_dashboard/README.md) 启动并可视化；页面只投影
+Host 已校验的脱敏事件，不实现 wire、Runtime control、SDK 或第二套协议判定。
 
 这套实现仍不是 application-facing 完整产品 Runtime 或产品系统；它不包含 endpoint
 facet/direction/QoS/permission schema、真实 probe/hotplug adapter、typed dispatcher、Virtual
@@ -74,6 +77,7 @@ ctest --preset windows-msvc-debug
 - [Runtime negotiation core v0 实现契约](docs/runtime-core-v0.md)
 - [Wi-Fi telemetry Profile v0](profiles/wifi-telemetry-v0/README.md)
 - [Direct-IP Wi-Fi Runtime v0 实装规则书](docs/wifi-runtime-direct-ip-v0.md)
+- [Wi-Fi Runtime dashboard](devtools/web/wifi_runtime_dashboard/README.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)

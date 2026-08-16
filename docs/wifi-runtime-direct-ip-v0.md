@@ -34,6 +34,7 @@ Direct IP 只是当前 bootstrap/transport 选择，不进入 Core identity，�
 | `targets/k230d-linux/wifi_linux_adapter.*` | Edge private adapter | 私有 interface locator 到匿名 Linux telemetry 的映射 |
 | `targets/k230d-linux/wifi_runtime_edge.c` | Edge target | listen、catalog、desired apply、actual、production 与 shutdown policy |
 | `devtools/macos/wifi_runtime_host.c` | Host Dev Tool | 可执行联调客户端；不是 Host SDK、Virtual Edge 或应用 API |
+| `devtools/web/wifi_runtime_dashboard/` | 可视化 Dev Tool | 以固定 argv 启动 Host，仅投影脱敏 NDJSON；不解析 wire、不发送额外 control |
 
 Host 产品代码只应依赖未来 SDK/Virtual Edge 与公开 Profile，不应依赖上述 Dev Tool 的 CLI、
 NDJSON、地址字段、poll loop 或 K230D adapter。
@@ -147,6 +148,19 @@ cp targets/k230d-linux/wifi_runtime_edge.example.conf /path/to/ignored/edge.loca
 合法 sample、actual STOPPED 与 normal close；Edge 同时正常退出。任一侧单独返回成功、socket
 connect、SSH 可达或 cross-build 成功都不能替代这条 target transcript。
 
+需要页面检查时，保持 Edge foreground attempt 运行，再启动 loopback-only Dashboard：
+
+```sh
+python3 devtools/web/wifi_runtime_dashboard/server.py \
+  --host-binary /absolute/path/to/meiso_wifi_runtime_host \
+  --config /absolute/path/to/ignored/host.local.conf
+```
+
+浏览器只连接打印出的 `127.0.0.1` 随机端口。页面的 `COMPLETE` 必须同时满足 Host 请求/接收
+计数相等、normal transcript 完成且子进程 `rc=0`；timeout、非法输出、缺少 completion 或非零
+退出均显示失败。该页面是 evidence presentation，不产生 desired、subscription 或其他 Runtime
+控制；完整边界见其 [README](../devtools/web/wifi_runtime_dashboard/README.md)。
+
 ## 8. 证据边界
 
 | 证据 | 当前可声明 | 不能声明 |
@@ -155,6 +169,7 @@ connect、SSH 可达或 cross-build 成功都不能替代这条 target transcrip
 | macOS `meiso_wifi_runtime_host` warnings-as-errors build | Dev Tool 与当前公共接口可编译链接 | 与 Edge 互操作、SDK/Virtual Edge、板端执行 |
 | K230D Linux Edge exact-current-source cross-build | `2ac960c`、Xuantie GCC 14.1.1、91,128-byte RISC-V ELF、SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a2b76f6` | board run、source truth、network interoperability |
 | K230D direct-IP Runtime run，2026-08-16 | K230D Buildroot Linux 6.6.36 与 macOS 完成两轮 READY、catalog、enable/RUNNING、连续 sample、disable/STOPPED、normal close；双方均 rc=0；限这两个 one-shot 参数组合的 `BOARD_VERIFIED` | 长稳、性能、network-loss、reconnect、hotplug、continuity-loss recovery、安全 transport |
+| loopback Dashboard + 正式 Host + K230D，2026-08-16 | 页面完整投影第三次 3-sample 实机 transcript；requested=received、Host/Edge rc=0、normal close，locator/identity/network secrets 未进入浏览器 | Dashboard 自身提供协议正确性、远端控制、产品 SDK 或额外 target 能力 |
 
 本次板测的脱敏 transcript 为：catalog generation 1，1 endpoint/3 routes；Host desired v1 选择
 6 个字段、500 ms、enabled；Edge actual v1 `RUNNING`；Stream sequence 1..5、五次 present mask

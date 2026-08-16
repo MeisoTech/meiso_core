@@ -123,6 +123,12 @@ RISC-V ELF（SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a
 公开摘要不保留 locator、SSID、MAC、PeerId、凭据或原始 counters。该结果可标
 `BOARD_VERIFIED`，但只覆盖这两个手动 one-shot 参数组合与上述 transcript。
 
+同日，loopback-only Wi-Fi Runtime Dashboard 以固定 argv 启动同一正式 Host，再完成一轮
+3-sample K230D transcript；页面显示 catalog accepted、desired v1、actual RUNNING、连续 sample、
+desired v2 disabled、actual STOPPED、normal close 与 requested=received，Host/Edge 均 rc=0。
+Dashboard 只投影 Host 已校验的脱敏 NDJSON；它不解析 wire、不产生 control，也不提升上述
+`BOARD_VERIFIED` 的协议或 target 范围。
+
 Direct IP 是 locator，不是 identity；plain TCP 上的 PeerId/Profile exact check 不是认证、机密性
 或完整性。不存在 subscription：Host 以 desired State 停止生产，已物化样本必须进入 Core
 Stream。完整操作规则与 evidence matrix 见

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="meiso-csrf" content="__MEISO_CSRF_TOKEN__">
+    <title>Meiso Wi‑Fi Runtime</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">MEISO DEV TOOL · LOOPBACK ONLY</p>
+        <h1>Wi‑Fi Runtime 实机链路</h1>
+        <p class="subtitle">Core Session → Runtime catalog → desired / actual → production gate → Stream</p>
+      </div>
+      <div class="header-badges">
+        <span id="run-status" class="badge neutral">NOT RUN</span>
+        <span class="badge neutral">IDENTITY / LOCATOR REDACTED</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="start-panel">
+        <div>
+          <strong>运行固定的 meiso_wifi_runtime_host</strong>
+          <p>Host 自己发布 disable desired 并 normal close；本页不发送 Runtime control。</p>
+        </div>
+        <button id="start" type="button">Start one run</button>
+        <p id="request-error" class="error" role="alert"></p>
+      </section>
+
+      <section class="grid connection-grid" aria-label="连接与目录">
+        <article class="card">
+          <div class="card-title"><h2>Bootstrap / Session</h2><span id="session-status" class="badge neutral">WAITING</span></div>
+          <dl>
+            <div><dt>Transport</dt><dd id="bootstrap-status">—</dd></div>
+            <div><dt>Expected identity</dt><dd id="identity-match">—</dd></div>
+            <div><dt>Frame / Runtime bytes</dt><dd id="session-limits">—</dd></div>
+            <div><dt>Close</dt><dd id="session-close">—</dd></div>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-title"><h2>Runtime catalog</h2><span id="catalog-status" class="badge neutral">WAITING</span></div>
+          <dl>
+            <div><dt>Generation</dt><dd id="catalog-generation">—</dd></div>
+            <div><dt>Endpoint / routes</dt><dd id="catalog-shape">—</dd></div>
+            <div><dt>Supported fields</dt><dd id="capability-fields">—</dd></div>
+            <div><dt>Period envelope</dt><dd id="capability-period">—</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="section-heading">
+        <div><p class="eyebrow">STATE-DRIVEN NEGOTIATION</p><h2>意图、事实与数据门</h2></div>
+        <p>desired 是 Host 意图；actual 是 Edge 最终事实。两者都是 Core State。</p>
+      </section>
+      <section class="grid state-grid">
+        <article class="card desired-card">
+          <div class="card-title"><div><p class="kind">HOST → EDGE · DESIRED STATE</p><h2>Host intent</h2></div><span id="desired-status" class="badge neutral">WAITING</span></div>
+          <dl>
+            <div><dt>Version</dt><dd id="desired-version">—</dd></div>
+            <div><dt>Enabled</dt><dd id="desired-enabled">—</dd></div>
+            <div><dt>Selected fields</dt><dd id="desired-fields">—</dd></div>
+            <div><dt>Period</dt><dd id="desired-period">—</dd></div>
+            <div><dt>Delivery accepted</dt><dd id="desired-delivery">—</dd></div>
+          </dl>
+        </article>
+
+        <article class="card actual-card">
+          <div class="card-title"><div><p class="kind">EDGE → HOST · ACTUAL STATE</p><h2>Edge authority</h2></div><span id="actual-status" class="badge neutral">WAITING</span></div>
+          <dl>
+            <div><dt>State version</dt><dd id="actual-version">—</dd></div>
+            <div><dt>Apply result</dt><dd id="actual-apply">—</dd></div>
+            <div><dt>Effective enabled</dt><dd id="actual-enabled">—</dd></div>
+            <div><dt>Effective fields</dt><dd id="actual-fields">—</dd></div>
+            <div><dt>Effective period</dt><dd id="actual-period">—</dd></div>
+          </dl>
+        </article>
+
+        <article id="gate-card" class="card gate-card">
+          <div class="card-title"><div><p class="kind">RUNTIME</p><h2>Production gate</h2></div><span id="gate-status" class="badge neutral">UNKNOWN</span></div>
+          <p id="gate-copy" class="gate-copy">等待 Edge actual State。</p>
+          <p class="note">Gate 只由已提交的 actual 控制；它不是 subscription。</p>
+        </article>
+      </section>
+
+      <section class="section-heading">
+        <div><p class="eyebrow">CORE STREAM</p><h2>最新 Wi‑Fi telemetry sample</h2></div>
+        <p id="sample-context">等待 active actual effective 参数。</p>
+      </section>
+      <section class="card sample-card">
+        <div class="sample-head">
+          <div><span class="label">Sequence</span><strong id="sample-sequence">—</strong></div>
+          <div><span class="label">Gap</span><strong id="sample-gap">—</strong></div>
+          <div><span class="label">Link</span><strong id="sample-link">—</strong></div>
+          <div><span class="label">Signal</span><strong id="sample-signal">—</strong></div>
+        </div>
+        <div class="counter-grid">
+          <div><span>RX bytes</span><strong id="rx-bytes">—</strong></div>
+          <div><span>TX bytes</span><strong id="tx-bytes">—</strong></div>
+          <div><span>RX packets</span><strong id="rx-packets">—</strong></div>
+          <div><span>TX packets</span><strong id="tx-packets">—</strong></div>
+          <div><span>RX dropped</span><strong id="rx-dropped">—</strong></div>
+          <div><span>TX dropped</span><strong id="tx-dropped">—</strong></div>
+          <div><span>RX errors</span><strong id="rx-errors">—</strong></div>
+          <div><span>TX errors</span><strong id="tx-errors">—</strong></div>
+        </div>
+        <p class="note">JSON null 表示本次未提供，页面保持 unavailable；绝不补 0。</p>
+      </section>
+
+      <section class="grid lower-grid">
+        <article class="card">
+          <div class="card-title"><h2>Run result</h2><span id="result-status" class="badge neutral">WAITING</span></div>
+          <dl>
+            <div><dt>Requested</dt><dd id="run-requested">—</dd></div>
+            <div><dt>Received</dt><dd id="run-received">—</dd></div>
+            <div><dt>Failure stage</dt><dd id="failure-stage">—</dd></div>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-title"><h2>Sanitized Host events</h2><span id="event-count" class="badge neutral">0</span></div>
+          <div id="event-log" class="event-log" role="log" aria-live="polite"></div>
+        </article>
+      </section>
+    </main>
+    <footer>Dev Tool only · no locator, full identity, SSID, MAC or credentials enter the browser</footer>
+  </body>
+</html>
