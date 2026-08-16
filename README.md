@@ -65,6 +65,7 @@ ctest --preset windows-msvc-debug
 - [Link 契约](docs/link.md)
 - [Session Core v0 实现契约](docs/session-core-v0.md)
 - [Runtime negotiation core v0 实现契约](docs/runtime-core-v0.md)
+- [Wi-Fi telemetry Profile v0](profiles/wifi-telemetry-v0/README.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)

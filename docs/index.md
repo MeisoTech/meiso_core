@@ -25,6 +25,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [Runtime negotiation core v0](runtime-core-v0.md)：当前 portable State/Stream-driven catalog、
   bounded endpoint identity history、exact State commit、production gate、source v0 与 wire v2
   实现/Host evidence；不是产品规范或 target evidence；
+- [Wi-Fi telemetry Profile v0](../profiles/wifi-telemetry-v0/README.md)：首个版本化 endpoint
+  Profile；固定 capability、Host desired、Edge actual 与匿名 Stream sample schema；当前仅有
+  codec/Host vectors，不代表 K230D adapter 或 direct-IP evidence；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator

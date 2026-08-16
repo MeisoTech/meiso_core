@@ -60,6 +60,17 @@ target_link_libraries(meiso_runtime PUBLIC meiso_core)
 meiso_enable_warnings(meiso_runtime)
 
 add_library(
+    meiso_wifi_telemetry_profile
+    profiles/wifi-telemetry-v0/wifi_telemetry.c
+)
+target_include_directories(
+    meiso_wifi_telemetry_profile
+    PUBLIC profiles/wifi-telemetry-v0
+)
+target_link_libraries(meiso_wifi_telemetry_profile PUBLIC meiso_runtime)
+meiso_enable_warnings(meiso_wifi_telemetry_profile)
+
+add_library(
     meiso_four_kind_lab_protocol
     profiles/four-kind-lab-v0/lab_protocol.c
 )
@@ -156,6 +167,16 @@ target_link_libraries(meiso_runtime_wire_test PRIVATE meiso_runtime)
 meiso_enable_warnings(meiso_runtime_wire_test)
 
 add_executable(
+    meiso_wifi_telemetry_profile_test
+    tests/test_wifi_telemetry_profile.c
+)
+target_link_libraries(
+    meiso_wifi_telemetry_profile_test
+    PRIVATE meiso_wifi_telemetry_profile
+)
+meiso_enable_warnings(meiso_wifi_telemetry_profile_test)
+
+add_executable(
     meiso_four_kind_lab_protocol_test
     tests/test_four_kind_lab_protocol.c
 )
@@ -241,6 +262,10 @@ add_test(NAME meiso_session_four_kind_test COMMAND meiso_session_four_kind_test)
 add_test(NAME meiso_runtime_test COMMAND meiso_runtime_test)
 add_test(NAME meiso_runtime_session_test COMMAND meiso_runtime_session_test)
 add_test(NAME meiso_runtime_wire_test COMMAND meiso_runtime_wire_test)
+add_test(
+    NAME meiso_wifi_telemetry_profile_test
+    COMMAND meiso_wifi_telemetry_profile_test
+)
 add_test(
     NAME meiso_four_kind_lab_protocol_test
     COMMAND meiso_four_kind_lab_protocol_test
