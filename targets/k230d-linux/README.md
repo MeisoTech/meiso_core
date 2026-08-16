@@ -1,4 +1,50 @@
-# K230D Linux four-kind lab endpoint
+# K230D Linux targets
+
+## Wi-Fi Runtime Edge v0
+
+当前正式 Runtime target 是
+[`wifi-telemetry-v0`](../../profiles/wifi-telemetry-v0/README.md) 的 one-shot Linux Edge。
+它以 numeric direct-IP 接受一个 Host Session，从私有 config 与 Linux Wi-Fi probe 的交集生成
+catalog，再执行 `desired State -> actual State -> production gate -> data Stream`。不存在
+subscription；一旦 sample 越过 adapter materialization boundary，就必须进入 Runtime/Core。
+完整 locator/identity、lifecycle、Host 联调和 evidence 规则见
+[Direct-IP Wi-Fi Runtime v0 实装规则书](../../docs/wifi-runtime-direct-ip-v0.md)。
+
+用 Canaan/Xuantie glibc compiler 交叉构建；compiler path 只在调用时提供：
+
+```sh
+MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
+  targets/k230d-linux/build_wifi_runtime_edge.sh /tmp/meiso_wifi_runtime_edge-k230d
+```
+
+把 [`wifi_runtime_edge.example.conf`](wifi_runtime_edge.example.conf) 复制到 ignored local path，
+替换 numeric listen locator、synthetic PeerId 和私有 interface；不得提交部署值或凭据。然后在
+K230D Linux 上启动一个 foreground attempt：
+
+```sh
+./meiso_wifi_runtime_edge-k230d --config /path/to/ignored/edge.local.conf
+```
+
+macOS 对端是 Dev Tool，不是 SDK：
+
+```sh
+cmake -S . -B build
+cmake --build build --target meiso_wifi_runtime_host
+./build/meiso_wifi_runtime_host --config /path/to/ignored/host.local.conf
+```
+
+Edge 只读取配置 interface 的 carrier/operstate、`/proc/net/wireless` signal 与八个累计计数；
+interface/SSID/BSSID/MAC/IP/channel/driver path 不进入公开 payload。production 后 source
+unavailable 或计数器回退表示 continuity 丢失：Edge 停止新采样与新 control，排空已有 outbound，
+再以 `SHUTDOWN` 关闭 Session；恢复须由新进程、新 identity 和完整重协商完成。
+
+当前已有本机真实 `AF_INET` synthetic Runtime test、macOS Host build、K230D exact-source
+cross-build，以及一次真实 direct-IP K230D board run。该 run 完成 catalog、enable/RUNNING、
+5 个连续 sample、disable/STOPPED 和 normal close，双方 rc=0；其受限 `BOARD_VERIFIED` 记录见
+[规则书的证据边界](../../docs/wifi-runtime-direct-ip-v0.md#8-证据边界)。plain TCP 的 exact
+PeerId/Profile 匹配仍不是认证、机密性或完整性；SSH/串口只属于部署与维护。
+
+## Earlier four-kind lab endpoint
 
 This target builds the bounded native Edge/Host fixture selected by
 [`four-kind-lab-v0`](../../profiles/four-kind-lab-v0/README.md). It is a manual lab executable, not

@@ -86,15 +86,17 @@ macOS 重现的 Host evidence 与它真正要声明的 Edge evidence。一个 mi
 Session Core 已有 Host semantic/wire evidence；POSIX adapter 只有指定 macOS loopback
 transport evidence。[Runtime negotiation core v0](runtime-core-v0.md) 已冻结 bounded catalog、
 endpoint-incarnation history、Core State desired/actual exact commit、production gate、Core
-Stream data 与 wire v2，并以真实 Session 和 State/Stream primitive 建立 Host evidence。后续
-主线是：
+Stream data 与 wire v2，并以真实 Session 和 State/Stream primitive 建立 Host evidence。
+当前选择的 [`wifi-telemetry-v0`](../profiles/wifi-telemetry-v0/README.md) 已固定 capability、
+desired/effective 参数与匿名 sample；K230D Linux target 以私有配置与 Linux probe 的交集发布
+catalog，macOS Host Dev Tool 只依赖相同 Profile。两端的 precise locator/config、无 subscription
+控制序列、构建方法和 evidence gate 见
+[Direct-IP Wi-Fi Runtime v0 实装规则书](wifi-runtime-direct-ip-v0.md)。
 
-1. 以版本化 Profile 固定一个 endpoint 的 capability、desired/effective 参数与 sample schema；
-2. 在 K230D Linux Edge 侧把私有配置与 adapter probe 映射成 catalog，不把板级字段泄漏给
-   Host；
-3. 接入一个真实 endpoint adapter，并让 macOS Host fixture 只依赖相同 catalog/schema；
-4. 经 direct-IP transport 完成 target Session/Runtime evidence；
-5. 再验证插拔、catalog update、network loss、新 Session 重协商和资源耗尽。
+本机真实 `AF_INET` synthetic test 与 Host build 不能替代 target run。当前 exact-source K230D
+cross-build 与一次真实 direct-IP `catalog→desired→actual→sample→disable→STOPPED` transcript
+已经完成；证据只覆盖该手动 one-shot 配置。后续分别验证 network loss、new Session、catalog
+update、hotplug、资源耗尽与长期行为。
 
 旧 four-kind lab 是固定顺序 evidence，不是正式 Runtime。TCP、认证、K230D、真实 endpoint
 和 SDK 只能按各自实测声明；Host semantic/wire 测试不证明 network、security 或 target。

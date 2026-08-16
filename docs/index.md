@@ -26,8 +26,10 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   bounded endpoint identity history、exact State commit、production gate、source v0 与 wire v2
   实现/Host evidence；不是产品规范或 target evidence；
 - [Wi-Fi telemetry Profile v0](../profiles/wifi-telemetry-v0/README.md)：首个版本化 endpoint
-  Profile；固定 capability、Host desired、Edge actual 与匿名 Stream sample schema；当前仅有
-  codec/Host vectors，不代表 K230D adapter 或 direct-IP evidence；
+  Profile；固定 capability、Host desired、Edge actual 与匿名 Stream sample schema；
+- [Direct-IP Wi-Fi Runtime v0 实装规则书](wifi-runtime-direct-ip-v0.md)：该 Profile 在 macOS
+  Host Dev Tool 与 K230D Linux Edge target 上的 locator/config、catalog/State/Stream 顺序、
+  lifecycle、操作步骤与严格 evidence 边界；不是产品规范；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator
@@ -39,7 +41,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 实验契约；不是产品 Profile；
-- [K230D Linux lab endpoint](../targets/k230d-linux/README.md)：板端/Host 同源手动 fixture；
+- [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与早期
+  four-kind 手动 fixture；两者 evidence 不互换；
 - [本地实验面板](../devtools/web/four_kind_dashboard/README.md)：macOS 上的脱敏可视化 Dev Tool，
   不实现 wire，也不属于 SDK。
 

@@ -147,9 +147,10 @@ connected-stream adapter，并在 macOS `AF_INET` loopback TCP 上通过 bounded
 failure 与双向 payload 测试。当前 portable `meiso_runtime` 已实现 READY Session 绑定、原子
 catalog、bounded endpoint-incarnation history、Core State desired/actual exact commit gate 与
 Core Stream data route；source v0 / wire v2 的三套 Host test 支持
-`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。真实 probe/adapter/hotplug、Action/Blob/
-MediaStream Runtime route、SDK/Virtual Edge、direct-IP bootstrap、security adapter 与 Runtime
-target deployment 仍未完成。
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。所选 `wifi-telemetry-v0` slice 另有 K230D Linux
+probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 Profile/platform evidence，
+不是 portable Runtime 的通用能力。通用 hotplug、Action/Blob/MediaStream Runtime route、
+SDK/Virtual Edge、discovery/reconnect 与 security adapter 仍未完成。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

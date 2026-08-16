@@ -81,9 +81,10 @@ malformed 时的公开状态不变。当前 source tree 的 fresh Debug/Release 
 `IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。精确边界见
 [Runtime negotiation core v0](runtime-core-v0.md)。
 
-这仍只是正式 Runtime 的 State/Stream negotiation 子集：Action、Blob、MediaStream route，
-产品 endpoint direction/QoS/permission schema，真实 config/probe/hotplug adapter、typed
-dispatcher、Host orchestration/SDK、direct-IP target service 与 K230D Runtime evidence 均未实现。
+Portable core 仍只是正式 Runtime 的 State/Stream negotiation 子集：Action、Blob、MediaStream
+route，产品 endpoint direction/QoS/permission schema、typed dispatcher 与 Host orchestration/
+SDK 均未实现。下述 Wi-Fi slice 在 Core 外组合一个具体 Profile、config/probe adapter 与
+direct-IP target；它不把这些平台选择提升为 portable Core 能力。
 
 当前 POSIX platform layer 另实现 connected-stream adapter：借用 caller-owned、already-
 connected、nonblocking `SOCK_STREAM` fd 和 Session；RX/TX 各由 `max_frame_bytes` 限制，
@@ -97,6 +98,33 @@ macOS Dev Tool 另以 `poll`、7-byte step 和每阶段 5-second watchdog 完成
 opaque Runtime payload 与正常 close。因此证据为
 `TRANSPORT_VERIFIED(macOS 15.5 arm64, AF_INET loopback TCP, max_frame=256)`；它不证明
 remote/direct-IP、Wi-Fi、K230D、bootstrap policy、TLS/auth、Runtime dispatch 或产品 Profile。
+
+## Direct-IP Wi-Fi Runtime slice
+
+当前分支以 [`wifi-telemetry-v0`](../profiles/wifi-telemetry-v0/README.md) 组合 Session Core、
+Runtime wire v2、Core State/Stream 与 POSIX adapter。真实本机 `AF_INET` 测试完成 Core READY、
+完整 catalog accept、Host desired enable、Edge actual RUNNING、88-byte匿名 Wi-Fi sample、
+disable cut、actual STOPPED、unsupported desired 和新 Session 不继承 gate/actual；它使用
+synthetic telemetry，不证明 remote network、Linux sysfs 或 K230D。
+
+macOS Host foreground Dev Tool 从私有配置读取 numeric IPv4 locator、local/expected PeerId 与
+desired，只按 accepted Profile 输出 allowlisted NDJSON；它已通过 warnings-as-errors build，
+但不是 SDK/Virtual Edge。K230D Linux Edge target 从私有
+interface/rate/field envelope 与 Linux probe 交集生成 catalog；production 中 source continuity
+无法证明时，它排空已物化数据并以 `SHUTDOWN` 结束 one-shot Session。
+
+2026-08-16，Edge source commit `2ac960c` 以 Xuantie GCC 14.1.1 交叉构建为 91,128-byte
+RISC-V ELF（SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a2b76f6`），
+并在 K230D Buildroot Linux 6.6.36 上与 macOS Host 完成一次真实 Wi-Fi direct-IP 运行。双方
+依次得到 Core READY、1 endpoint/3 route catalog accept、desired v1 enable、actual RUNNING、
+5 个连续且无 gap 的真实匿名 Wi-Fi sample、desired v2 disable、actual STOPPED 与 normal close，
+双方 rc=0。公开摘要不保留 locator、SSID、MAC、PeerId、凭据或原始 counters。该结果可标
+`BOARD_VERIFIED`，但只覆盖这一个手动 one-shot Profile/配置与上述 transcript。
+
+Direct IP 是 locator，不是 identity；plain TCP 上的 PeerId/Profile exact check 不是认证、机密性
+或完整性。不存在 subscription：Host 以 desired State 停止生产，已物化样本必须进入 Core
+Stream。完整操作规则与 evidence matrix 见
+[Direct-IP Wi-Fi Runtime v0 实装规则书](wifi-runtime-direct-ip-v0.md)。
 
 ## K230D Linux four-kind lab
 
@@ -190,14 +218,13 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 ## 未实现与未知
 
 - 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
-- product Runtime 的 endpoint facet/direction/QoS/permission schema、adapter-driven
-  config/probe/hotplug、Host orchestration 与 typed dispatcher；
-- 产品 direct-IP bootstrap/config ownership、安全 transport、time estimator 与
-  reconnect/resume 参数；
-- capability/endpoint discovery、真实 platform adapter 与 Runtime target evidence；
+- product Runtime 的 endpoint facet/direction/QoS/permission schema、通用 hotplug、Host
+  orchestration 与 typed dispatcher；
+- discovery、安全 transport、time estimator 与 reconnect/resume 参数；
+- Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition API、prepared generation 与真实 presentation endpoint；
-- 任一完整、声明并验证过的产品 Profile；
+- Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。
 

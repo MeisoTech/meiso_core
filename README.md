@@ -38,10 +38,17 @@ nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完�
 真实 macOS `AF_INET` loopback TCP unit test 与 Dev Tool 支持该条件下的
 `TRANSPORT_VERIFIED`。这不证明 remote/direct-IP、Wi-Fi、K230D 或安全 transport。
 
+首个正式 Runtime 垂直切片已选择 `wifi-telemetry-v0`：本机真实 `AF_INET` 测试贯通 Core
+READY、catalog、Host desired State、Edge actual State、production gate 与 Core Stream；macOS
+Host Dev Tool 和 K230D Linux Edge target 使用 numeric direct-IP 私有配置；同一路径已在
+K230D Linux 与 macOS 间完成一次受控板测。构建、运行与严格证据边界见
+[Direct-IP Wi-Fi Runtime v0 实装规则书](docs/wifi-runtime-direct-ip-v0.md)。
+
 这套实现仍不是 application-facing 完整产品 Runtime 或产品系统；它不包含 endpoint
 facet/direction/QoS/permission schema、真实 probe/hotplug adapter、typed dispatcher、Virtual
-Edge/SDK、Composition Runtime、MediaStream data path、direct-IP bootstrap/connect/listen、
-认证或产品 platform adapter。
+Edge/SDK、Composition Runtime、MediaStream data path、通用 discovery/reconnect/service、认证
+或安全 transport。所选 Wi-Fi target 的 config/probe 与 connect/listen 是 platform slice，不进入
+portable Core。
 K230D conformance target 已完成 host-side cross-build、image inspection，并在
 `CanMV-K230D-Zero V1.1` 上得到七套 suite 全部通过的 `BOARD_VERIFIED` evidence。这个状态只
 覆盖 Resource semantic core v0 的单进程 target runner，不构成 remote backend、LinkSession、
@@ -66,6 +73,7 @@ ctest --preset windows-msvc-debug
 - [Session Core v0 实现契约](docs/session-core-v0.md)
 - [Runtime negotiation core v0 实现契约](docs/runtime-core-v0.md)
 - [Wi-Fi telemetry Profile v0](profiles/wifi-telemetry-v0/README.md)
+- [Direct-IP Wi-Fi Runtime v0 实装规则书](docs/wifi-runtime-direct-ip-v0.md)
 - [Composition 契约](docs/composition.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)
