@@ -36,7 +36,8 @@ enum {
     HOST_ADAPTER_ARENA_BYTES = 16384,
     HOST_RUNTIME_ARENA_BYTES = 32768,
     HOST_RESOURCE_ARENA_BYTES = 16384,
-    HOST_CONFIG_LINE_BYTES = 256
+    HOST_CONFIG_LINE_BYTES = 256,
+    HOST_CONTROL_LINE_BYTES = 256
 };
 
 typedef union {
@@ -102,7 +103,31 @@ typedef struct {
     bool active_effective_present;
     bool stream_producer_active;
     bool production_active;
+    bool interactive;
 } Host;
+
+typedef enum {
+    HOST_CONTROL_INVALID = 0,
+    HOST_CONTROL_APPLY,
+    HOST_CONTROL_CLOSE
+} HostControlType;
+
+typedef struct {
+    HostControlType type;
+    bool enabled;
+    MeisoWifiTelemetryDesiredParameters parameters;
+} HostControlCommand;
+
+typedef struct {
+    char bytes[HOST_CONTROL_LINE_BYTES];
+    size_t size;
+} HostControlInput;
+
+typedef enum {
+    HOST_INTERACTIVE_ITEM_FAILED = 0,
+    HOST_INTERACTIVE_ITEM_COMMAND,
+    HOST_INTERACTIVE_ITEM_RUNTIME
+} HostInteractiveItemType;
 
 static HostStorage g_storage;
 
@@ -190,7 +215,8 @@ static bool parse_config_line(
     } else if (strcmp(key, "selected_fields") == 0) {
         bit = UINT32_C(1) << 2U;
         if (!parse_u64(value, UINT32_MAX, &number) || number == 0U ||
-            ((uint32_t)number & ~MEISO_WIFI_TELEMETRY_FIELD_ALL) != 0U) {
+            ((uint32_t)number &
+                ~(uint32_t)MEISO_WIFI_TELEMETRY_FIELD_ALL) != 0U) {
             return false;
         }
         config->desired.selected_fields = (uint32_t)number;
@@ -240,7 +266,11 @@ static bool parse_config_line(
     return true;
 }
 
-static bool load_config(const char *path, HostBootstrapConfig *out_config)
+static bool load_config(
+    const char *path,
+    bool interactive,
+    HostBootstrapConfig *out_config
+)
 {
     FILE *file;
     char line[HOST_CONFIG_LINE_BYTES];
@@ -271,18 +301,28 @@ static bool load_config(const char *path, HostBootstrapConfig *out_config)
         ok = false;
     }
     (void)fclose(file);
-    return ok && seen == UINT32_C(0x1ff) &&
+    const uint32_t bootstrap_fields = UINT32_C(0x1e3);
+    const uint32_t one_shot_fields = UINT32_C(0x01c);
+    const uint32_t desired_fields = seen & one_shot_fields;
+    const bool config_shape_valid = interactive ?
+        (seen == bootstrap_fields ||
+         seen == (bootstrap_fields | one_shot_fields)) :
+        seen == (bootstrap_fields | one_shot_fields);
+
+    return ok && config_shape_valid &&
         meiso_peer_id_valid(out_config->local_peer_id) &&
         meiso_peer_id_valid(out_config->expected_edge_peer_id) &&
         !meiso_peer_id_equal(
             out_config->local_peer_id,
             out_config->expected_edge_peer_id
-        ) &&
-        meiso_wifi_telemetry_desired_parameters_encode(
-            &out_config->desired,
-            (MeisoMutableBuffer){encoded, sizeof(encoded)},
-            &encoded_size
-        ) == MEISO_WIFI_TELEMETRY_CODEC_OK;
+        ) && (!interactive || desired_fields == 0U ||
+            desired_fields == one_shot_fields) &&
+        (desired_fields == 0U ||
+            meiso_wifi_telemetry_desired_parameters_encode(
+                &out_config->desired,
+                (MeisoMutableBuffer){encoded, sizeof(encoded)},
+                &encoded_size
+            ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
 }
 
 static bool read_entropy(void *output, size_t size)
@@ -861,9 +901,10 @@ static bool validate_staged_catalog(
         meiso_wifi_telemetry_capability_decode(
             endpoint.capability, &host->capability
         ) != MEISO_WIFI_TELEMETRY_CODEC_OK ||
-        !meiso_wifi_telemetry_parameters_supported(
-            &host->capability, &host->bootstrap.desired
-        )) {
+        (!host->interactive &&
+         !meiso_wifi_telemetry_parameters_supported(
+             &host->capability, &host->bootstrap.desired
+         ))) {
         return false;
     }
     expected_resources = meiso_wifi_telemetry_resources(&expected_count);
@@ -1245,13 +1286,16 @@ static bool handle_actual_offer(
     }
     (void)printf(
         "{\"type\":\"actual\",\"status\":\"%s\","
-        "\"state_version\":%" PRIu64 ",\"apply_result\":\"%s\","
+        "\"state_version\":%" PRIu64 ","
+        "\"observed_desired_version\":%" PRIu64 ","
+        "\"apply_result\":\"%s\","
         "\"effective_enabled\":%s,\"data_active\":%s,"
         "\"selected_fields\":%" PRIu32 ","
         "\"sample_period_ms\":%" PRIu32 ","
         "\"production_epoch_known\":%s}\n",
         production_status_name(actual.production_status),
         state_version,
+        desired_version,
         apply_result_name(actual.apply_result),
         actual.effective_enabled ? "true" : "false",
         production.data_active ? "true" : "false",
@@ -1298,12 +1342,14 @@ static void emit_sample(
     (void)printf(
         "{\"type\":\"sample\",\"ordinal\":%" PRIu64 ","
         "\"sequence\":%" PRIu64 ","
+        "\"source_time_ns\":%" PRIu64 ","
         "\"selected_fields\":%" PRIu32 ","
         "\"present_fields\":%" PRIu32 ","
         "\"gap\":%s,\"missing_before\":%" PRIu64 ","
         "\"link_state\":",
         ordinal,
         stream_sample->key.sequence,
+        stream_sample->source_time.monotonic_ns,
         sample->selected_fields,
         sample->present_fields,
         (receive_result->flags & MEISO_STREAM_RECEIVE_FLAG_GAP) != 0U ?
@@ -1385,8 +1431,9 @@ static bool handle_stream_sample(
             event->stream_sample.key.producer, host->edge_owner
         ) || event->stream_sample.sender_deadline.present ||
         event->stream_sample.dependency.size != 0U ||
-        host->samples_received >=
-            (uint64_t)(HOST_MAX_SAMPLES + HOST_MAX_STOPPING_SAMPLES)) {
+        host->samples_received == UINT64_MAX ||
+        (!host->interactive && host->samples_received >=
+            (uint64_t)(HOST_MAX_SAMPLES + HOST_MAX_STOPPING_SAMPLES))) {
         return false;
     }
     if (!host->stream_producer_active) {
@@ -1465,7 +1512,8 @@ static bool wait_desired_and_actual(
             target_reached = reached;
         } else if (event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE) {
             if (!handle_stream_sample(host, &event) ||
-                (target_status == MEISO_RUNTIME_PRODUCTION_STOPPED &&
+                (!host->interactive &&
+                 target_status == MEISO_RUNTIME_PRODUCTION_STOPPED &&
                  host->samples_received >
                     (uint64_t)host->bootstrap.sample_count +
                         HOST_MAX_STOPPING_SAMPLES)) {
@@ -1521,6 +1569,391 @@ static bool receive_requested_samples(Host *host)
     return true;
 }
 
+static bool control_consume_literal(
+    const char **cursor,
+    const char *end,
+    const char *literal
+)
+{
+    const size_t length = literal != NULL ? strlen(literal) : 0U;
+
+    if (cursor == NULL || *cursor == NULL || end == NULL ||
+        literal == NULL || *cursor > end ||
+        length > (size_t)(end - *cursor) ||
+        memcmp(*cursor, literal, length) != 0) {
+        return false;
+    }
+    *cursor += length;
+    return true;
+}
+
+static bool control_parse_u32(
+    const char **cursor,
+    const char *end,
+    uint32_t *out_value
+)
+{
+    char *parsed_end = NULL;
+    unsigned long long value;
+    size_t digits;
+
+    if (cursor == NULL || *cursor == NULL || end == NULL ||
+        out_value == NULL || *cursor >= end) {
+        return false;
+    }
+    digits = strspn(*cursor, "0123456789");
+    if (digits == 0U || digits > (size_t)(end - *cursor)) {
+        return false;
+    }
+    errno = 0;
+    value = strtoull(*cursor, &parsed_end, 10);
+    if (errno != 0 || parsed_end != *cursor + digits ||
+        value > (unsigned long long)UINT32_MAX) {
+        return false;
+    }
+    *cursor = parsed_end;
+    *out_value = (uint32_t)value;
+    return true;
+}
+
+static HostControlCommand parse_control_command(const char *line)
+{
+    HostControlCommand command;
+    const char *cursor = line;
+    const char *end;
+
+    memset(&command, 0, sizeof(command));
+    if (line == NULL) {
+        return command;
+    }
+    end = line + strlen(line);
+    if (strcmp(line, "{\"command\":\"close\"}") == 0) {
+        command.type = HOST_CONTROL_CLOSE;
+        return command;
+    }
+    if (!control_consume_literal(
+            &cursor, end, "{\"command\":\"apply\",\"enabled\":"
+        )) {
+        return command;
+    }
+    if (control_consume_literal(&cursor, end, "true")) {
+        command.enabled = true;
+    } else if (control_consume_literal(&cursor, end, "false")) {
+        command.enabled = false;
+    } else {
+        return command;
+    }
+    if (!control_consume_literal(
+            &cursor, end, ",\"selected_fields\":"
+        ) ||
+        !control_parse_u32(
+            &cursor, end, &command.parameters.selected_fields
+        ) || !control_consume_literal(
+            &cursor, end, ",\"sample_period_ms\":"
+        ) || !control_parse_u32(
+            &cursor, end, &command.parameters.sample_period_ms
+        ) || !control_consume_literal(&cursor, end, "}") || cursor != end) {
+        memset(&command, 0, sizeof(command));
+        return command;
+    }
+    command.type = HOST_CONTROL_APPLY;
+    return command;
+}
+
+static bool extract_control_command(
+    HostControlInput *input,
+    HostControlCommand *out_command,
+    bool *out_present
+)
+{
+    size_t index;
+    char line[HOST_CONTROL_LINE_BYTES];
+
+    if (input == NULL || out_command == NULL || out_present == NULL) {
+        return false;
+    }
+    *out_present = false;
+    for (index = 0U; index < input->size; ++index) {
+        if (input->bytes[index] != '\n') {
+            continue;
+        }
+        if (index >= sizeof(line)) {
+            return false;
+        }
+        memcpy(line, input->bytes, index);
+        line[index] = '\0';
+        memmove(
+            input->bytes,
+            input->bytes + index + 1U,
+            input->size - index - 1U
+        );
+        input->size -= index + 1U;
+        *out_command = parse_control_command(line);
+        *out_present = true;
+        return true;
+    }
+    return input->size < sizeof(input->bytes);
+}
+
+static HostInteractiveItemType wait_interactive_item(
+    Host *host,
+    HostControlInput *input,
+    HostControlCommand *out_command,
+    MeisoRuntimeEvent *out_event
+)
+{
+    if (host == NULL || input == NULL || out_command == NULL ||
+        out_event == NULL) {
+        return HOST_INTERACTIVE_ITEM_FAILED;
+    }
+    for (;;) {
+        MeisoSessionSnapshot snapshot;
+        struct pollfd descriptors[2];
+        bool command_present = false;
+        int result;
+
+        if (!extract_control_command(
+                input, out_command, &command_present
+            )) {
+            return HOST_INTERACTIVE_ITEM_FAILED;
+        }
+        if (command_present) {
+            return HOST_INTERACTIVE_ITEM_COMMAND;
+        }
+        if (!meiso_session_snapshot(host->session, &snapshot) ||
+            snapshot.state == MEISO_SESSION_STATE_FAILED ||
+            snapshot.state == MEISO_SESSION_STATE_CLOSED) {
+            return HOST_INTERACTIVE_ITEM_FAILED;
+        }
+        descriptors[0].fd = host->fd;
+        descriptors[0].events = 0;
+        descriptors[0].revents = 0;
+        if (meiso_posix_tcp_wants_read(host->adapter)) {
+            descriptors[0].events = (short)(
+                descriptors[0].events | POLLIN
+            );
+        }
+        if (meiso_posix_tcp_wants_write(host->adapter)) {
+            descriptors[0].events = (short)(
+                descriptors[0].events | POLLOUT
+            );
+        }
+        descriptors[1].fd = STDIN_FILENO;
+        descriptors[1].events = POLLIN;
+        descriptors[1].revents = 0;
+        result = poll(descriptors, (nfds_t)2U, -1);
+        if (result < 0 && errno == EINTR) {
+            continue;
+        }
+        if (result <= 0 ||
+            (descriptors[0].revents & POLLNVAL) != 0 ||
+            (descriptors[1].revents & (POLLERR | POLLNVAL)) != 0) {
+            return HOST_INTERACTIVE_ITEM_FAILED;
+        }
+        if ((descriptors[1].revents & (POLLIN | POLLHUP)) != 0) {
+            const ssize_t count = read(
+                STDIN_FILENO,
+                input->bytes + input->size,
+                sizeof(input->bytes) - input->size
+            );
+            if (count > 0) {
+                input->size += (size_t)count;
+                continue;
+            }
+            if (count < 0 &&
+                (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+                continue;
+            }
+            return HOST_INTERACTIVE_ITEM_FAILED;
+        }
+        if ((descriptors[0].revents & POLLOUT) != 0 &&
+            !write_status_progress(
+                meiso_posix_tcp_on_writable(host->adapter)
+            )) {
+            return HOST_INTERACTIVE_ITEM_FAILED;
+        }
+        if ((descriptors[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+            MeisoSessionRuntimeMessage message;
+            const MeisoPosixTcpReadStatus read_status =
+                meiso_posix_tcp_on_readable(host->adapter, &message);
+
+            if (read_status == MEISO_POSIX_TCP_READ_RUNTIME) {
+                if (meiso_runtime_receive(
+                        host->runtime, &message, out_event
+                    ) != MEISO_RUNTIME_OK) {
+                    return HOST_INTERACTIVE_ITEM_FAILED;
+                }
+                return HOST_INTERACTIVE_ITEM_RUNTIME;
+            }
+            if (!read_status_progress(read_status)) {
+                return HOST_INTERACTIVE_ITEM_FAILED;
+            }
+        }
+    }
+}
+
+static bool handle_interactive_runtime_event(
+    Host *host,
+    const MeisoRuntimeEvent *event,
+    uint64_t desired_version,
+    bool desired_enabled
+)
+{
+    if (host == NULL || event == NULL || desired_version == 0U) {
+        return false;
+    }
+    if (event->type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE) {
+        return handle_stream_sample(host, event);
+    }
+    if (event->type == MEISO_RUNTIME_EVENT_STATE_ACCEPT) {
+        return handle_desired_accept(host, event, desired_version);
+    }
+    if (event->type == MEISO_RUNTIME_EVENT_STATE_OFFER) {
+        bool target_reached = false;
+        return handle_actual_offer(
+            host,
+            event,
+            desired_version,
+            desired_enabled ? MEISO_RUNTIME_PRODUCTION_RUNNING :
+                MEISO_RUNTIME_PRODUCTION_STOPPED,
+            &target_reached
+        );
+    }
+    return false;
+}
+
+static void emit_control_rejected(const char *reason)
+{
+    (void)printf(
+        "{\"type\":\"control\",\"status\":\"REJECTED\","
+        "\"reason\":\"%s\"}\n",
+        reason
+    );
+    (void)fflush(stdout);
+}
+
+static bool emit_control_applied(uint64_t version, bool enabled)
+{
+    if (version == 0U) {
+        return false;
+    }
+    (void)printf(
+        "{\"type\":\"control\",\"command\":\"APPLY\","
+        "\"status\":\"APPLIED\",\"desired_version\":%" PRIu64 ","
+        "\"enabled\":%s}\n",
+        version,
+        enabled ? "true" : "false"
+    );
+    (void)fflush(stdout);
+    return true;
+}
+
+static void select_close_parameters(Host *host)
+{
+    if (meiso_wifi_telemetry_parameters_supported(
+            &host->capability, &host->bootstrap.desired
+        )) {
+        return;
+    }
+    host->bootstrap.desired.selected_fields =
+        host->capability.supported_fields;
+    host->bootstrap.desired.sample_period_ms =
+        host->capability.min_period_ms;
+}
+
+static bool normal_close(Host *host);
+
+static bool run_interactive(Host *host)
+{
+    HostControlInput input;
+    uint64_t desired_version = 0U;
+    bool desired_enabled = false;
+
+    if (host == NULL) {
+        return false;
+    }
+    memset(&input, 0, sizeof(input));
+    (void)printf(
+        "{\"type\":\"control\",\"status\":\"READY\","
+        "\"mode\":\"INTERACTIVE\"}\n"
+    );
+    (void)fflush(stdout);
+    for (;;) {
+        HostControlCommand command;
+        MeisoRuntimeEvent event;
+        const HostInteractiveItemType item = wait_interactive_item(
+            host, &input, &command, &event
+        );
+
+        if (item == HOST_INTERACTIVE_ITEM_FAILED) {
+            return false;
+        }
+        if (item == HOST_INTERACTIVE_ITEM_RUNTIME) {
+            if (!handle_interactive_runtime_event(
+                    host, &event, desired_version, desired_enabled
+                )) {
+                return false;
+            }
+            continue;
+        }
+        if (command.type == HOST_CONTROL_INVALID) {
+            emit_control_rejected("INVALID_COMMAND");
+            continue;
+        }
+        if (command.type == HOST_CONTROL_APPLY) {
+            if (!meiso_wifi_telemetry_parameters_supported(
+                    &host->capability, &command.parameters
+                )) {
+                emit_control_rejected("UNSUPPORTED_PARAMETERS");
+                continue;
+            }
+            if (desired_version == UINT64_MAX) {
+                return false;
+            }
+            desired_version += 1U;
+            host->bootstrap.desired = command.parameters;
+            if (!publish_desired(
+                    host, desired_version, command.enabled
+                ) || !wait_desired_and_actual(
+                    host,
+                    desired_version,
+                    command.enabled ? MEISO_RUNTIME_PRODUCTION_RUNNING :
+                        MEISO_RUNTIME_PRODUCTION_STOPPED
+                ) || !emit_control_applied(
+                    desired_version, command.enabled
+                )) {
+                return false;
+            }
+            desired_enabled = command.enabled;
+            continue;
+        }
+        if (desired_version == 0U || desired_enabled) {
+            if (desired_version == UINT64_MAX) {
+                return false;
+            }
+            select_close_parameters(host);
+            desired_version += 1U;
+            if (!publish_desired(host, desired_version, false) ||
+                !wait_desired_and_actual(
+                    host,
+                    desired_version,
+                    MEISO_RUNTIME_PRODUCTION_STOPPED
+                )) {
+                return false;
+            }
+        }
+        if (!normal_close(host)) {
+            return false;
+        }
+        (void)printf(
+            "{\"type\":\"control\",\"command\":\"CLOSE\","
+            "\"status\":\"COMPLETE\"}\n"
+        );
+        (void)fflush(stdout);
+        return true;
+    }
+}
+
 static bool normal_close(Host *host)
 {
     MeisoSessionSnapshot snapshot;
@@ -1574,10 +2007,11 @@ static void usage(const char *program)
 {
     (void)fprintf(
         stderr,
-        "usage: %s --config PATH\n"
-        "required keys: connect_ipv4, connect_port, "
+        "usage: %s --config PATH [--interactive]\n"
+        "always required: connect_ipv4, connect_port, "
         "local_host_peer_id_high/low, expected_edge_peer_id_high/low, "
-        "selected_fields, sample_period_ms, sample_count\n",
+        "one-shot also requires: selected_fields, sample_period_ms, "
+        "sample_count\n",
         program
     );
 }
@@ -1591,11 +2025,14 @@ int main(int argc, char **argv)
 
     memset(&host, 0, sizeof(host));
     host.fd = -1;
-    if (argc != 3 || strcmp(argv[1], "--config") != 0) {
+    if ((argc != 3 && argc != 4) ||
+        strcmp(argv[1], "--config") != 0 ||
+        (argc == 4 && strcmp(argv[3], "--interactive") != 0)) {
         usage(argv[0]);
         return 2;
     }
-    if (!load_config(argv[2], &host.bootstrap)) {
+    host.interactive = argc == 4;
+    if (!load_config(argv[2], host.interactive, &host.bootstrap)) {
         fputs("wifi host: invalid config\n", stderr);
         return 2;
     }
@@ -1623,6 +2060,14 @@ int main(int argc, char **argv)
 
     failure_stage = "catalog";
     if (!receive_and_accept_catalog(&host)) {
+        goto done;
+    }
+    if (host.interactive) {
+        failure_stage = "interactive";
+        if (!run_interactive(&host)) {
+            goto done;
+        }
+        passed = true;
         goto done;
     }
     failure_stage = "enable_desired";

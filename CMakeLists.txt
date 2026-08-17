@@ -158,7 +158,10 @@ target_include_directories(meiso_runtime_test PRIVATE tests)
 meiso_enable_warnings(meiso_runtime_test)
 
 add_executable(meiso_runtime_session_test tests/test_runtime_session.c)
-target_link_libraries(meiso_runtime_session_test PRIVATE meiso_runtime)
+target_link_libraries(
+    meiso_runtime_session_test
+    PRIVATE meiso_wifi_telemetry_profile
+)
 target_include_directories(meiso_runtime_session_test PRIVATE tests)
 meiso_enable_warnings(meiso_runtime_session_test)
 

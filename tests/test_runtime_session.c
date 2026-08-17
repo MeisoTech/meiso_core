@@ -1,4 +1,5 @@
 #include "meiso_runtime.h"
+#include "wifi_telemetry.h"
 
 #include "meiso_test_support.h"
 
@@ -442,7 +443,7 @@ static MeisoRuntimeDesiredReference desired_ref(uint64_t version)
     return value;
 }
 
-static bool publish_actual(
+static bool publish_actual_with_profile(
     Resources *resources,
     uint64_t version,
     MeisoRuntimeDesiredReference observed,
@@ -453,6 +454,8 @@ static bool publish_actual(
     MeisoRuntimeProductionStatus production_status,
     MeisoRuntimeProductionReason reason,
     uint64_t epoch,
+    const uint8_t *profile,
+    size_t profile_size,
     uint8_t output[128]
 )
 {
@@ -468,12 +471,112 @@ static bool publish_actual(
     value.production_status = production_status;
     value.reason = reason;
     value.production_epoch = epoch;
+    value.profile = (MeisoByteView){profile, profile_size};
     CHECK(meiso_runtime_actual_state_encode(
         &value, (MeisoMutableBuffer){output, 128U}, &payload
     ));
     CHECK(meiso_state_publisher_publish(
         resources->actual_publisher, EDGE_OWNER, version, payload
     ) == MEISO_STATE_PUBLISH_NEW);
+    return true;
+}
+
+static bool publish_actual(
+    Resources *resources,
+    uint64_t version,
+    MeisoRuntimeDesiredReference observed,
+    MeisoRuntimeDesiredReference applied,
+    MeisoRuntimeApplyResult result,
+    MeisoRuntimeAvailability availability,
+    bool enabled,
+    MeisoRuntimeProductionStatus production_status,
+    MeisoRuntimeProductionReason reason,
+    uint64_t epoch,
+    uint8_t output[128]
+)
+{
+    return publish_actual_with_profile(
+        resources, version, observed, applied, result, availability,
+        enabled, production_status, reason, epoch, NULL, 0U, output
+    );
+}
+
+static bool encode_desired_parameters(
+    MeisoWifiTelemetryDesiredParameters parameters,
+    uint8_t output[MEISO_WIFI_TELEMETRY_DESIRED_PARAMETERS_WIRE_SIZE]
+)
+{
+    size_t size = 0U;
+
+    CHECK(meiso_wifi_telemetry_desired_parameters_encode(
+        &parameters,
+        (MeisoMutableBuffer){
+            output, MEISO_WIFI_TELEMETRY_DESIRED_PARAMETERS_WIRE_SIZE
+        },
+        &size
+    ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
+    CHECK(size == MEISO_WIFI_TELEMETRY_DESIRED_PARAMETERS_WIRE_SIZE);
+    return true;
+}
+
+static bool encode_effective_parameters(
+    MeisoWifiTelemetryEffectiveParameters parameters,
+    uint8_t output[MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE]
+)
+{
+    size_t size = 0U;
+
+    CHECK(meiso_wifi_telemetry_effective_parameters_encode(
+        &parameters,
+        (MeisoMutableBuffer){
+            output, MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE
+        },
+        &size
+    ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
+    CHECK(size == MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE);
+    return true;
+}
+
+static bool sessions_ready(const RuntimePair *pair)
+{
+    MeisoSessionSnapshot host;
+    MeisoSessionSnapshot edge;
+
+    CHECK(meiso_session_snapshot(pair->host_session, &host));
+    CHECK(meiso_session_snapshot(pair->edge_session, &edge));
+    CHECK(host.state == MEISO_SESSION_STATE_READY);
+    CHECK(edge.state == MEISO_SESSION_STATE_READY);
+    return true;
+}
+
+static bool normal_close(RuntimePair *pair)
+{
+    MeisoByteView outbound;
+    MeisoSessionRuntimeMessage ignored = {0};
+    MeisoSessionSnapshot host;
+    MeisoSessionSnapshot edge;
+
+    CHECK(meiso_session_close(
+        pair->host_session, MEISO_SESSION_CLOSE_NORMAL
+    ) == MEISO_SESSION_CLOSE_QUEUED);
+    CHECK(meiso_session_next_outbound(pair->host_session, &outbound));
+    CHECK(outbound.size <= sizeof(pair->transfer));
+    memmove(pair->transfer, outbound.data, outbound.size);
+    CHECK(meiso_session_mark_outbound_sent(pair->host_session) ==
+          MEISO_SESSION_OUTBOUND_SENT);
+    CHECK(meiso_session_receive(
+        pair->edge_session,
+        (MeisoByteView){pair->transfer, outbound.size},
+        &ignored
+    ) == MEISO_SESSION_RECEIVE_PEER_CLOSED);
+    CHECK(meiso_session_snapshot(pair->host_session, &host));
+    CHECK(meiso_session_snapshot(pair->edge_session, &edge));
+    CHECK(host.state == MEISO_SESSION_STATE_CLOSED);
+    CHECK(edge.state == MEISO_SESSION_STATE_CLOSED);
+    CHECK(host.local_close_reason_known);
+    CHECK(host.local_close_reason == MEISO_SESSION_CLOSE_NORMAL);
+    CHECK(edge.peer_close_reason_known);
+    CHECK(edge.peer_close_reason == MEISO_SESSION_CLOSE_NORMAL);
     return true;
 }
 
@@ -692,6 +795,293 @@ static bool test_state_stream_integration(void)
     return true;
 }
 
+static bool test_continuous_session_reconfigure(void)
+{
+    RuntimePair pair;
+    Resources resources;
+    uint8_t desired_state_bytes[4][64];
+    uint8_t actual_state_bytes[7][128];
+    uint8_t desired_low[
+        MEISO_WIFI_TELEMETRY_DESIRED_PARAMETERS_WIRE_SIZE
+    ];
+    uint8_t desired_high[
+        MEISO_WIFI_TELEMETRY_DESIRED_PARAMETERS_WIRE_SIZE
+    ];
+    uint8_t effective_low[
+        MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE
+    ];
+    uint8_t effective_high[
+        MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE
+    ];
+    uint8_t effective_stopped[
+        MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE
+    ];
+    const MeisoWifiTelemetryFieldMask low_fields =
+        MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+        MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM;
+    const MeisoWifiTelemetryFieldMask high_fields =
+        low_fields |
+        MEISO_WIFI_TELEMETRY_FIELD_RX_BYTES |
+        MEISO_WIFI_TELEMETRY_FIELD_TX_BYTES;
+    const uint8_t payload[] = {0x41U, 0x42U, 0x43U};
+    MeisoRuntimeProductionSnapshot production;
+    MeisoStreamSample sample;
+    MeisoStreamSample materialized_before_reconfigure;
+    MeisoStreamSample materialized_before_stop;
+
+    CHECK(init_pair(&pair, 200U));
+    CHECK(activate(&pair));
+    CHECK(init_resources(&resources));
+    CHECK(encode_desired_parameters(
+        (MeisoWifiTelemetryDesiredParameters){low_fields, 1000U},
+        desired_low
+    ));
+    CHECK(encode_desired_parameters(
+        (MeisoWifiTelemetryDesiredParameters){high_fields, 200U},
+        desired_high
+    ));
+    CHECK(encode_effective_parameters(
+        (MeisoWifiTelemetryEffectiveParameters){low_fields, 1000U},
+        effective_low
+    ));
+    CHECK(encode_effective_parameters(
+        (MeisoWifiTelemetryEffectiveParameters){high_fields, 200U},
+        effective_high
+    ));
+    CHECK(encode_effective_parameters(
+        (MeisoWifiTelemetryEffectiveParameters){0U, 0U},
+        effective_stopped
+    ));
+
+    CHECK(publish_desired(
+        &resources, 1U, true,
+        desired_low, sizeof(desired_low), desired_state_bytes[0]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(publish_actual_with_profile(
+        &resources, 1U, desired_ref(1U), desired_ref(1U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, 10U,
+        effective_low, sizeof(effective_low), actual_state_bytes[0]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active && production.production_epoch == 10U);
+    CHECK(production.production_epoch_high_water == 10U);
+    CHECK(production.effective_profile.size == sizeof(effective_low));
+    CHECK(memcmp(
+        production.effective_profile.data,
+        effective_low,
+        sizeof(effective_low)
+    ) == 0);
+    sample = stream_sample(1U, 1U, NULL, 0U, payload, sizeof(payload));
+    CHECK(send_stream(&pair, &resources, 10U, &sample, true));
+
+    /* Desired does not retract a sample already materialized under the last
+     * committed actual. The old gate remains authoritative during apply. */
+    materialized_before_reconfigure = stream_sample(
+        1U, 2U, NULL, 0U, payload, sizeof(payload)
+    );
+    CHECK(publish_desired(
+        &resources, 2U, true,
+        desired_high, sizeof(desired_high), desired_state_bytes[1]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.edge_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active && production.production_epoch == 10U);
+    CHECK(send_stream(
+        &pair, &resources, 10U, &materialized_before_reconfigure, false
+    ));
+    CHECK(publish_actual_with_profile(
+        &resources, 2U, desired_ref(2U), desired_ref(1U),
+        MEISO_RUNTIME_APPLY_PENDING,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_APPLYING, 10U,
+        effective_low, sizeof(effective_low), actual_state_bytes[1]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    sample = stream_sample(1U, 3U, NULL, 0U, payload, sizeof(payload));
+    CHECK(send_stream(&pair, &resources, 10U, &sample, false));
+
+    CHECK(publish_actual_with_profile(
+        &resources, 3U, desired_ref(2U), desired_ref(2U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, 11U,
+        effective_high, sizeof(effective_high), actual_state_bytes[2]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active && production.production_epoch == 11U);
+    CHECK(production.production_epoch_high_water == 11U);
+    CHECK(production.effective_profile.size == sizeof(effective_high));
+    CHECK(memcmp(
+        production.effective_profile.data,
+        effective_high,
+        sizeof(effective_high)
+    ) == 0);
+    sample = stream_sample(2U, 1U, NULL, 0U, payload, sizeof(payload));
+    CHECK(meiso_runtime_send_stream_sample(
+        pair.edge_runtime,
+        route_key(DATA_ID, MEISO_RUNTIME_FACET_DATA),
+        10U,
+        &sample
+    ) == MEISO_RUNTIME_PRODUCTION_EPOCH_MISMATCH);
+    CHECK(send_stream(&pair, &resources, 11U, &sample, true));
+
+    /* STOP is desired=false, not a subscription. The committed old actual
+     * still admits already-materialized data until STOPPED is committed. */
+    materialized_before_stop = stream_sample(
+        2U, 2U, NULL, 0U, payload, sizeof(payload)
+    );
+    CHECK(publish_desired(
+        &resources, 3U, false,
+        desired_high, sizeof(desired_high), desired_state_bytes[2]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(send_stream(
+        &pair, &resources, 11U, &materialized_before_stop, false
+    ));
+    CHECK(publish_actual_with_profile(
+        &resources, 4U, desired_ref(3U), desired_ref(2U),
+        MEISO_RUNTIME_APPLY_PENDING,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_STOPPING,
+        MEISO_RUNTIME_PRODUCTION_REASON_APPLYING, 11U,
+        effective_high, sizeof(effective_high), actual_state_bytes[3]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    sample = stream_sample(2U, 3U, NULL, 0U, payload, sizeof(payload));
+    CHECK(send_stream(&pair, &resources, 11U, &sample, false));
+    CHECK(publish_actual_with_profile(
+        &resources, 5U, desired_ref(3U), desired_ref(3U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        false, MEISO_RUNTIME_PRODUCTION_STOPPED,
+        MEISO_RUNTIME_PRODUCTION_REASON_DISABLED, 0U,
+        effective_stopped, sizeof(effective_stopped), actual_state_bytes[4]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(!production.data_active);
+    CHECK(production.production_epoch == 0U);
+    CHECK(production.production_epoch_high_water == 11U);
+    CHECK(meiso_runtime_send_stream_sample(
+        pair.edge_runtime,
+        route_key(DATA_ID, MEISO_RUNTIME_FACET_DATA),
+        11U,
+        &sample
+    ) == MEISO_RUNTIME_ROUTE_NOT_ACTIVE);
+    CHECK(sessions_ready(&pair));
+
+    CHECK(publish_desired(
+        &resources, 4U, true,
+        desired_low, sizeof(desired_low), desired_state_bytes[3]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session,
+        pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(publish_actual_with_profile(
+        &resources, 6U, desired_ref(4U), desired_ref(3U),
+        MEISO_RUNTIME_APPLY_PENDING,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        false, MEISO_RUNTIME_PRODUCTION_STARTING,
+        MEISO_RUNTIME_PRODUCTION_REASON_APPLYING, 0U,
+        effective_stopped, sizeof(effective_stopped), actual_state_bytes[5]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    CHECK(publish_actual_with_profile(
+        &resources, 7U, desired_ref(4U), desired_ref(4U),
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, 12U,
+        effective_low, sizeof(effective_low), actual_state_bytes[6]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session,
+        pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+    sample = stream_sample(3U, 1U, NULL, 0U, payload, sizeof(payload));
+    CHECK(meiso_runtime_send_stream_sample(
+        pair.edge_runtime,
+        route_key(DATA_ID, MEISO_RUNTIME_FACET_DATA),
+        11U,
+        &sample
+    ) == MEISO_RUNTIME_PRODUCTION_EPOCH_MISMATCH);
+    CHECK(send_stream(&pair, &resources, 12U, &sample, true));
+    CHECK(meiso_runtime_production_snapshot(
+        pair.host_runtime, ENDPOINT, &production
+    ) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active && production.production_epoch == 12U);
+    CHECK(production.production_epoch_high_water == 12U);
+    CHECK(sessions_ready(&pair));
+    CHECK(normal_close(&pair));
+    return true;
+}
+
 static bool test_new_session_requires_catalog(void)
 {
     RuntimePair old_pair;
@@ -717,6 +1107,7 @@ static bool test_new_session_requires_catalog(void)
 int main(void)
 {
     if (!test_state_stream_integration() ||
+        !test_continuous_session_reconfigure() ||
         !test_new_session_requires_catalog()) {
         return 1;
     }

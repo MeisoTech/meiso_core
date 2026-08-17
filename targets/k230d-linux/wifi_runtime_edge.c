@@ -91,6 +91,12 @@ typedef struct {
     uint64_t version;
 } PendingStateAccept;
 
+typedef enum {
+    ACTUAL_FOLLOW_UP_NONE = 0,
+    ACTUAL_FOLLOW_UP_STOPPED,
+    ACTUAL_FOLLOW_UP_RUNNING
+} ActualFollowUp;
+
 typedef struct {
     bool present;
     bool published;
@@ -103,6 +109,8 @@ typedef struct {
     MeisoRuntimeProductionReason reason;
     uint64_t production_epoch;
     MeisoWifiTelemetryEffectiveParameters effective;
+    ActualFollowUp follow_up;
+    MeisoWifiTelemetryDesiredParameters follow_up_parameters;
 } ActualTransition;
 
 typedef struct {
@@ -150,14 +158,18 @@ typedef struct {
 
     PendingStateAccept pending_accept;
     ActualTransition actual_outbound;
+    ActualTransition actual_in_flight_value;
     ActualTransition actual_next;
     PendingSample pending_sample;
     MeisoWifiTelemetryDesiredParameters current_parameters;
     MeisoRuntimeDesiredReference current_desired;
+    MeisoRuntimeDesiredReference production_applied_desired;
+    MeisoWifiTelemetryEffectiveParameters production_effective;
     CounterContinuity counter_continuity;
 
     uint64_t actual_version;
     uint64_t production_epoch_high_water;
+    uint64_t active_production_epoch;
     uint64_t stream_sequence;
     uint64_t next_sample_ns;
     uint64_t next_probe_ns;
@@ -890,6 +902,65 @@ static ActualTransition stopped_transition(
     return value;
 }
 
+static ActualTransition starting_transition(
+    const Edge *edge,
+    MeisoRuntimeDesiredReference desired,
+    MeisoRuntimeAvailability availability,
+    MeisoWifiTelemetryDesiredParameters parameters
+)
+{
+    ActualTransition value;
+
+    memset(&value, 0, sizeof(value));
+    value.present = true;
+    value.observed = desired;
+    value.applied = edge->production_applied_desired;
+    value.apply_result = MEISO_RUNTIME_APPLY_PENDING;
+    value.availability = availability;
+    value.production_status = MEISO_RUNTIME_PRODUCTION_STARTING;
+    value.reason = MEISO_RUNTIME_PRODUCTION_REASON_APPLYING;
+    value.follow_up = ACTUAL_FOLLOW_UP_RUNNING;
+    value.follow_up_parameters = parameters;
+    return value;
+}
+
+static bool live_pending_transition(
+    const Edge *edge,
+    MeisoRuntimeDesiredReference desired,
+    MeisoRuntimeProductionStatus status,
+    ActualFollowUp follow_up,
+    MeisoWifiTelemetryDesiredParameters follow_up_parameters,
+    ActualTransition *out_transition
+)
+{
+    ActualTransition value;
+
+    if (edge == NULL || out_transition == NULL ||
+        !edge->production_applied_desired.present ||
+        edge->active_production_epoch == 0U ||
+        edge->production_effective.selected_fields == 0U ||
+        edge->production_effective.sample_period_ms == 0U ||
+        (status != MEISO_RUNTIME_PRODUCTION_RUNNING &&
+         status != MEISO_RUNTIME_PRODUCTION_STOPPING)) {
+        return false;
+    }
+    memset(&value, 0, sizeof(value));
+    value.present = true;
+    value.observed = desired;
+    value.applied = edge->production_applied_desired;
+    value.apply_result = MEISO_RUNTIME_APPLY_PENDING;
+    value.availability = MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    value.effective_enabled = true;
+    value.production_status = status;
+    value.reason = MEISO_RUNTIME_PRODUCTION_REASON_APPLYING;
+    value.production_epoch = edge->active_production_epoch;
+    value.effective = edge->production_effective;
+    value.follow_up = follow_up;
+    value.follow_up_parameters = follow_up_parameters;
+    *out_transition = value;
+    return true;
+}
+
 static ActualTransition rejected_transition(
     MeisoRuntimeDesiredReference desired,
     MeisoRuntimeAvailability availability
@@ -951,14 +1022,25 @@ static bool running_transition(
     return true;
 }
 
-static void request_actual(Edge *edge, ActualTransition transition)
+static bool request_actual(Edge *edge, ActualTransition transition)
 {
-    edge->production_active = false;
+    if (edge == NULL || !transition.present) {
+        return false;
+    }
     if (edge->actual_in_flight || edge->actual_outbound.published) {
+        if (edge->actual_next.present) {
+            return false;
+        }
+        edge->actual_next = transition;
+    } else if (edge->actual_outbound.present) {
+        if (edge->actual_next.present) {
+            return false;
+        }
         edge->actual_next = transition;
     } else {
         edge->actual_outbound = transition;
     }
+    return true;
 }
 
 static void mark_source_continuity_lost(Edge *edge, const char *cause)
@@ -1033,32 +1115,61 @@ static bool apply_current_desired(Edge *edge, uint64_t now_ns)
         return true;
     }
     if (!edge->desired_profile_valid) {
-        request_actual(
+        return request_actual(
             edge,
             rejected_transition(reference, availability)
         );
-        return true;
     }
     edge->current_parameters = parameters;
     if (!desired.enabled) {
-        request_actual(
-            edge,
-            stopped_transition(reference, availability)
+        if (edge->active_production_epoch != 0U) {
+            memset(&transition, 0, sizeof(transition));
+            if (!live_pending_transition(
+                    edge,
+                    reference,
+                    MEISO_RUNTIME_PRODUCTION_STOPPING,
+                    ACTUAL_FOLLOW_UP_STOPPED,
+                    parameters,
+                    &transition
+                )) {
+                return false;
+            }
+            /* The public source is cut here. Any sample already materialized
+             * remains pending and is sent before the STOPPING actual. */
+            edge->production_active = false;
+            return request_actual(edge, transition);
+        }
+        return request_actual(
+            edge, stopped_transition(reference, availability)
         );
-        return true;
     }
     if (availability != MEISO_RUNTIME_AVAILABILITY_PRESENT) {
-        request_actual(edge, unavailable_transition(reference));
+        if (!request_actual(edge, unavailable_transition(reference))) {
+            return false;
+        }
         edge->next_probe_ns = deadline_after_ms(
             now_ns, parameters.sample_period_ms
         );
         return true;
     }
-    if (!running_transition(edge, reference, parameters, &transition)) {
-        return false;
+    if (edge->active_production_epoch != 0U) {
+        memset(&transition, 0, sizeof(transition));
+        if (!live_pending_transition(
+                edge,
+                reference,
+                MEISO_RUNTIME_PRODUCTION_RUNNING,
+                ACTUAL_FOLLOW_UP_RUNNING,
+                parameters,
+                &transition
+            )) {
+            return false;
+        }
+    } else {
+        transition = starting_transition(
+            edge, reference, availability, parameters
+        );
     }
-    request_actual(edge, transition);
-    return true;
+    return request_actual(edge, transition);
 }
 
 static bool queue_state_accept(
@@ -1132,6 +1243,8 @@ static bool handle_actual_accept(
     const MeisoRuntimeEvent *event
 )
 {
+    ActualTransition accepted;
+    ActualTransition follow_up;
     MeisoStateAcceptStatus status;
 
     if (!edge->actual_in_flight || event == NULL ||
@@ -1148,7 +1261,39 @@ static bool handle_actual_accept(
     if (status != MEISO_STATE_ACCEPT_CONFIRMED) {
         return false;
     }
+    accepted = edge->actual_in_flight_value;
+    memset(
+        &edge->actual_in_flight_value,
+        0,
+        sizeof(edge->actual_in_flight_value)
+    );
     edge->actual_in_flight = false;
+    if (accepted.follow_up != ACTUAL_FOLLOW_UP_NONE) {
+        if (edge->actual_next.present) {
+            return false;
+        }
+        memset(&follow_up, 0, sizeof(follow_up));
+        if (accepted.follow_up == ACTUAL_FOLLOW_UP_STOPPED) {
+            follow_up = stopped_transition(
+                accepted.observed, accepted.availability
+            );
+        } else if (accepted.follow_up == ACTUAL_FOLLOW_UP_RUNNING) {
+            /* No new sample may materialize across the production cut. An
+             * already-materialized old-epoch sample remains drainable. */
+            edge->production_active = false;
+            if (!running_transition(
+                    edge,
+                    accepted.observed,
+                    accepted.follow_up_parameters,
+                    &follow_up
+                )) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        return request_actual(edge, follow_up);
+    }
     if (edge->actual_next.present) {
         edge->actual_outbound = edge->actual_next;
         memset(&edge->actual_next, 0, sizeof(edge->actual_next));
@@ -1256,10 +1401,20 @@ static const char *actual_status_name(const ActualTransition *transition)
     if (transition->availability == MEISO_RUNTIME_AVAILABILITY_UNAVAILABLE) {
         return "UNAVAILABLE";
     }
-    if (transition->production_status == MEISO_RUNTIME_PRODUCTION_RUNNING) {
+    switch (transition->production_status) {
+    case MEISO_RUNTIME_PRODUCTION_STARTING:
+        return "STARTING";
+    case MEISO_RUNTIME_PRODUCTION_RUNNING:
         return "RUNNING";
+    case MEISO_RUNTIME_PRODUCTION_DEGRADED:
+        return "DEGRADED";
+    case MEISO_RUNTIME_PRODUCTION_STOPPING:
+        return "STOPPING";
+    case MEISO_RUNTIME_PRODUCTION_FAILED:
+        return "FAILED";
+    default:
+        return "STOPPED";
     }
-    return "STOPPED";
 }
 
 static bool publish_actual_if_needed(Edge *edge)
@@ -1341,15 +1496,41 @@ static bool publish_actual_if_needed(Edge *edge)
     queued = edge->actual_outbound;
     memset(&edge->actual_outbound, 0, sizeof(edge->actual_outbound));
     edge->actual_in_flight = true;
-    if (queued.production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+    edge->actual_in_flight_value = queued;
+    if (queued.apply_result == MEISO_RUNTIME_APPLY_APPLIED &&
+        queued.production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
         queued.effective_enabled) {
         if (!monotonic_now_ns(&now_ns)) {
             return false;
         }
+        edge->production_applied_desired = queued.applied;
+        edge->production_effective = queued.effective;
+        edge->active_production_epoch = queued.production_epoch;
         edge->production_active = true;
         edge->production_ever_started = true;
         edge->stream_sequence = 0U;
         edge->next_sample_ns = now_ns;
+    } else if (queued.apply_result == MEISO_RUNTIME_APPLY_PENDING &&
+        queued.production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+        queued.effective_enabled && queued.production_epoch != 0U) {
+        if (queued.production_epoch != edge->active_production_epoch ||
+            queued.effective.selected_fields !=
+                edge->production_effective.selected_fields ||
+            queued.effective.sample_period_ms !=
+                edge->production_effective.sample_period_ms) {
+            return false;
+        }
+        edge->production_active = true;
+    } else if (queued.production_status ==
+        MEISO_RUNTIME_PRODUCTION_STOPPED) {
+        edge->production_applied_desired = queued.applied;
+        memset(
+            &edge->production_effective,
+            0,
+            sizeof(edge->production_effective)
+        );
+        edge->active_production_epoch = 0U;
+        edge->production_active = false;
     } else {
         edge->production_active = false;
     }
@@ -1502,8 +1683,7 @@ static bool request_running_for_current_desired(Edge *edge)
         )) {
         return false;
     }
-    request_actual(edge, transition);
-    return true;
+    return request_actual(edge, transition);
 }
 
 static bool maybe_materialize_sample(Edge *edge, uint64_t now_ns)
@@ -1516,9 +1696,14 @@ static bool maybe_materialize_sample(Edge *edge, uint64_t now_ns)
         now_ns < edge->next_sample_ns) {
         return true;
     }
+    if (edge->active_production_epoch == 0U ||
+        edge->production_effective.selected_fields == 0U ||
+        edge->production_effective.sample_period_ms == 0U) {
+        return false;
+    }
     adapter_status = meiso_wifi_linux_adapter_sample(
         &edge->wifi,
-        edge->current_parameters.selected_fields,
+        edge->production_effective.selected_fields,
         &value
     );
     if (adapter_status == MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE) {
@@ -1548,7 +1733,7 @@ static bool maybe_materialize_sample(Edge *edge, uint64_t now_ns)
     memset(&edge->pending_sample.sample, 0, sizeof(edge->pending_sample.sample));
     edge->pending_sample.sample.key = (MeisoStreamKey){
         edge->edge_owner,
-        edge->production_epoch_high_water,
+        edge->active_production_epoch,
         edge->stream_sequence
     };
     edge->pending_sample.sample.source_time = (MeisoTimePoint){
@@ -1560,10 +1745,10 @@ static bool maybe_materialize_sample(Edge *edge, uint64_t now_ns)
         encoded_size
     };
     edge->pending_sample.production_epoch =
-        edge->production_epoch_high_water;
+        edge->active_production_epoch;
     edge->pending_sample.present = true;
     edge->next_sample_ns = deadline_after_ms(
-        now_ns, edge->current_parameters.sample_period_ms
+        now_ns, edge->production_effective.sample_period_ms
     );
     return true;
 }
@@ -1667,7 +1852,16 @@ static bool peer_close_is_normal_and_stopped(Edge *edge)
         snapshot.peer_close_reason_known &&
         snapshot.peer_close_reason == MEISO_SESSION_CLOSE_NORMAL &&
         !edge->production_active && !edge->pending_sample.present &&
-        edge->current_desired.present && !edge->desired_enabled;
+        edge->active_production_epoch == 0U &&
+        !edge->pending_accept.present && !edge->actual_in_flight &&
+        !edge->actual_outbound.present && !edge->actual_next.present &&
+        edge->current_desired.present && !edge->desired_enabled &&
+        edge->production_applied_desired.present &&
+        meiso_owner_scope_equal(
+            edge->production_applied_desired.owner,
+            edge->current_desired.owner
+        ) && edge->production_applied_desired.version ==
+            edge->current_desired.version;
 }
 
 static bool process_readable(Edge *edge, uint64_t now_ns)
