@@ -1,18 +1,18 @@
 # Wi-Fi Runtime dashboard
 
 Loopback-only Dev Tool for the formal `wifi-telemetry-v0` direct-IP slice. It
-starts the already-built macOS `meiso_wifi_runtime_host` and visualizes that
-Host's sanitized NDJSON. It does not implement Core, Runtime, Profile, wire,
-transport, Runtime control, or an SDK API.
+keeps one native macOS Host process alive and gives the browser four bounded
+operations: connect, apply/start desired, stop production, and normal close.
+The browser never implements Core, Runtime, Profile, wire, or transport.
 
 ```text
-browser <- SSE <- 127.0.0.1 server.py -> fixed native Host -> Meiso TCP -> Edge
+browser <- SSE / fixed control API -> server.py <-> native Host -> Meiso TCP -> Edge
 ```
 
 ## Run
 
-Use a local config ignored by Git (normally `*.local.conf`). The server never
-reads its contents or sends its path to the browser.
+Use a Git-ignored local config. The server never reads its contents or exposes
+its path to the browser.
 
 ```sh
 python3 devtools/web/wifi_runtime_dashboard/server.py \
@@ -20,54 +20,88 @@ python3 devtools/web/wifi_runtime_dashboard/server.py \
   --config /absolute/path/to/wifi-host.local.conf
 ```
 
-Open the printed random-port URL and choose **Start one run**. The command is
-fixed at startup as:
+The CLI binds only `127.0.0.1` and defaults to port `49999`; use `--port N` to
+select another loopback port. The fixed child argv is:
 
 ```text
-<host-binary> --config <config>
+<host-binary> --config <config> --interactive
 ```
 
-It is executed with `shell=False`. The server always binds `127.0.0.1`; there
-is no remote bind or browser-supplied argument. The Host performs desired
-enable, sample receipt, desired disable, actual `STOPPED`, and normal Session
-close. The page provides no extra lifecycle or sensor control.
+It is executed with `shell=False`. Locator, config path, identities and other
+process arguments cannot come from the browser.
 
-## Display contract
+## Lifecycle and parameters
 
-Only the Host's existing NDJSON types are accepted:
+1. **Connect** starts the Host, establishes Core Session, accepts Runtime
+   catalog, and leaves the Session open.
+2. **Start / apply** publishes `enabled=true` desired with one or more selected
+   Wi-Fi fields and a period. It may be repeated while running.
+3. **Stop** publishes `enabled=false`; Edge actual must reach `STOPPED`. Session
+   and catalog stay alive.
+4. **Normal close** makes the Host stop production if necessary, performs Core
+   normal close, and exits.
 
-```text
-bootstrap session catalog desired desired_delivery actual sample run failure
+The page derives enabled fields and period limits from the accepted catalog.
+The server additionally constrains the Profile envelope to field mask
+`0x001..0x3ff` and period `100..10000 ms` in `100 ms` units. Commands sent to
+the Host are exact compact NDJSON:
+
+```json
+{"command":"apply","enabled":true,"selected_fields":63,"sample_period_ms":500}
+{"command":"apply","enabled":false,"selected_fields":63,"sample_period_ms":500}
+{"command":"close"}
 ```
 
-The page separates Host-owned desired State from Edge-owned actual State and
-shows `actual.data_active` as the production gate. A sample is interpreted
-under the last active actual effective field mask and period, not under desired
-alone. Sequence, gap/missing count, link, signal and eight counters are shown.
-JSON `null` remains unavailable (`—`); it is never converted to zero.
+There is no subscription. A stop disables production through desired/actual;
+it does not discard produced Stream samples.
 
-The allow-list discards all unknown keys before the SSE ring. Locator/config
-path, full PeerId/EndpointId/SessionId, SSID, BSSID, MAC, credentials, raw
-frames and stderr never enter the browser. The fixed local API is:
+## Browser API and display contract
 
 ```text
-POST /api/v1/start
+POST /api/v1/connect
+POST /api/v1/apply   {"selected_fields":N,"sample_period_ms":N}
+POST /api/v1/stop
+POST /api/v1/close
 GET  /api/v1/events?after=<SSE event id>
 ```
 
-The event ring is bounded to 512 entries. SSE reconnect uses its event id.
-This page is evidence presentation only; `run=COMPLETE` is exposed only after
-the native Host reports equal requested/received counts and exits with `rc=0`.
-Timeout, malformed output, missing completion, or nonzero exit becomes an
-explicit Dashboard failure; this does not create a second protocol verdict.
+The SSE projection accepts only these Host event types:
+
+```text
+bootstrap session catalog desired desired_delivery actual sample control run failure
+```
+
+The UI separates Host desired from Edge actual. `MATCHED` requires equal
+effective enabled/fields/period, `APPLIED`, and
+`desired.version == actual.observed_desired_version`; a same-value newer
+desired therefore cannot match stale actual. Continuous evidence includes
+sequence, gap count, browser arrival cadence, Edge monotonic `source_time_ns`,
+signal history, and deltas between successive counters. JSON `null` stays
+unavailable; it is never converted to zero.
+
+The sanitizer discards unknown keys before the bounded 512-event ring. Locator,
+full PeerId/EndpointId/SessionId, SSID, BSSID, MAC, credentials, raw frames and
+stderr never enter the browser. There is no lifetime event cap: the deque bounds
+memory while a valid Host may run indefinitely. Only startup-to-catalog and
+requested normal-close have timeouts; an active link has no total-duration
+watchdog.
+
+On a new SSE page (`after=0`) or a cursor older than the ring, the server sends
+one atomic `dashboard_snapshot`: reset metadata plus sticky sanitized Session,
+catalog, interactive-control, latest desired/delivery, and latest actual state.
+Historical samples are deliberately excluded. The client clears its sample
+count, arrival/counter baselines, chart and LIVE indication, then waits for the
+next new sample. A refresh neither replaces the Host child nor starts a second
+Session.
 
 ## Verify
-
-The deterministic fake Host checks the fixed argv, localhost/static boundary,
-start authorization, SSE order, null preservation, closed projection, and
-absence of an extra control endpoint.
 
 ```sh
 python3 devtools/web/wifi_runtime_dashboard/test_server.py
 node --check devtools/web/wifi_runtime_dashboard/static/app.js
 ```
+
+The fake interactive Host tests fixed argv and command shapes, connect/apply/
+reconfigure/stop/close, desired/observed-actual version identity, dynamic
+parameter validation, SSE sanitization, and sticky refresh recovery after a
+4,200-event stream beyond the removed one-shot cap.

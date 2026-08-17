@@ -4,30 +4,71 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="meiso-csrf" content="__MEISO_CSRF_TOKEN__">
-    <title>Meiso Wi‑Fi Runtime</title>
+    <title>Meiso Wi‑Fi Runtime · Live</title>
     <link rel="stylesheet" href="/style.css">
     <script src="/app.js" defer></script>
   </head>
   <body>
     <header>
       <div>
-        <p class="eyebrow">MEISO DEV TOOL · LOOPBACK ONLY</p>
-        <h1>Wi‑Fi Runtime 实机链路</h1>
-        <p class="subtitle">Core Session → Runtime catalog → desired / actual → production gate → Stream</p>
+        <p class="eyebrow">MEISO DEV TOOL · NATIVE HOST CONTROL</p>
+        <h1>Wi‑Fi Runtime 实时链路</h1>
+        <p class="subtitle">Core Session → Runtime catalog → desired / actual → production gate → continuous Stream</p>
       </div>
       <div class="header-badges">
-        <span id="run-status" class="badge neutral">NOT RUN</span>
+        <span id="host-status" class="badge neutral">DISCONNECTED</span>
+        <span id="live-status" class="badge neutral"><i></i> STREAM IDLE</span>
         <span class="badge neutral">IDENTITY / LOCATOR REDACTED</span>
       </div>
     </header>
 
     <main>
-      <section class="start-panel">
-        <div>
-          <strong>运行固定的 meiso_wifi_runtime_host</strong>
-          <p>Host 自己发布 disable desired 并 normal close；本页不发送 Runtime control。</p>
+      <section class="card control-panel" aria-labelledby="control-title">
+        <div class="control-heading">
+          <div>
+            <p class="eyebrow">PERSISTENT CONTROL LINK</p>
+            <h2 id="control-title">连接一次，持续采集，运行中可重配</h2>
+            <p>页面只调用固定控制命令；协议握手、desired / actual 和 Stream 仍由 native Host 完成。</p>
+          </div>
+          <div class="lifecycle-actions" aria-label="链路生命周期">
+            <button id="connect" type="button">连接</button>
+            <button id="stop" class="secondary" type="button" disabled>停止采集</button>
+            <button id="close" class="danger" type="button" disabled>正常关闭</button>
+          </div>
         </div>
-        <button id="start" type="button">Start one run</button>
+
+        <div class="parameter-layout">
+          <fieldset id="field-set" disabled>
+            <legend>Wi‑Fi sensor fields</legend>
+            <div class="field-grid">
+              <label><input type="checkbox" data-field-bit="1" checked><span>Link state</span></label>
+              <label><input type="checkbox" data-field-bit="2" checked><span>Signal dBm</span></label>
+              <label><input type="checkbox" data-field-bit="4" checked><span>RX bytes</span></label>
+              <label><input type="checkbox" data-field-bit="8" checked><span>TX bytes</span></label>
+              <label><input type="checkbox" data-field-bit="16" checked><span>RX packets</span></label>
+              <label><input type="checkbox" data-field-bit="32" checked><span>TX packets</span></label>
+              <label><input type="checkbox" data-field-bit="64"><span>RX dropped</span></label>
+              <label><input type="checkbox" data-field-bit="128"><span>TX dropped</span></label>
+              <label><input type="checkbox" data-field-bit="256"><span>RX errors</span></label>
+              <label><input type="checkbox" data-field-bit="512"><span>TX errors</span></label>
+            </div>
+          </fieldset>
+
+          <div class="period-control">
+            <div class="period-heading">
+              <label for="period-range">Sample period</label>
+              <div><input id="period-number" type="number" min="100" max="10000" step="100" value="500" disabled><span>ms</span></div>
+            </div>
+            <input id="period-range" type="range" min="100" max="10000" step="100" value="500" disabled>
+            <p id="period-envelope">等待 Edge catalog。</p>
+            <button id="apply" class="apply" type="button" disabled>开始 / 应用参数</button>
+          </div>
+        </div>
+
+        <div class="control-feedback">
+          <span id="command-status">等待连接。</span>
+          <span id="intent-match" class="badge neutral">NO ACTUAL</span>
+        </div>
         <p id="request-error" class="error" role="alert"></p>
       </section>
 
@@ -53,8 +94,8 @@
       </section>
 
       <section class="section-heading">
-        <div><p class="eyebrow">STATE-DRIVEN NEGOTIATION</p><h2>意图、事实与数据门</h2></div>
-        <p>desired 是 Host 意图；actual 是 Edge 最终事实。两者都是 Core State。</p>
+        <div><p class="eyebrow">STATE-DRIVEN NEGOTIATION</p><h2>Host 意图与 Edge 事实</h2></div>
+        <p>修改参数会发布新的 desired State；只有 Edge 回报 actual 后，新配置才成为有效事实。</p>
       </section>
       <section class="grid state-grid">
         <article class="card desired-card">
@@ -64,7 +105,7 @@
             <div><dt>Enabled</dt><dd id="desired-enabled">—</dd></div>
             <div><dt>Selected fields</dt><dd id="desired-fields">—</dd></div>
             <div><dt>Period</dt><dd id="desired-period">—</dd></div>
-            <div><dt>Delivery accepted</dt><dd id="desired-delivery">—</dd></div>
+            <div><dt>Delivery</dt><dd id="desired-delivery">—</dd></div>
           </dl>
         </article>
 
@@ -79,45 +120,64 @@
           </dl>
         </article>
 
-        <article id="gate-card" class="card gate-card">
+        <article class="card gate-card">
           <div class="card-title"><div><p class="kind">RUNTIME</p><h2>Production gate</h2></div><span id="gate-status" class="badge neutral">UNKNOWN</span></div>
           <p id="gate-copy" class="gate-copy">等待 Edge actual State。</p>
-          <p class="note">Gate 只由已提交的 actual 控制；它不是 subscription。</p>
+          <p class="note">停止采集会关闭数据产生，但保留 Session；这不是 subscription。</p>
         </article>
       </section>
 
-      <section class="section-heading">
-        <div><p class="eyebrow">CORE STREAM</p><h2>最新 Wi‑Fi telemetry sample</h2></div>
+      <section class="section-heading telemetry-heading">
+        <div><p class="eyebrow">CORE STREAM · LIVE EVIDENCE</p><h2>持续 Wi‑Fi telemetry</h2></div>
         <p id="sample-context">等待 active actual effective 参数。</p>
       </section>
-      <section class="card sample-card">
-        <div class="sample-head">
-          <div><span class="label">Sequence</span><strong id="sample-sequence">—</strong></div>
-          <div><span class="label">Gap</span><strong id="sample-gap">—</strong></div>
-          <div><span class="label">Link</span><strong id="sample-link">—</strong></div>
-          <div><span class="label">Signal</span><strong id="sample-signal">—</strong></div>
-        </div>
-        <div class="counter-grid">
-          <div><span>RX bytes</span><strong id="rx-bytes">—</strong></div>
-          <div><span>TX bytes</span><strong id="tx-bytes">—</strong></div>
-          <div><span>RX packets</span><strong id="rx-packets">—</strong></div>
-          <div><span>TX packets</span><strong id="tx-packets">—</strong></div>
-          <div><span>RX dropped</span><strong id="rx-dropped">—</strong></div>
-          <div><span>TX dropped</span><strong id="tx-dropped">—</strong></div>
-          <div><span>RX errors</span><strong id="rx-errors">—</strong></div>
-          <div><span>TX errors</span><strong id="tx-errors">—</strong></div>
-        </div>
-        <p class="note">JSON null 表示本次未提供，页面保持 unavailable；绝不补 0。</p>
+
+      <section class="live-strip" aria-label="实时数据证据">
+        <div><span>Total samples</span><strong id="sample-total">0</strong></div>
+        <div><span>Sequence</span><strong id="sample-sequence">—</strong></div>
+        <div><span>Arrival cadence</span><strong id="sample-cadence">—</strong></div>
+        <div><span>Edge source time</span><strong id="source-time">—</strong></div>
+        <div><span>Last arrival</span><strong id="last-arrival">—</strong></div>
+        <div><span>Gap</span><strong id="sample-gap">—</strong></div>
+      </section>
+
+      <section class="grid telemetry-grid">
+        <article class="card chart-card">
+          <div class="card-title"><h2>Signal history</h2><span id="signal-now" class="badge neutral">— dBm</span></div>
+          <canvas id="signal-chart" width="900" height="250" aria-label="最近 Wi‑Fi 信号强度曲线"></canvas>
+          <div class="chart-axis"><span>older</span><span id="chart-range">等待 signal 样本</span><span>now</span></div>
+        </article>
+
+        <article class="card sample-card">
+          <div class="sample-head">
+            <div><span class="label">Link</span><strong id="sample-link">—</strong></div>
+            <div><span class="label">Signal</span><strong id="sample-signal">—</strong></div>
+            <div><span class="label">Selected</span><strong id="sample-selected">—</strong></div>
+            <div><span class="label">Present</span><strong id="sample-present">—</strong></div>
+          </div>
+          <div class="counter-grid">
+            <div><span>RX bytes</span><strong id="rx-bytes">—</strong><small id="rx-bytes-delta">—</small></div>
+            <div><span>TX bytes</span><strong id="tx-bytes">—</strong><small id="tx-bytes-delta">—</small></div>
+            <div><span>RX packets</span><strong id="rx-packets">—</strong><small id="rx-packets-delta">—</small></div>
+            <div><span>TX packets</span><strong id="tx-packets">—</strong><small id="tx-packets-delta">—</small></div>
+            <div><span>RX dropped</span><strong id="rx-dropped">—</strong><small id="rx-dropped-delta">—</small></div>
+            <div><span>TX dropped</span><strong id="tx-dropped">—</strong><small id="tx-dropped-delta">—</small></div>
+            <div><span>RX errors</span><strong id="rx-errors">—</strong><small id="rx-errors-delta">—</small></div>
+            <div><span>TX errors</span><strong id="tx-errors">—</strong><small id="tx-errors-delta">—</small></div>
+          </div>
+          <p class="note">null 表示 Edge 本次未提供；页面不会补 0。变化量来自相邻真实样本。</p>
+        </article>
       </section>
 
       <section class="grid lower-grid">
         <article class="card">
-          <div class="card-title"><h2>Run result</h2><span id="result-status" class="badge neutral">WAITING</span></div>
-          <dl>
-            <div><dt>Requested</dt><dd id="run-requested">—</dd></div>
-            <div><dt>Received</dt><dd id="run-received">—</dd></div>
-            <div><dt>Failure stage</dt><dd id="failure-stage">—</dd></div>
-          </dl>
+          <div class="card-title"><h2>Recent samples</h2><span id="history-count" class="badge neutral">0</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Seq</th><th>Edge time</th><th>Arrival Δ</th><th>Signal</th><th>Link</th></tr></thead>
+              <tbody id="sample-history"><tr class="empty-row"><td colspan="5">等待数据</td></tr></tbody>
+            </table>
+          </div>
         </article>
         <article class="card">
           <div class="card-title"><h2>Sanitized Host events</h2><span id="event-count" class="badge neutral">0</span></div>
@@ -125,6 +185,6 @@
         </article>
       </section>
     </main>
-    <footer>Dev Tool only · no locator, full identity, SSID, MAC or credentials enter the browser</footer>
+    <footer>Dev Tool only · locator, full identity, SSID, MAC and credentials never enter the browser</footer>
   </body>
 </html>
