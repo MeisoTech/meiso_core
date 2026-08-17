@@ -109,6 +109,10 @@ class DashboardError(Exception):
     """An expected lifecycle or control request failure."""
 
 
+class _DashboardStop(BaseException):
+    """Terminate the standalone server through its normal cleanup path."""
+
+
 def _uint(value: Any, maximum: int = UINT64_MAX, *, positive: bool = False) -> int | None:
     if type(value) is not int or value < (1 if positive else 0) or value > maximum:
         return None
@@ -1167,11 +1171,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dashboard: {error}", file=sys.stderr)
         return 2
     print(f"Wi-Fi Runtime dashboard: http://{server.expected_host}/", flush=True)
+
+    def request_stop(_signal_number: int, _frame: Any) -> None:
+        raise _DashboardStop()
+
+    previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
     try:
         server.serve_forever(poll_interval=0.2)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, _DashboardStop):
         pass
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
         server.shutdown()
         server.server_close()
         state.shutdown()

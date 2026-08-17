@@ -15,13 +15,43 @@ Use a Git-ignored local config. The server never reads its contents or exposes
 its path to the browser.
 
 ```sh
+python3 devtools/web/wifi_runtime_dashboard/dashboardctl.py start \
+  --host-binary /absolute/path/to/meiso_wifi_runtime_host \
+  --config /absolute/path/to/wifi-host.local.conf
+```
+
+`dashboardctl.py` detaches the server from the invoking terminal and fixes the
+listener at `127.0.0.1:49999`. PID state and a bounded-visibility operational
+log live under the Git-ignored `logs/wifi_runtime_dashboard/` directory. The
+same tool provides deterministic local lifecycle operations:
+
+```sh
+python3 devtools/web/wifi_runtime_dashboard/dashboardctl.py status
+python3 devtools/web/wifi_runtime_dashboard/dashboardctl.py logs --lines 80
+python3 devtools/web/wifi_runtime_dashboard/dashboardctl.py stop
+python3 devtools/web/wifi_runtime_dashboard/dashboardctl.py restart \
+  --host-binary /absolute/path/to/meiso_wifi_runtime_host \
+  --config /absolute/path/to/wifi-host.local.conf
+```
+
+`stop` first requests graceful server shutdown, including bounded cleanup of
+an active native Host child. Its bounded hard-stop fallback freezes the server,
+verifies the exact direct Host child and kills that separate process group
+before killing the server, so a Host cannot be orphaned with the Core Session.
+The private `0600` PID state records the expected executable/config paths for
+that identity check; neither it nor the log records config contents,
+credentials, Host output, or Host stderr.
+
+For foreground debugging only, run `server.py` directly:
+
+```sh
 python3 devtools/web/wifi_runtime_dashboard/server.py \
   --host-binary /absolute/path/to/meiso_wifi_runtime_host \
   --config /absolute/path/to/wifi-host.local.conf
 ```
 
 The CLI binds only `127.0.0.1` and defaults to port `49999`; use `--port N` to
-select another loopback port. The fixed child argv is:
+select another loopback port only in foreground debugging. The fixed child argv is:
 
 ```text
 <host-binary> --config <config> --interactive
