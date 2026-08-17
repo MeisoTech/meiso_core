@@ -3,9 +3,11 @@
 ## Wi-Fi Runtime Edge v0
 
 当前正式 Runtime target 是
-[`wifi-telemetry-v0`](../../profiles/wifi-telemetry-v0/README.md) 的 one-shot Linux Edge。
-它以 numeric direct-IP 接受一个 Host Session，从私有 config 与 Linux Wi-Fi probe 的交集生成
-catalog，再执行 `desired State -> actual State -> production gate -> data Stream`。不存在
+[`wifi-telemetry-v0`](../../profiles/wifi-telemetry-v0/README.md) 的单连接 Linux Edge。
+它以 numeric direct-IP 接受一个 Host Core Session，从私有 config 与 Linux Wi-Fi probe 的
+交集生成 catalog，并在该 Session 内处理多个 desired；`stop` 后仍 READY，normal
+`close` 才结束 foreground attempt。数据序列为
+`desired Core State -> actual Core State -> production gate -> Core Stream`。不存在
 subscription；一旦 sample 越过 adapter materialization boundary，就必须进入 Runtime/Core。
 完整 locator/identity、lifecycle、Host 联调和 evidence 规则见
 [Direct-IP Wi-Fi Runtime v0 实装规则书](../../docs/wifi-runtime-direct-ip-v0.md)。
@@ -33,8 +35,28 @@ cmake --build build --target meiso_wifi_runtime_host
 ./build/meiso_wifi_runtime_host --config /path/to/ignored/host.local.conf
 ```
 
-需要本地页面复核时，可用 loopback-only Dashboard 启动同一 Host；它只显示脱敏结果，不新增
-Runtime control：
+上述命令是有界 one-shot。单 Session 持续联调使用 native Host interactive 模式：
+
+```sh
+./build/meiso_wifi_runtime_host \
+  --config /path/to/ignored/host.local.conf \
+  --interactive
+```
+
+stdin 命令为精确 compact NDJSON：
+
+```json
+{"command":"apply","enabled":true,"selected_fields":63,"sample_period_ms":500}
+{"command":"apply","enabled":false,"selected_fields":63,"sample_period_ms":500}
+{"command":"close"}
+```
+
+enable 从 inactive 经 `STARTING/PENDING -> RUNNING/APPLIED`；active reconfigure 先公布
+`RUNNING/PENDING` 的旧 effective/epoch，待接受后切换到新 epoch 的
+`RUNNING/APPLIED`；disable 先切断 source 并排空已物化 sample，再经
+`STOPPING/PENDING -> STOPPED/APPLIED`。`STOPPED` 不关闭 Session。
+
+需要本地页面复核时，可用 loopback-only Dashboard 启动同一 native Host：
 
 ```sh
 python3 devtools/web/wifi_runtime_dashboard/server.py \
@@ -42,19 +64,33 @@ python3 devtools/web/wifi_runtime_dashboard/server.py \
   --config /absolute/path/to/ignored/host.local.conf
 ```
 
+页面只提供固定 `connect/apply/stop/close` 意图和脱敏事件投影；它不解析 wire，
+不是 Runtime/SDK/Virtual Edge，也不是 subscription control plane。浏览器 API 固定为
+`POST /api/v1/connect|apply|stop|close` 与 `GET /api/v1/events`。
+
 Edge 只读取配置 interface 的 carrier/operstate、`/proc/net/wireless` signal 与八个累计计数；
 interface/SSID/BSSID/MAC/IP/channel/driver path 不进入公开 payload。production 后 source
 unavailable 或计数器回退表示 continuity 丢失：Edge 停止新采样与新 control，排空已有 outbound，
 再以 `SHUTDOWN` 关闭 Session；恢复须由新进程、新 identity 和完整重协商完成。
 
-当前已有本机真实 `AF_INET` synthetic Runtime test、macOS Host build、K230D exact-source
-cross-build，以及两次真实 direct-IP K230D board run。两组 desired 分别验证 6 fields/500 ms
-与 link+signal/1000 ms，均完成 catalog、enable/RUNNING、连续 sample、disable/STOPPED 和 normal
-close，双方 rc=0；其受限 `BOARD_VERIFIED` 记录见
+当前已有本机真实 `AF_INET` synthetic Runtime test、macOS Host build、K230D cross-build
+与真实 direct-IP K230D board run。2026-08-17 Edge 产物为 95,360-byte Xuantie RISC-V ELF，
+SHA-256 为 `fe8e20272917d04b4b90a565c8c9c4041a9062d717810c811fd6c7c517ce4dbc`。同一
+Core Session 内实测 `0x03f/500 ms -> 0x003/1000 ms`，两段合计 5 个真实 sample，
+完整观察 `STARTING/RUNNING`、reconfigure `PENDING` 旧 epoch/新 `RUNNING`、
+`STOPPING/STOPPED` 与 Host/Edge normal close，双方 rc=0。其受限 `BOARD_VERIFIED` 记录见
 [规则书的证据边界](../../docs/wifi-runtime-direct-ip-v0.md#8-证据边界)。plain TCP 的 exact
 PeerId/Profile 匹配仍不是认证、机密性或完整性；SSH/串口只属于部署与维护。
 
-另一次实机 fault run 在 production 中终止 Host；one-shot Edge 观察连接失败并非零退出。
+同日 Dashboard 以同一 native Host/K230D Session 验证 READY/catalog、`0x03f/500 ms`
+持续 sample、运行中 `0x003/1000 ms` 新 epoch/sequence 重启；reload 后同一
+Session/sequence 继续、control 恢复且不重放历史 sample。`STOPPING -> STOPPED` 后
+Session 仍 READY，并在同 Session 内再 start 到新 epoch。该页面 attempt 尚未请求
+normal close，不记录 Host/Edge rc；它只证明 Web projection/control integration，不扩展
+native protocol 证据范围。
+
+2026-08-16 的实机 fault run 在 production 中终止 Host；当时的 one-shot Edge 观察连接失败
+并非零退出。
 不重启板或 Wi-Fi，fresh Edge/Host 随即从 Session 与 catalog 重新协商，并完成 5-sample normal
 run。该结果证明显式 process restart recovery，不是自动 reconnect/resume。
 

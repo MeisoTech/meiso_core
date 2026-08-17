@@ -1,6 +1,6 @@
 # 系统进展
 
-> 日期：2026-08-16
+> 日期：2026-08-17
 > 状态：公开、已脱敏的 evidence report；不是产品规范，不包含原始日志、地址、凭据、
 > 唯一设备标识或本机路径。
 
@@ -74,7 +74,9 @@ Bounded endpoint history 以 `(EndpointId, opaque incarnation)` pair 计数且�
 gate、desired/actual payload exact match、disable/stop、epoch 与 endpoint identity history
 continuity/retirement/capacity、catalog replacement 与 Core terminal；
 `meiso_runtime_session_test` 使用真实 Session、StatePublisher/Replica 和 Stream primitive 验证
-desired→actual→sample、disable cut、reconfigure/new epoch 与新 Session 重建 catalog。
+desired→actual→sample、disable cut、reconfigure/new epoch 与新 Session 重建 catalog；continuous 用例在
+同一 READY Session 内验证 enable、旧 epoch 在重配置接受前继续、新 epoch 切换、
+disable 中的 `STOPPING -> STOPPED`、stop 后 Session 仍 READY 以及再次 enable。
 `meiso_runtime_wire_test` 以独立 literal golden bytes 冻结 wire v2 的 catalog、accept、
 reject、State offer/accept 与 Stream sample 六类 frame，并覆盖每个截断点、reserved 字段和
 malformed 时的公开状态不变。当前 source tree 的 fresh Debug/Release CTest 全量通过；这支持当前 Runtime
@@ -114,11 +116,14 @@ synthetic telemetry，不证明 remote network、Linux sysfs 或 K230D。
 production epoch 的 sample 才重新进入 Core Stream。该向量仍是本机 synthetic carrier evidence，
 不是 K230D network-loss 或 reconnect target evidence。
 
-macOS Host foreground Dev Tool 从私有配置读取 numeric IPv4 locator、local/expected PeerId 与
-desired，只按 accepted Profile 输出 allowlisted NDJSON；它已通过 warnings-as-errors build，
-但不是 SDK/Virtual Edge。K230D Linux Edge target 从私有
-interface/rate/field envelope 与 Linux probe 交集生成 catalog；production 中 source continuity
-无法证明时，它排空已物化数据并以 `SHUTDOWN` 结束 one-shot Session。
+macOS Host foreground Dev Tool 从私有配置读取 numeric IPv4 locator 与 local/expected
+PeerId，只按 accepted Profile 输出 allowlisted NDJSON；不带 flag 时保留有界 one-shot，
+`--interactive` 在同一 Core Session 内接受精确 compact NDJSON
+`apply(enabled=true/false)` 与 `close`。它已通过
+warnings-as-errors build，但不是 SDK/Virtual Edge。K230D Linux Edge target 从私有
+interface/rate/field envelope 与 Linux probe 交集生成 catalog，并在单连接中处理多个
+desired；production 中 source continuity 无法证明时，它排空已物化数据并以
+`SHUTDOWN` 结束当前 Session。
 
 2026-08-16，Edge source commit `2ac960c` 以 Xuantie GCC 14.1.1 交叉构建为 91,128-byte
 RISC-V ELF（SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a2b76f6`），
@@ -130,19 +135,38 @@ RISC-V ELF（SHA-256 `24b02ff30ca9f1caa0542a997bdea93785d23766fdd22e06a9aee8a83a
 公开摘要不保留 locator、SSID、MAC、PeerId、凭据或原始 counters。该结果可标
 `BOARD_VERIFIED`，但只覆盖这两个手动 one-shot 参数组合与上述 transcript。
 
-同日，loopback-only Wi-Fi Runtime Dashboard 以固定 argv 启动同一正式 Host，再完成一轮
-3-sample K230D transcript；页面显示 catalog accepted、desired v1、actual RUNNING、连续 sample、
-desired v2 disabled、actual STOPPED、normal close 与 requested=received，Host/Edge 均 rc=0。
-Dashboard 只投影 Host 已校验的脱敏 NDJSON；它不解析 wire、不产生 control，也不提升上述
-`BOARD_VERIFIED` 的协议或 target 范围。
+2026-08-17，新 Edge 以 Xuantie toolchain 交叉构建为 95,360-byte RISC-V ELF
+（SHA-256 `fe8e20272917d04b4b90a565c8c9c4041a9062d717810c811fd6c7c517ce4dbc`）。
+macOS Host 与 K230D 在同一 Core Session 内以 `selected_fields=0x03f` / `500 ms` 启动，
+再运行中改为 `0x003` / `1000 ms`，两段合计接收 5 个真实 sample。脱敏 transcript
+精确经过 `STARTING/PENDING -> RUNNING/APPLIED`、保留旧 effective/epoch 的
+`RUNNING/PENDING`、新 epoch 的 `RUNNING/APPLIED`、`STOPPING/PENDING -> STOPPED/APPLIED`，
+停止后 Session 仍 READY；最后 Host/Edge normal close，双方 rc=0。这项 `BOARD_VERIFIED`
+只覆盖该 artifact、参数组合和
+transcript，不证明性能、长稳、安全 transport、自动重连或 SDK。
 
-同日的 target fault run 在 actual `RUNNING` 且已交换 10 个 sample 时强制终止 Host；Host 与
+当前 loopback-only Wi-Fi Runtime Dashboard 以固定 argv 启动同一 native Host，向它交付
+`connect/apply/stop/close` 固定意图，并投影 Host 已校验的脱敏 NDJSON。desired/actual 仍是
+Core State，sample 仍是 Core Stream；Web 不解析 wire，不是 Runtime/SDK/Virtual Edge，也不实现
+subscription 或第二套 truth。
+
+2026-08-17 的当前 Dashboard 实机验证先显示 Core READY/catalog，再在同一 native
+Host/K230D Session 内显示 `0x03f/500 ms` 持续 sample，运行中改为
+`0x003/1000 ms` 后新 epoch 的 Stream sequence 重新起算。浏览器 reload 后同一
+Session/sequence 继续、control 状态恢复，且不重放历史 sample；disable 依次显示
+`STOPPING -> STOPPED`，Session 仍 READY，然后同 Session 再 start 到新 epoch。它只证明
+Web projection/control 与 native 持续链路的集成，不扩展协议或 target 证据范围。本次
+页面 attempt 尚未请求 normal close，不声明其 Host/Edge rc；前述独立 native run 才支持
+normal close 双方 rc=0。2026-08-16 的早期页面另曾完整投影一次 3-sample
+K230D one-shot transcript，不能替代当前 interactive control evidence。
+
+2026-08-16 的 target fault run 在 actual `RUNNING` 且已交换 10 个 sample 时强制终止 Host；Host 与
 one-shot Edge 均非零退出，Edge 未伪装成 `STOPPED` 或 normal close。板与 Wi-Fi 未重启，fresh
 Edge/Host 随即建立新 Session，并重新完成 catalog、desired、actual、5 个 sample、`STOPPED` 与
 normal close，双方 rc=0。这是显式 process restart recovery evidence，不证明自动 reconnect、
 resume、旧 desired/gate 继承、OS/network outage 或长稳。
 
-同日另一次 bounded cadence run 只选择 link+signal，以 100 ms desired 周期连续接收 sequence
+2026-08-16 另一次 bounded cadence run 只选择 link+signal，以 100 ms desired 周期连续接收 sequence
 1..64；全部 `gap=false/missing_before=0`，actual 精确确认参数，随后 `STOPPED`、normal close，
 Host/Edge rc=0。这个约 6.4-second 窗口不是 latency/jitter、吞吐、deadline 或长稳 evidence。
 

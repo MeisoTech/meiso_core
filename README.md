@@ -41,11 +41,17 @@ nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完�
 首个正式 Runtime 垂直切片已选择 `wifi-telemetry-v0`：本机真实 `AF_INET` 测试贯通 Core
 READY、catalog、Host desired State、Edge actual State、production gate 与 Core Stream；macOS
 Host Dev Tool 和 K230D Linux Edge target 使用 numeric direct-IP 私有配置；同一路径已在
-K230D Linux 与 macOS 间完成一次受控板测。构建、运行与严格证据边界见
+K230D Linux 与 macOS 间验证单一 Core Session 内的启动、运行中重配置、停止与正常关闭。
+native Host 的 `--interactive` 模式在同一 READY Session 中以
+`apply(enabled=true/false)` 和 `close` 实现启动、停止与关闭；
+desired/actual 都是 Core State，数据是 Core Stream，不存在 subscription control plane。
+构建、运行与严格证据边界见
 [Direct-IP Wi-Fi Runtime v0 实装规则书](docs/wifi-runtime-direct-ip-v0.md)。
 同一正式 Host 可由 loopback-only
-[Wi-Fi Runtime dashboard](devtools/web/wifi_runtime_dashboard/README.md) 启动并可视化；页面只投影
-Host 已校验的脱敏事件，不实现 wire、Runtime control、SDK 或第二套协议判定。
+[Wi-Fi Runtime dashboard](devtools/web/wifi_runtime_dashboard/README.md) 启动并可视化；Web 只把
+`connect/apply/stop/close` 固定意图交给 native Host，并投影 Host 已校验的脱敏事件。
+它不解析 wire，不实现 Runtime/SDK/Virtual Edge，也不是 subscription 或第二套
+协议 truth。
 
 这套实现仍不是 application-facing 完整产品 Runtime 或产品系统；它不包含 endpoint
 facet/direction/QoS/permission schema、真实 probe/hotplug adapter、typed dispatcher、Virtual
