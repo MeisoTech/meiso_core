@@ -34,6 +34,10 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator
   和 conformance 独立开发与逐片对接。
+- [Host 集成回执 v0](host-integration-receipt-v0.md)：当前 direct-IP Session→Runtime→Resource
+  接入顺序、Host handle 生命周期、协议入口与证据边界；不是 SDK API。
+- [Edge local compositor v0 开发方案](edge-local-compositor-v0.md)：Runtime--SDK 层的
+  Composition coordinator、renderer/present seam、选择性迁移与验收；Core 不变，当前未实现。
 - [K230D Linux Edge 开发基线](k230d-linux-edge-development-baseline.md)：当前候选实现中
   大小核、Linux、NuttX、sensor、network 与 rendering 的责任分工；它不是互操作 Profile。
 

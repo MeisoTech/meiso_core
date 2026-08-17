@@ -2,6 +2,19 @@
 
 > 状态：产品级技术契约。定义双方语义；具体数据结构和 wire 编码在实现前补充。
 
+## 分层边界
+
+Composition 位于 Runtime--SDK/application integration 层，不进入 Core。Core 只交付通用
+State、Stream、Action、Blob 与 Session-bound Runtime payload；Runtime 先验证 accepted catalog、
+Resource owner/schema/version/epoch，Composition 才消费 typed Resource。compositor 不解析
+Session wire、socket、PeerId 或 transport frame，renderer/decoder/scanout adapter 也不能反向
+修改 Core truth。
+
+Host compositor 可以拥有 logical scene、representation planning 与应用 lifecycle；Edge
+Composition 仍独占 plan preparation、降级/安全 policy、显示边界激活与 physical presentation
+authority。renderer 只返回完整 candidate 或 failure，不产生 `prepared_token`、不激活 plan、
+不把完成渲染冒充为 scanout。
+
 ## 共同契约，不同职责
 
 Host 与 Edge 理解同一套 Composition contract，但只实现各自声明的能力。

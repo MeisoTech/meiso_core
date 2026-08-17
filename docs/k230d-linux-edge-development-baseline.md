@@ -114,6 +114,10 @@ activation、hold-last/safety policy 与最终 presentation authority。`REMOTE_
 才把所声明的本地生成工作放在 Edge。实际分工由未来互操作 Profile 选择。小核不运行
 renderer 或第二套 Composition。
 
+当前选定的 coordinator、renderer/present seam、K230D Linux backend 与选择性迁移顺序见
+[Edge local compositor v0 开发方案](edge-local-compositor-v0.md)。该页是实现计划，不把旧
+off-screen benchmark 或 driver probe 提升为 physical presentation evidence。
+
 ## 当前证据边界
 
 当前已选择一份包含 Linux/NuttX、A/B rootfs、串口恢复、Wi-Fi 配置和公钥 SSH 的

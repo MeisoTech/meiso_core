@@ -207,6 +207,19 @@ window，Blob 是 401-byte 固定脱敏 manifest。camera 与 IMU 没有被注�
 这些结果只证明当时 adapter/workload 的形状和失败门。Hantro、RTP/UDP、Linux process、
 设备节点、私有 packet、Orin 计算路径和约 27 fps 数字都不是新架构约束。
 
+## Host handoff 与 compositor 设计状态
+
+当前 [Host 集成回执 v0](host-integration-receipt-v0.md) 只整理已经实现/验证的 direct-IP
+Session→Runtime→Resource 顺序、Host handle 生命周期与协议入口，没有新增 wire 或 SDK API。
+Host 本地 object/compositor 模型应通过 adapter 映射到 accepted catalog、desired/actual State、
+Stream 与未来 Composition Resource；不能把本地 C struct、Dashboard NDJSON 或 preliminary
+remote encoding 直接作为 Edge wire。
+
+[Edge local compositor v0 开发方案](edge-local-compositor-v0.md) 已选定 Runtime--SDK 边界、
+plan prepare/activate authority、renderer/present seam、K230D Linux 首发与选择性源码迁移规则。
+本轮没有合并外部 Host compositor、旧本地素材、vendor SDK 或二进制，也没有新增 compositor
+source、Profile、wire、MediaStream route、target build 或 physical presentation evidence。
+
 ## K230D lab evidence
 
 Resource semantic core 的 target build 状态为 `HOST_VERIFIED`，identity-gated candidate 在
@@ -272,7 +285,8 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition API、prepared generation 与真实 presentation endpoint；
+- Composition Profile/wire、portable coordinator、prepared generation、renderer/present backend 与
+  真实 presentation endpoint；当前只有产品契约和实现计划；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。

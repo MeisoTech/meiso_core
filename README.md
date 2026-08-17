@@ -64,6 +64,13 @@ K230D conformance target 已完成 host-side cross-build、image inspection，�
 Composition、MediaStream、完整冷启动或产品 Profile evidence。各层验证范围见
 [系统进展](docs/system-report.md)。
 
+当前 Host 团队接入顺序、handle 生命周期与协议入口已收敛为
+[Host 集成回执 v0](docs/host-integration-receipt-v0.md)。Edge local compositor 的边界是
+Runtime--SDK/application integration：Host 产生 logical plan，Edge 独占 prepare/activate/safety/
+scanout，renderer 只产生 candidate/failure，Core 不变。模块与 K230D backend 计划见
+[Edge local compositor v0](docs/edge-local-compositor-v0.md)；该计划尚无 compositor 实现或
+physical presentation evidence。
+
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
 ```powershell
@@ -85,6 +92,8 @@ ctest --preset windows-msvc-debug
 - [Direct-IP Wi-Fi Runtime v0 实装规则书](docs/wifi-runtime-direct-ip-v0.md)
 - [Wi-Fi Runtime dashboard](devtools/web/wifi_runtime_dashboard/README.md)
 - [Composition 契约](docs/composition.md)
+- [Host 集成回执 v0](docs/host-integration-receipt-v0.md)
+- [Edge local compositor v0 开发方案](docs/edge-local-compositor-v0.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)
 - [系统进展](docs/system-report.md)
