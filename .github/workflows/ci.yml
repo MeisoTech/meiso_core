@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-debug
+            runner: ubuntu-24.04
+            compiler: gcc
+            build_type: Debug
+            c_flags: ""
+            linker_flags: ""
+          - name: appleclang-release
+            runner: macos-15
+            compiler: clang
+            build_type: Release
+            c_flags: ""
+            linker_flags: ""
+          - name: clang-asan-ubsan
+            runner: ubuntu-24.04
+            compiler: clang
+            build_type: Debug
+            c_flags: >-
+              -fsanitize=address,undefined
+              -fno-omit-frame-pointer
+              -fno-sanitize-recover=all
+            linker_flags: -fsanitize=address,undefined
+    env:
+      CC: ${{ matrix.compiler }}
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: |
+          cmake -S . -B "build/${{ matrix.name }}" \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DCMAKE_C_FLAGS="${{ matrix.c_flags }}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.linker_flags }}"
+
+      - name: Build
+        run: cmake --build "build/${{ matrix.name }}" --parallel 2
+
+      - name: Run four-kind integration
+        run: >-
+          ctest --test-dir "build/${{ matrix.name }}"
+          --output-on-failure
+          --no-tests=error
+          --timeout 180
+          -R '^meiso_four_kind_lab_internal_test$'
+
+      - name: Run native test suite
+        run: >-
+          ctest --test-dir "build/${{ matrix.name }}"
+          --output-on-failure
+          --no-tests=error
+          --timeout 180
+
+  dashboards:
+    name: Dashboards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONWARNINGS: error
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Test four-kind dashboard
+        working-directory: devtools/web/four_kind_dashboard
+        run: python -m unittest discover -v
+
+      - name: Test Wi-Fi Runtime dashboard
+        working-directory: devtools/web/wifi_runtime_dashboard
+        run: python -m unittest discover -v
+
+      - name: Check dashboard JavaScript syntax
+        run: |
+          node --check devtools/web/four_kind_dashboard/static/app.js
+          node --check devtools/web/wifi_runtime_dashboard/static/app.js
