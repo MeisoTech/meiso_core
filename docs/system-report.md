@@ -32,7 +32,7 @@ portable in-process 实现通过了对应 Host fixture，不表示 remote、targ
 | Blob | bounded staging、callback verification、完整后原子 publish、duplicate/conflict/capacity/abort、zero length 与 reentrancy guard | Core 内置 hash、chunk/resume、persistence、eviction、授权或 Session transfer |
 | four-kind fixture | 同一 descriptor snapshot 下四类真实 public contract 的独立初始化、正交状态以及逐类容量失败隔离 | Resource Runtime、generic dispatcher、LinkSession、remote backend 或产品 Profile |
 
-当前分支另实现 `meiso_session_core`：caller-owned arena、显式 big-endian wire v1、
+当前 `main` 另实现 `meiso_session_core`：caller-owned arena、显式 big-endian wire v1、
 `OPEN / ACCEPT / CONFIRM / READY`、exact protocol/Profile、bounded limits、一次性 Session
 和 READY 前 Runtime-message gate。两个独立 arena 经同一 codec 完成 loopback；旧 Session、
 错误 identity/version/Profile/limits、畸形 frame、提前 Runtime、close 和 transport loss 均有
@@ -103,7 +103,7 @@ remote/direct-IP、Wi-Fi、K230D、bootstrap policy、TLS/auth、Runtime dispatc
 
 ## Direct-IP Wi-Fi Runtime slice
 
-当前分支以 [`wifi-telemetry-v0`](../profiles/wifi-telemetry-v0/README.md) 组合 Session Core、
+当前 `main` 以 [`wifi-telemetry-v0`](../profiles/wifi-telemetry-v0/README.md) 组合 Session Core、
 Runtime wire v2、Core State/Stream 与 POSIX adapter。真实本机 `AF_INET` 测试完成 Core READY、
 完整 catalog accept、Host desired enable、Edge actual RUNNING、88-byte匿名 Wi-Fi sample、
 disable cut、actual STOPPED、unsupported desired 和新 Session 不继承 gate/actual；它使用
@@ -175,11 +175,13 @@ Direct IP 是 locator，不是 identity；plain TCP 上的 PeerId/Profile exact 
 Stream。完整操作规则与 evidence matrix 见
 [Direct-IP Wi-Fi Runtime v0 实装规则书](wifi-runtime-direct-ip-v0.md)。
 
-## K230D Linux four-kind lab
+## K230D Linux four-kind integration CI
 
-2026-08-16 的一次受控实验把同一 Session Core、POSIX connected-stream adapter 和固定
-[`four-kind-lab-v0`](../profiles/four-kind-lab-v0/README.md) fixture 运行在 macOS Host 与
-K230D 大核 Linux Edge 之间。Edge ELF 为 96104 bytes，SHA-256
+保留该 Profile 的首要目的，是在同一固定 transcript 中纵向联测 Session Core、POSIX
+connected-stream adapter 与四类 Resource primitive；它与正式 Runtime v2 CI 互补，但不定义
+产品协商。2026-08-16 的一次受控实验把同一 Session Core、POSIX connected-stream adapter
+和固定 [`four-kind-lab-v0`](../profiles/four-kind-lab-v0/README.md) fixture 运行在 macOS Host
+与 K230D 大核 Linux Edge 之间。Edge ELF 为 96104 bytes，SHA-256
 `41a7a7b3930d2b738c42fb127d2628b7b3b623a74952ca061b41703f247f738b`；它从维护通道临时部署到
 `/tmp`，没有刷机、安装服务或 autostart。
 

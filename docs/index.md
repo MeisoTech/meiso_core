@@ -44,12 +44,12 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 ## 当前实验入口
 
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
-  Blob 实验契约；不是产品 Profile；
-- [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与早期
-  four-kind 手动 fixture；两者 evidence 不互换；
+  Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
+- [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与固定
+  four-kind integration fixture；两者 evidence 不互换；
 - [Wi-Fi Runtime 面板](../devtools/web/wifi_runtime_dashboard/README.md)：启动正式 macOS Host 并
   脱敏投影 catalog、desired/actual、production gate 与 Stream；不实现 wire/control 或 SDK；
-- [早期 four-kind 实验面板](../devtools/web/four_kind_dashboard/README.md)：固定 lab fixture 的
+- [Four-kind integration 面板](../devtools/web/four_kind_dashboard/README.md)：固定 lab fixture 的
   本地可视化 Dev Tool；不属于正式 Runtime 或 SDK。
 
 规范说明必须成立的行为；指南说明如何实现和验证；报告只陈述特定版本、平台、条件和

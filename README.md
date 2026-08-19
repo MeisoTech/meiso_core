@@ -16,14 +16,14 @@ Virtual Edge 与应用 API。IP、port 和 TCP adapter 属于 bootstrap/transpor
 
 ## 当前代码状态
 
-当前分支包含新的 portable C11 `meiso_resource_core`：共同 identity 与 descriptor 校验、
+当前 `main` 包含 portable C11 `meiso_resource_core`：共同 identity 与 descriptor 校验、
 固定且可 seal 的 descriptor snapshot，以及 caller-owned arena 上的 bounded
 `State / Stream / Action / Blob` primitive。它们是 Resource semantic core v0 的
 source-level implementation API，不冻结二进制 ABI。
 
 当前还包含 caller-owned arena 上的 `meiso_session_core`：exact protocol/Profile、
 `OPEN/ACCEPT/CONFIRM/READY`、bounded wire 与 Runtime-message gate。命名的 Session
-状态机、wire 与 four-kind integration tests 支持
+状态机、wire 与固定 Profile 的 four-kind 纵向 integration CI 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。
 
 当前 portable `meiso_runtime` 已实现 State/Stream-driven negotiation source v0 与 wire v2：

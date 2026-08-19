@@ -1,17 +1,25 @@
 # Four-kind lab Profile v0
 
-> Status: bounded lab Profile and executable codec contract. It is not a product Profile, security
-> transport, application Runtime, SDK API, discovery protocol, or sensor catalog.
+> Status: bounded lab Profile, executable codec contract, and retained vertical integration CI. It
+> is not a product Profile, security transport, application Runtime, SDK API, discovery protocol,
+> or sensor catalog.
 
 This fixture predates the formal [Runtime contract](../../docs/runtime.md). Its fixed Registry and
-one-shot order are retained only as board/data-exchange evidence; product endpoints must use the
-Runtime catalog/desired/actual/route negotiation and must not extend `M4L1` into a parallel Runtime.
+one-shot order are intentionally retained as a cross-layer CI path and as bounded board/data-exchange
+evidence. Product endpoints must use the Runtime catalog/desired/actual/route negotiation and must
+not extend `M4L1` into a parallel Runtime.
 
 ## Question and evidence boundary
 
 This Profile answers one question: after a real Wi-Fi TCP connection and Core Session `READY`, can a
 macOS Host and the K230D Linux Edge execute one truthful, bounded transcript through the existing
 `State / Stream / Action / Blob` primitives?
+
+In CI it answers the same question without claiming product negotiation: can the four public
+Resource primitives, Session gate, POSIX connected-stream adapter, fixed codec/order validator and
+normal/failure lifecycle still operate together? This is complementary to the formal Runtime v2
+tests. The four-kind target stays blocking in normal and sanitizer configurations; a failure must be
+fixed rather than skipped merely because the Profile is lab-only.
 
 The observed endpoint combines Wi-Fi network telemetry and the K230 on-die temperature source. The
 temperature value is the corrected vendor conversion with an explicit uncertainty; the raw register

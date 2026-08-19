@@ -97,12 +97,13 @@ run。该结果证明显式 process restart recovery，不是自动 reconnect/re
 一个独立 bounded cadence run 以 link+signal、100 ms desired 收到 sequence 1..64，Host 无
 gap/missing，双方正常关闭。该约 6.4-second 窗口不是性能、实时或长稳证明。
 
-## Earlier four-kind lab endpoint
+## Four-kind integration CI endpoint
 
 This target builds the bounded native Edge/Host fixture selected by
 [`four-kind-lab-v0`](../../profiles/four-kind-lab-v0/README.md). It is a manual lab executable, not
 a daemon, boot service, board image, product Runtime, discovery mechanism, or security transport.
-It remains evidence for the earlier fixed transcript and is not the K230D implementation entry for
+It remains a retained vertical integration fixture and evidence for the fixed transcript; it is not
+the K230D implementation entry for
 the formal [Runtime contract](../../docs/runtime.md).
 
 ## Build

@@ -98,5 +98,6 @@ cross-build 与一次真实 direct-IP `catalog→desired→actual→sample→dis
 已经完成；证据只覆盖该手动 one-shot 配置。后续分别验证 network loss、new Session、catalog
 update、hotplug、资源耗尽与长期行为。
 
-旧 four-kind lab 是固定顺序 evidence，不是正式 Runtime。TCP、认证、K230D、真实 endpoint
-和 SDK 只能按各自实测声明；Host semantic/wire 测试不证明 network、security 或 target。
+固定 four-kind lab 是保留的纵向 integration CI 与固定顺序 evidence，不是正式 Runtime。
+TCP、认证、K230D、真实 endpoint 和 SDK 只能按各自实测声明；Host semantic/wire 测试不证明
+network、security 或 target。
