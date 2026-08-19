@@ -92,7 +92,7 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 | Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：`MRT0`、wire v2 |
 | 首个 Profile | [Wi-Fi telemetry v0](../profiles/wifi-telemetry-v0/README.md) |
 | direct-IP 实装 | [Direct-IP Wi-Fi Runtime v0](wifi-runtime-direct-ip-v0.md) |
-| Composition | [Composition 契约](composition.md)；当前还没有互操作 wire/target 实现 |
+| Composition | [Composition 契约](composition.md)；[scene lab C0](../profiles/composition-scene-lab-v0/README.md) 已提供 exact Profile suffix codec/Host wire vectors，但没有 Runtime Blob/target interoperability |
 
 当前 Runtime source v0 只承载 Host-owned desired State、Edge-owned actual State 与 Edge-owned
 data Stream。Action、Blob、MediaStream route、typed dispatcher、稳定 Host SDK/Virtual Edge

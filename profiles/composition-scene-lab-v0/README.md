@@ -188,7 +188,7 @@ restart 后 world、production epoch 和 local handles 全新。
 
 ## Mesh Blob v0
 
-Mesh 是有限 immutable Blob，不是 State 或 Stream。C0 codec 必须冻结 canonical big-endian
+Mesh 是有限 immutable Blob，不是 State 或 Stream。C0 codec 已冻结 canonical big-endian
 header、truncation/reserved rules 与 literal cube vector；语义面固定为：
 
 ```text

@@ -216,14 +216,18 @@ worker；不能同时拥有第二套 plan/actual/display truth。
 
 ### C0 — 冻结 composite lab contract
 
+状态：`COMPLETE`（Profile codec / Host wire vectors；不是 Runtime/target interoperability）。
+
 - 固定 composite Session ProfileRef、三个 endpoint、九条 route、schema、方向、payload/
   object/buffer 上限与 literal golden vectors；引用而不复制 Wi-Fi Profile 语义；
 - 固定 `SceneDesired` 全 snapshot、`SceneStatus` 与 `RenderResult` 字段；mesh v0 只允许一个
   bounded canonical triangle format；
 - 固定错误分类、fair scheduler slot bound，以及 in-memory、loopback、K230D 三种 evidence 标签。
 
-完成条件：文档/parser/link/diff-check 通过；所有 ID 在 composite catalog 内唯一；现有 Wi-Fi
-Profile 和 Core API 无变更。
+证据：commit `3b9ef023edffba1c2e652c778723768f1bc7c8cf` 冻结 2 个新 endpoint、6 条新 route、
+32/52-byte capability、六类 Profile suffix 与 literal/negative/max-boundary test；combined 3 endpoint/
+9 route catalog 为 920 bytes，Wi-Fi namespace disjoint，Core API/source 无变更。Runtime v2 仍拒绝
+IMMUTABLE route，故 C0 不证明 remote combined catalog。
 
 ### C1 — Resource-only in-memory fixture
 
@@ -296,7 +300,7 @@ Blob/desired 或制造第二个 truth owner。
 - 固定 320×240 color/depth target、两个 target slot、mesh/GPU/CMA 上限；严格区分 Blob
   publication、world prepare、render complete 和 thumbnail emitted；
 - 在当前 direct-IP carrier 上运行 composite Profile，捕获 object/camera 改动导致不同真实
-  thumbnail/checksum，并保持 Wi-Fi Stream 连续。
+  thumbnail/SHA-256，并保持 Wi-Fi Stream 连续。
 
 完成条件：exact target binary/source receipt、board-side capacity counters、至少 create→move→
 camera move→delete→disable 的 transcript；不得把 off-screen 结果标为 scanout/physical evidence。

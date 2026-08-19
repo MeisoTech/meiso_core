@@ -68,8 +68,11 @@ Composition、MediaStream、完整冷启动或产品 Profile evidence。各层�
 [Host 集成回执 v0](docs/host-integration-receipt-v0.md)。Edge local compositor 的边界是
 Runtime--SDK/application integration：Host 产生 logical plan，Edge 独占 prepare/activate/safety/
 scanout，renderer 只产生 candidate/failure，Core 不变。模块与 K230D backend 计划见
-[Edge local compositor v0](docs/edge-local-compositor-v0.md)；该计划尚无 compositor 实现或
-physical presentation evidence。
+[Edge local compositor v0](docs/edge-local-compositor-v0.md)。首个
+[Composition scene lab v0](profiles/composition-scene-lab-v0/README.md) C0 已实现 exact composite
+Profile 的 IDs/capabilities、PresentationPlan/Status、Mesh、SceneDesired/Status 与 RenderResult
+codec，并以 literal Host wire vectors 验证；它仍没有 Runtime Blob carriage、coordinator、Host
+editor、K230D renderer 或 physical presentation evidence。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

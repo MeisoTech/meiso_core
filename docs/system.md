@@ -151,6 +151,9 @@ Core Stream data route；source v0 / wire v2 的三套 Host test 支持
 probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 Profile/platform evidence，
 不是 portable Runtime 的通用能力。通用 hotplug、Action/Blob/MediaStream Runtime route、
 SDK/Virtual Edge、discovery/reconnect 与 security adapter 仍未完成。
+`composition-scene-lab-v0` C0 另冻结 composite Profile 的 presentation/scene/Mesh/result codec 与
+Host wire vectors；它尚未进入 Runtime v2 catalog，因为 v2 不承载 Blob/IMMUTABLE route，也没有
+coordinator 或 K230D renderer evidence。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

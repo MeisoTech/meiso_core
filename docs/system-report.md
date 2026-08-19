@@ -227,13 +227,19 @@ remote encoding 直接作为 Edge wire。
 
 [Edge local compositor v0 开发方案](edge-local-compositor-v0.md) 已选定 Runtime--SDK 边界、
 plan prepare/activate authority、renderer/present seam、K230D Linux 首发与选择性源码迁移规则。
-新增的 [`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md) 只冻结待实现的
-composite Profile 实验合同：同一 Session/catalog 中并存 Wi-Fi、presentation 与 scene endpoint，
-Mesh 用 Host Blob，camera/object snapshot 用 Host State，Edge world/capacity 用 actual State，固定
-thumbnail 用 Edge Stream。当前 Runtime v2 尚无 Blob carriage，故 remote combined catalog 尚不可
-接受；下一 Runtime wire version、portable coordinator、target backend 均未实现。本轮没有合并
-外部 Host compositor、旧本地素材、vendor SDK 或二进制，也没有 compositor source、target build
-或 physical presentation evidence。
+[`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md) 的 C0 已实现 composite
+Profile codec：同一合同包含 Wi-Fi、presentation 与 scene endpoint；Mesh 用 Host Blob，camera/
+object snapshot 用 Host State，Edge world/capacity 用 actual State，固定 thumbnail 用 Edge Stream。
+commit `3b9ef023edffba1c2e652c778723768f1bc7c8cf` 冻结 exact IDs、32/52-byte capability、2 个新
+endpoint/6 条新 route、PresentationPlan/Status、canonical Mesh、SceneDesired/Status 与 6304-byte
+RenderResult。literal/negative/max-boundary Host test 验证 920-byte combined catalog、3812-byte State、
+6460-byte Stream 和与 Wi-Fi namespace disjoint；fresh strict Debug 与 ASan/UBSan 全套均通过。
+
+该 evidence 只支持 `C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED`。当前 Runtime v2 尚无
+Blob carriage并明确拒绝 IMMUTABLE route，故 remote combined catalog 仍不可接受；下一 Runtime
+wire version、portable coordinator、Host editor 与 target backend 均未实现。本轮没有合并外部 Host
+compositor、旧本地素材、vendor SDK 或二进制，也没有 K230D build/run 或 physical presentation
+evidence。
 
 ## K230D lab evidence
 
@@ -300,8 +306,9 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition Profile/wire、portable coordinator、prepared generation、renderer/present backend 与
-  真实 presentation endpoint；当前只有产品契约和实现计划；
+- Composition Runtime Blob wire/portable coordinator、prepared/activation enforcement、Host editor、
+  renderer/present backend 与真实 presentation endpoint；当前只有 C0 Profile codec/Host wire vectors，
+  没有 Runtime/target interoperability；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。
