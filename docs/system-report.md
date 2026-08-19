@@ -61,9 +61,9 @@ Host tests 与 sanitizer 路径，不证明 K230D cross-build、board execution�
 
 当前 portable `meiso_runtime` 依赖 `meiso_core`，不把 Runtime 反向纳入 Core。Source v0
 永久绑定 READY Session，使用双 bank 原子 catalog；endpoint 内联 capability，route 绑定
-EndpointId/incarnation、Core Resource descriptor 与 facet。当前 catalog 只接受 Host-owned
-desired State、Edge-owned actual State 和 Edge-owned data Stream，不存在 subscription control
-plane。
+EndpointId/incarnation、Core Resource descriptor 与 facet。MRT0 v2 catalog 接受Host-owned desired
+State、Edge-owned actual State和Edge-owned data Stream；strict MRT0 v3另接受Host-owned
+`IMMUTABLE/Blob` Host→Edge route。v2/v3不混用、不fallback，不存在subscription control plane。
 
 Desired/actual 经 `MeisoStateOffer` 传递，delivery acceptance 保持为 Core State 进展；Host
 只有在 actual 被 `StateReplica` 接受为 `RECEIVE_NEW` 并回交 Runtime 后才打开 production
@@ -87,14 +87,27 @@ desired→actual→sample、disable cut、reconfigure/new epoch 与新 Session �
 disable 中的 `STOPPING -> STOPPED`、stop 后 Session 仍 READY 以及再次 enable。
 `meiso_runtime_wire_test` 以独立 literal golden bytes 冻结 wire v2 的 catalog、accept、
 reject、State offer/accept 与 Stream sample 六类 frame，并覆盖每个截断点、reserved 字段和
-malformed 时的公开状态不变。当前 source tree 的 fresh Debug/Release CTest 全量通过；这支持当前 Runtime
-`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。精确边界见
-[Runtime negotiation core v0](runtime-core-v0.md)。
+malformed 时的公开状态不变。
 
-Portable core 仍只是正式 Runtime 的 State/Stream negotiation 子集：Action、Blob、MediaStream
-route，产品 endpoint direction/QoS/permission schema、typed dispatcher 与 Host orchestration/
-SDK 均未实现。下述 Wi-Fi slice 在 Core 外组合一个具体 Profile、config/probe adapter 与
-direct-IP target；它不把这些平台选择提升为 portable Core 能力。
+public commit `a8a777a` 的`meiso_runtime_blob_wire_test`又冻结MRT0 v3：Composition Profile
+v1→MRT0 v2、Profile v2→MRT0 v3；Host→Edge BEGIN/CHUNK/COMMIT/ABORT 与Edge→Host RESULT；
+4096-byte chunk、全局单transfer、Runtime生成的Session-scoped ID、无per-chunk ACK、terminal
+phase/prefix以及Session/catalog discontinuity。Edge先在完整Runtime scratch核对length/SHA-256，
+再由generic synchronous bridge将同一bytes stage/copy/commit至Core BlobStore；Runtime SHA与caller
+Profile verifier作用于同一个immutable Core verification snapshot。只有Core PUBLISHED/DUPLICATE
+映射wire success；publication后仍须显式建立SceneStore/SDK visibility。
+
+v3 vectors覆盖五类独立literal frame、0/4096/4097/262144 bytes、gap/overlap/replay、abort-before-
+READY/late READY、async terminal RESULT、TX_BUSY/alias/reentry、multi-route global slot、Core external
+staging ownership/forced cleanup、duplicate后visibility，以及State/Stream/Blob共存。fresh Debug、strict、
+ASan+UBSan均CTest 23/23，clang analyzer对Runtime/composition/test为0 finding。这支持portable Runtime
+`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`；不证明transport、fair scheduler或target。
+精确边界见[Runtime negotiation core v0](runtime-core-v0.md)。
+
+Portable Runtime仍未实现Action、MediaStream、Edge→Host/并行/resumable Blob、产品endpoint
+direction/QoS/permission schema、typed dispatcher、fair scheduler与Host orchestration/SDK。下述Wi-Fi
+slice在Core外组合一个具体Profile、config/probe adapter与direct-IP target；它不把这些平台选择
+提升为portable Core能力。
 
 当前 POSIX platform layer 另实现 connected-stream adapter：借用 caller-owned、already-
 connected、nonblocking `SOCK_STREAM` fd 和 Session；RX/TX 各由 `max_frame_bytes` 限制，
@@ -227,7 +240,7 @@ remote encoding 直接作为 Edge wire。
 
 [Edge local compositor v0 开发方案](edge-local-compositor-v0.md) 已选定 Runtime--SDK 边界、
 plan prepare/activate authority、renderer/present seam、K230D Linux 首发与选择性源码迁移规则。
-[`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md) 当前完成C0--C2的Host侧
+[composition-scene-lab-v0](../profiles/composition-scene-lab-v0/README.md) 当前完成C0--C2与R1的Host侧
 分层证据：同一composite合同包含Wi-Fi、presentation与scene endpoint；Mesh用Host Blob，camera/
 object snapshot用Host State，Edge world/capacity用actual State，固定thumbnail用Edge Stream。
 commit `3b9ef023edffba1c2e652c778723768f1bc7c8cf` 冻结 exact IDs、32/52-byte capability、2 个新
@@ -278,11 +291,22 @@ conversion/shadow/prototype warnings-as-errors。Coordinator arena为1,520 bytes
 BlobStore、SceneStore、Coordinator、Scene desired、Presentation desired/actual State pair及result Stream
 的C2 fixture合计4,794,968 bytes，同样只来自macOS arm64 Host test process CPU-visible heap。
 
-当前Runtime v2仍无Blob carriage并明确拒绝IMMUTABLE route，故remote combined catalog不可接受；没有
-Runtime v3、Session wire变更、Host editor、K230D build/run、renderer backend、GPU/target/job/CMA、
-offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有Session-loss signal，
-backend `DEADLINE`只是caller报告的本地attempt结果。Core source/API无Composition改动；本轮也没有合并
-外部Host compositor、旧本地素材、vendor SDK或二进制。
+public commit `a8a777a`完成R1 portable Blob carriage。Composition Profile v1保持MRT0 v2并拒绝
+IMMUTABLE route；Profile v2显式选择strict MRT0 v3。多个Host-owned Blob route共享一个全局transfer；
+Session/catalog discontinuity清Runtime transfer与Edge scratch，已发布Core cache可保留。新Session/
+control scope必须重建visibility；catalog-only replacement的外部visibility策略由Profile/R2 integration
+定义，Runtime不持有它，R1未验证该策略。
+Runtime→Core publish bridge、owner/direction、phase/result、boundary与failure atomicity均有确定性vector。
+
+macOS arm64下Host Runtime为14,904 bytes，Edge Runtime为277,048 bytes（含262,144-byte scratch），
+alignment均为8。BlobStore、SceneStore、Coordinator与两端Runtime五项合计5,045,432 bytes，不含
+Session/State/Stream；若以C2完整fixture 4,794,968 bytes再加两端Runtime，则为5,086,920 bytes，仍
+不含两端Session。两者都是Host process CPU-visible heap口径，不是K230/GPU/CMA allocation。
+
+R1没有实现fair scheduler、combined event loop、Host editor、K230D build/run、renderer backend、
+GPU/target/job/CMA、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
+Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。Core source/API与Session
+wire无Composition改动；本轮也没有合并外部Host compositor、旧本地素材、vendor SDK或二进制。
 
 ## K230D lab evidence
 
@@ -349,9 +373,10 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition Runtime Blob wire、Host editor、renderer/present backend与真实presentation endpoint；
-  portable coordinator及prepared/activation enforcement已有C2 Host semantic evidence，但没有Runtime/
-  target interoperability、offline lease execution或physical output；
+- Composition R2 combined Session/fair scheduler、Host editor、renderer/present backend与真实
+  presentation endpoint；portable coordinator已有C2 Host semantic evidence，Runtime v3 Blob carriage
+  已有R1 Host semantic/wire evidence，但没有combined/target interoperability、offline lease执行或
+  physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。

@@ -1,13 +1,13 @@
 # Runtime negotiation core v0 实现契约
 
 > 状态：`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。本页冻结
-> portable `meiso_runtime` source v0 与 Runtime wire v2 的当前行为；产品语义仍由
+> portable `meiso_runtime` source v0 与严格 MRT0 wire v2/v3 的当前行为；产品语义仍由
 > [Runtime 契约](runtime.md)拥有。本页不声明 transport、K230D target 或产品 Profile evidence。
 
 ## 边界
 
 ```text
-meiso_resource_core(State / Stream types and primitives)
+meiso_resource_core(State / Stream / Blob types and primitives)
                     +
 meiso_session_core(READY Session + opaque Runtime gate)
                     ↓
@@ -27,6 +27,9 @@ Runtime v0 不复制 Core Resource 状态机：
   与 delivery acceptance；
 - data 跨端对象是 `MeisoStreamSample`；调用方仍以 `MeisoStream` 负责 producer/stream epoch、
   sequence、gap 与 queue；
+- v3 Blob 跨端对象仍由 Core `MeisoBlobStore` 拥有 staging/verification/atomic publication；Runtime
+  只负责 Session-scoped carriage、bounded reassembly 和同步 publish bridge，不把 publication
+  冒充 Profile/SDK visibility；
 - Runtime 只验证当前 Session/catalog/endpoint/Resource/facet，关联 desired reference、actual
   production state 与 data production epoch；没有 subscription、独立 desired/actual message
   或第二套 Resource truth。
@@ -45,18 +48,21 @@ Route record 为：
 EndpointId/incarnation + MeisoResourceDescriptor + facet
 ```
 
-当前 source v0 只接受下列 route；枚举中的其他产品 facet 不代表已有 carriage：
+当前 source v0 对 State/Stream route 的接受不依赖 wire version；Blob route 只在严格 v3 handle
+中接受。枚举中的其他产品 facet 不代表已有 carriage：
 
 | facet | Core kind / owner | 当前作用 |
 |---|---|---|
 | `DESIRED` | State / Host | Host 发布 enabled 与 Profile 参数 |
 | `ACTUAL` | State / Edge | Edge 发布 effective state 与 production gate |
 | `DATA` | Stream / Edge | Edge 发送当前 production epoch 的 sample |
+| `IMMUTABLE`（v3 only） | Blob / Host | Host→Edge 传递有限 immutable content；不受 production gate 控制 |
 
-Capability 直接内联在 endpoint，`CAPABILITY` route 尚不实现。`OPERATION`、`IMMUTABLE` 以及
-非 Stream 的 `DATA` 均返回 `UNSUPPORTED_KIND`。每个 endpoint 最多一个 desired 和一个
-actual；存在任意 data route 时两者必须恰好各一个。EndpointId 与 ResourceId 分别唯一，route
-必须引用同 incarnation 的已声明 endpoint。
+Capability 直接内联在 endpoint，`CAPABILITY` route 尚不实现。`OPERATION` 与非 Stream 的
+`DATA` 均返回 `UNSUPPORTED_KIND`；v2 对 `IMMUTABLE/Blob` 也返回该错误。v3 只接受
+`owner=Host, kind=Blob, facet=IMMUTABLE`，不因此开放 Edge→Host Blob 或任意双向 Stream。
+每个 endpoint 最多一个 desired 和一个 actual；存在任意 data route 时两者必须恰好各一个。
+EndpointId 与 ResourceId 分别唯一，route 必须引用同 incarnation 的已声明 endpoint。
 
 Catalog 是一个完整、单帧 snapshot，使用双 bank staging：
 
@@ -83,6 +89,13 @@ conflict 等错误保留 reject decision identity，但不暴露部分 staging c
 `max_endpoints`、全 handle retained pair 数 `max_endpoint_history`、route、总 capability bytes、
 每 endpoint desired/actual Profile suffix；其中 history 至少覆盖 `max_endpoints`。Session limits
 另限制完整 frame，且 `max_endpoints + max_routes <= max_registry_entries`。
+
+v3 另以 `MeisoRuntimeV3Config.max_blob_transfer_bytes` 限制单个 Blob transfer。该限制在 Host
+用于 offer/send admission，在 Edge 同时决定完整 reassembly scratch；它不是 BlobStore slot、
+Profile visibility 或 GPU resident budget。任一 accepted catalog replacement 或 Session
+discontinuity 都取消 Runtime transfer 并清 Edge scratch，已由 Core 发布的 Blob cache 不因此删除。
+新 Session/control scope 必须重新建立 SceneStore/SDK visibility；仅 catalog replacement 时外部
+visibility 是否重建由 Profile/R2 integration 定义，Runtime 不持有它，R1 也未验证该策略。
 
 ## State payload 与 production gate
 
@@ -139,6 +152,57 @@ delivery acceptance identity，不表示 adapter apply 或 production success。
 production epoch 与合法 `MeisoStreamSample` metadata；Runtime 返回 sample event 后，调用方再
 交给 `MeisoStream`。
 
+## MRT0 v3 Blob carriage
+
+v3 只增加 Host-owned `BLOB/IMMUTABLE` 的 Host→Edge carriage；同一 handle 的多个合法 Blob
+route 共享一个全局 transfer slot。它没有 per-route subscription、并行 transfer、resume window
+或 per-chunk ACK。Host 成功排入 `BEGIN` 时由 Runtime 生成非零、Session-scoped、严格递增且
+不复用的 `transfer_id`；`TX_BUSY` 不写 output，也不消耗 identity/high-water/offset。
+
+确定性 FSM 为：
+
+```text
+Host BEGIN(ContentId,total) -> Edge RESULT(BEGIN,READY,next=0)
+  -> Host CHUNK(offset,bytes)*             // 无逐块 ACK
+  -> Host COMMIT -> Edge length/SHA check
+  -> synchronous Runtime→Core publish bridge
+  -> Edge RESULT(COMMIT,PUBLISHED|DUPLICATE|terminal failure)
+
+Host ABORT 可在等待 READY 或传输中发生
+  -> Edge RESULT(ABORT,ABORTED)
+```
+
+- zero-length Blob 由 `BEGIN -> READY -> COMMIT` 表示，不发送 CHUNK；
+- non-final CHUNK 必须恰好 4096 bytes，short CHUNK 只能精确结束于 `total_size`；offset 必须连续，
+  gap/overlap/out-of-order 产生 terminal `DISCONTINUITY`；
+- `BEGIN+READY` 是唯一非终态 RESULT。BEGIN rejection 的 `next_offset=0`；PUBLISHED/DUPLICATE 的
+  `next_offset=total_size`；ABORTED/失败返回 receiver 已接受的 prefix；
+- Host 对 terminal prefix 只接受 `next_offset <= bytes_sent`，且它必须等于 total 或位于 4096-byte
+  chunk boundary。CHUNK failure 可以在 Host 已继续发送后异步到达，但至少已有一个 queued byte；
+- Host 在 READY 前发 ABORT 合法；交叉到达的 late READY 只形成 observation，不能重新打开 transfer；
+- impossible operation/result pair、错误 route/id/total、reserved、phase 或 prefix 零副作用拒绝，
+  不得退役另一条/当前 transfer。
+
+Edge 收到完整 COMMIT 后先在 Runtime scratch 上核对 length 与 SHA-256 ContentId，再由
+`meiso_runtime_publish_blob_receive` 同步执行：
+
+```text
+Runtime reassembly scratch
+  -> Core BlobStore stage_begin
+  -> bounded copy
+  -> Core commit_verified(
+       Runtime SHA-256 identity && caller Profile/schema verifier,
+       same immutable Core verification snapshot)
+  -> Core PUBLISHED/DUPLICATE 才映射为 wire success
+```
+
+bridge 只接受 caller 明确证明与 exact active ResourceDescriptor 独占绑定的 BlobStore；opaque Core
+store 本身不能让 Runtime 推断 route。它不覆盖或 abort 外部已有 staging candidate；只清理由本次
+bridge 成功建立、但后续 copy/commit 失败而仍可能保留的 candidate。Runtime、BlobStore、output
+arena 必须不重叠；Profile verifier 重入同一 Runtime 被拒绝。Core publication 只证明 content 已完整
+验证并进入 store；SceneStore/SDK 必须另外执行当前 owner/Session scope 的 `mark_visible` 或等价
+授权，cache hit/duplicate 不恢复 desired、world 或 visibility。
+
 ## Source API 与内存
 
 下表省略 `meiso_runtime_` 前缀：
@@ -151,22 +215,27 @@ production epoch 与合法 `MeisoStreamSample` metadata；Runtime 返回 sample 
 | `endpoint_* / route_* / find_*` | active/staged catalog 审查与查询 |
 | `send_state_offer / send_state_accept` | 传递 Core State offer 与 delivery acceptance metadata |
 | `send_stream_sample` | 在已开放 production gate 上传递 Core Stream sample |
+| `v3_memory_required / v3_init` | 建立严格 v3 handle；v2/v3 frame 不混用、不 fallback |
+| `send_blob_begin/chunk/commit/abort` | Host 驱动单一 Session-scoped Blob transfer |
+| `publish_blob_receive / send_blob_result` | Edge 把完整 scratch 同步提交 Core BlobStore，并回送 READY/terminal truth |
 | `receive / commit_state_receive` | 解码 Runtime event；把 Core StateReplica 结果提交给 gate |
-| `snapshot / production_snapshot` | Session/catalog 状态与每 endpoint actual/effective/gate view |
+| `snapshot / production_snapshot / blob_snapshot` | Session/catalog、production gate 与当前 Blob transfer/status truth |
 
 Arena 固定包含两套 endpoint/route/capability/actual-Profile bank、一个
 `max_endpoint_history` identity-pair ledger、一个
 `8 + max_desired_profile_bytes_per_endpoint` pending desired payload buffer、一个 pending actual
 Profile buffer，以及一个
-`max_runtime_payload_bytes` TX buffer；实现不调用 heap、thread、clock、socket、filesystem 或
-driver。一个 owner event loop 串行调用同一 Runtime/Session pair；无内部 locking。
+`max_runtime_payload_bytes` TX buffer；v3 Edge arena 另含完整 `max_blob_transfer_bytes` reassembly
+scratch，Host arena不含该scratch。实现不调用 heap、thread、clock、socket、filesystem 或 driver。
+一个 owner event loop 串行调用同一 Runtime/Session pair；无内部 locking。
 Runtime arena、完整 Session arena 与 out object 不得重叠。
 
 Catalog capability 与 production effective Profile view 借用 Runtime arena，到该 handle 下一次
 non-const 调用前有效。State/Stream event 中的 byte view 借用 Session RX message，到相关
-Session 或 Runtime 下一次 non-const 调用前有效；需跨调用则复制。
+Session 或 Runtime 下一次 non-const 调用前有效；需跨调用则复制。v3 CHUNK event 借用 Session
+message，COMMIT event 的完整 Blob 借用 Edge Runtime scratch；二者同样不得跨下一次 mutation。
 
-## Runtime wire v2
+## Runtime wire v2/v3
 
 Runtime frame 是 Session `RUNTIME` payload，不重复 SessionId。所有整数为 big-endian，C struct
 不得直接复制到 wire。
@@ -195,6 +264,30 @@ facet 与 7-byte zero reserved。Endpoint record 为 48 bytes；route record 为
 `MeisoResourceDescriptor` 的 id/kind/owner/schema/max payload。所有 reserved、length、role、
 identity、kind/facet、schema、capacity 和 current binding 均在生成 event 前验证。
 
+MRT0 v3 使用同一个 12-byte header，但 `wire_version=3`，严格 v2/v3 handle 拒绝另一版本；没有
+协商后 fallback。v3 的 type 1..6 保留上表 body layout，同时增加以下五类 frame。表内 offset
+相对 12-byte Runtime header 后的 body；所有 integer 为 big-endian，reserved 必须为零：
+
+| type | value / direction | exact full frame | body layout |
+|---|---|---:|---|
+| `BLOB_BEGIN` | 7 / Host→Edge | 120 | `0 RouteKey:56, 56 transfer_id:u64, 64 ContentId:36, 100 total_size:u64` |
+| `BLOB_CHUNK` | 8 / Host→Edge | `84 + N`, `1 <= N <= 4096` | `0 RouteKey:56, 56 transfer_id:u64, 64 offset:u64, 72 bytes:N` |
+| `BLOB_COMMIT` | 9 / Host→Edge | 120 | 与 BEGIN 相同；完整 identity/total 必须回显 |
+| `BLOB_ABORT` | 10 / Host→Edge | 84 | `0 RouteKey:56, 56 transfer_id:u64, 64 reason:u8, 65 reserved:7` |
+| `BLOB_RESULT` | 11 / Edge→Host | 96 | `0 RouteKey:56, 56 transfer_id:u64, 64 operation:u8, 65 result:u8, 66 reserved:2, 68 next_offset:u64, 76 total_size:u64` |
+
+ContentId 的 exact 36 bytes 为 `algorithm:u16, digest_size:u8, reserved:u8, digest:32`；当前只接受
+canonical SHA-256。CHUNK 不重复 ContentId/total，全部由已绑定 transfer ref 确定；最大 Runtime
+frame 为 4180 bytes。RESULT value 为：`READY=1, PUBLISHED=2, DUPLICATE=3, ABORTED=4,
+BUSY=5, CONFLICT=6, INVALID_CONTENT_ID=7, LENGTH_MISMATCH=8, INTEGRITY_FAILED=9,
+CAPACITY=10, DISCONTINUITY=11, RECEIVER_FAILURE=12`。唯一当前 ABORT reason 是
+`CALLER_REQUEST=1`。
+
+合法 operation/result pair 只有：`BEGIN+READY`或BEGIN+任一terminal rejection；
+`CHUNK+DISCONTINUITY|RECEIVER_FAILURE`；`COMMIT+PUBLISHED|DUPLICATE`或COMMIT+任一terminal
+rejection；`ABORT+ABORTED`。其中terminal rejection是value 5..12。其他组合即使字段长度合法也
+是phase conflict，不能改变当前transfer。
+
 ## Evidence 与明确边界
 
 当前 Host tests 分别支持以下结论：
@@ -209,13 +302,27 @@ identity、kind/facet、schema、capacity 和 current binding 均在生成 event
   catalog；
 - `meiso_runtime_wire_test`：六类 v2 frame 的独立 literal golden bytes、每个截断点、header 与
   body reserved 字段、big-endian decode，以及 malformed 路径不改变公开 Runtime snapshot。
+- `meiso_runtime_blob_wire_test`：Profile v1→MRT0 v2、Profile v2→MRT0 v3；五类 v3 Blob frame
+  独立 literal bytes；0/4096/4097/262144-byte boundaries；BEGIN/READY、连续 CHUNK、COMMIT/ABORT
+  phase；async terminal prefix、replay、alias/TX_BUSY、multi-route global slot、Session/catalog
+  invalidation；Runtime SHA 与 Profile verifier 同一 Core snapshot、external staging ownership、
+  forced-abort cleanup、duplicate publication 后显式 SceneStore visibility，以及 v3 State/Stream/Blob
+  coexistence。
+
+commit `a8a777a` 的 fresh Debug、strict 与 ASan+UBSan build 均 CTest 23/23；clang analyzer 对
+Runtime、composition 与新 test 为零 finding，C/C++ strict headers/source 通过。macOS arm64、
+composition Profile v2 配置下，Host Runtime arena 为 14,904 bytes，Edge Runtime arena 为
+277,048 bytes（含 262,144-byte reassembly scratch），均 alignment 8。这是 caller-owned Host
+process CPU-visible heap evidence，不是跨 ABI 常量或 K230 memory budget。
 
 这些结果只支持当前 portable Host semantic/wire evidence，不证明 transport、并发、fuzz、性能、
-断线恢复或 target 行为。Source v0 明确尚未实现：
+断线恢复、scheduler fairness 或 target 行为。Source v0 明确尚未实现：
 
-- Action、Blob 与 MediaStream Runtime carriage；capability State/Blob route；
+- Action 与 MediaStream Runtime carriage；capability State/Blob route；Edge→Host Blob 或并行/resumable
+  Blob transfer；
 - 产品 endpoint direction/QoS/permission schema、typed dispatcher、catalog fragmentation 或
   duplicate response cache；
+- control/data/Blob 的 fair scheduler、`4 + N_ready_routes` wait bound 或 no-starvation proof；
 - Profile-specific admission、private config/probe/hotplug adapter、Host orchestration、SDK /
   Virtual Edge；
 - direct-IP bootstrap、socket connect/listen、认证/加密、安全 transport；

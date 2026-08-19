@@ -136,6 +136,30 @@ Host desired 的本地提交、Core delivery acceptance、Edge observed、adapte
 也不能把静默丢弃伪装成“未订阅”。MediaStream 可以使用专业化数据面，但仍共享相同 endpoint、
 desired/actual、production epoch、Session 与 failure 语义。
 
+## Blob route 与可见性
+
+Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的
+替代物或 subscription。Catalog 必须声明 owner、direction、schema 与 total-size capacity，接收端
+在完整长度、content identity 与 Profile/schema verifier 同时通过前不得发布部分内容。
+
+Blob transfer identity 属于当前 Session/catalog/route scope；Session loss、catalog replacement、
+offset discontinuity、abort 或 capacity failure 必须清理未完成 transfer。已完整发布的 content cache
+可以按 Profile 保留，但 cache 命中不恢复新 Session 的 route、desired、world 或 SDK visibility。
+因此至少存在三层不可合并的 truth：
+
+```text
+Runtime transfer complete
+  -> Core BlobStore atomic publication
+  -> Profile/SDK current owner-scope visibility
+```
+
+Blob route 不受 endpoint production gate 控制，否则 scene/model 等资产无法在 desired prepare 前
+到达；但 publication 本身也不启动 producer、不应用 State 或激活 Composition world。具体 wire
+version、chunk、并行度、ACK/FSM 与 Core bridge 由 exact Profile/实现契约冻结。当前 portable
+实现中仅`composition-scene-lab-v0`的Profile v1→MRT0 v2、Profile v2→MRT0 v3；该选择不泛化到
+其他Profile。Composition scene的单transfer细节见
+[Runtime negotiation core v0](runtime-core-v0.md)。
+
 ## 动态插拔与更新
 
 - Profile 已知的可插拔逻辑槽可以保留在 catalog 中，由 actual State 表达 `ABSENT`；
@@ -153,7 +177,8 @@ desired/actual、production epoch、Session 与 failure 语义。
 每个新 Core Session 都重新交换并接受 catalog，Host 随后重新发布 desired State；地址相同不
 表示可以复用旧 control/data binding。Session 丢失时，Host-driven production 默认停止；Profile
 只有在明确声明 bounded offline retention 时才能继续。State truth 可以重新 offer，Action 不
-自动重放，Blob 是否复用由 content identity/Profile 决定。
+自动重放，Blob bytes 是否复用由 content identity/Profile 决定，但 transfer 与当前 visibility
+不得从旧 Session 继承。
 
 若 Host 首次连接时接收一个连续 producer 的 Stream，首样本 sequence 可以大于 1，
 `missing_before` 必须显式暴露；不能为新 Host 重置 Edge sequence 或静默吞掉 gap。
@@ -167,6 +192,8 @@ Runtime 至少区分：
 - `UNKNOWN_ENDPOINT / STALE_ENDPOINT_INCARNATION / UNKNOWN_RESOURCE`；
 - `SCHEMA_MISMATCH / UNSUPPORTED_PARAMETER / QOS_UNSUPPORTED`；
 - `STALE_DESIRED / DESIRED_CONFLICT / ACTUAL_MISMATCH / PRODUCTION_NOT_RUNNING`；
+- `BLOB_BUSY / BLOB_DISCONTINUITY / BLOB_LENGTH_MISMATCH / BLOB_INTEGRITY_FAILED /
+  BLOB_CAPACITY / BLOB_RECEIVER_FAILURE`；
 - `PERMISSION_DENIED / ADMISSION_DENIED / UNAVAILABLE / APPLY_FAILED`；
 - `PAYLOAD_CAPACITY / BACKPRESSURE / PROTOCOL_ERROR`。
 
@@ -198,4 +225,6 @@ queue、history 和 pending apply 都有协商或 Profile 固定上限，并暴�
 - unplug/update 关闭旧 production，replug 使用新 endpoint incarnation/epoch；
 - wrong Session/catalog/endpoint/resource/kind/schema/State version/production epoch 全部拒绝；
 - queue、State、route 与 payload 过载仍有界且可观察；
+- Blob 完整验证前不可见；wrong Session/catalog/route/owner/ContentId/offset/phase 以及 Core publish
+  failure 均不产生部分 publication，新 Session 不继承 transfer 或 visibility；
 - simulated Edge、真实 Edge 和 Host SDK 使用同一 catalog/desired/actual/data 语义。

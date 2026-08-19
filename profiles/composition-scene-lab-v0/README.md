@@ -1,6 +1,6 @@
 # Composition scene lab v0
 
-> 状态：`C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY / NO RUNTIME-BLOB OR BOARD INTEROP`。
+> 状态：`C0 CODEC IMPLEMENTED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / R1 PORTABLE BLOB CARRIAGE VERIFIED / LOGICAL ADMISSION ONLY / NO BOARD INTEROP`。
 > 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
@@ -22,9 +22,17 @@ durable world persistence、通用 scene graph、任意 material/shader、animat
 
 ## Exact composite Session Profile
 
-Session 只有一个 `MeisoProfileRef`。本实验 composite ProfileRef 已冻结为
-`{0x4b3233305f53434e, 0x5f4c41425f563030}:v1`（ASCII `K230_SCN/_LAB_V00`）。
-它不是同时协商两个 Profile，而是精确包含：
+Session 只有一个 `MeisoProfileRef`。本实验 composite ProfileId 已冻结为
+`{0x4b3233305f53434e, 0x5f4c41425f563030}`（ASCII `K230_SCN/_LAB_V00`），并有两个不可混用的
+exact version：
+
+| ProfileRef | Runtime wire | 用途 |
+|---|---|---|
+| `K230_SCN/_LAB_V00:v1` | MRT0 v2 | C0--C2 compatibility；仍拒绝 `IMMUTABLE/Blob` route |
+| `K230_SCN/_LAB_V00:v2` | MRT0 v3 | R1 显式 opt-in；允许本页 Host→Edge Mesh Blob carriage |
+
+v2 不覆写或 fallback 到 v1；Profile/version mismatch 在 Session handshake 失败。两版都不是同时
+协商两个 Profile，而是精确包含：
 
 1. [`wifi-telemetry-v0`](../wifi-telemetry-v0/README.md) 的 endpoint/schema/行为；
 2. 本页的 presentation endpoint；
@@ -86,11 +94,11 @@ Blob route 在 catalog 接受后即可 staging/commit，不受 scene production 
 world prepare 前到达；Blob publication 本身也不激活 object。只有 `SceneStatus` actual 经 Core State
 语义提交为 `RUNNING` 后，`K230_SCN/RES_STR` data gate 才开放。
 
-当前 Runtime wire v2 会拒绝 `IMMUTABLE/Blob` route，且 `STREAM_SAMPLE` 固定 Edge→Host。C1/C2
-因此只做 in-memory primitive；R1 新增 Runtime wire version（实现时冻结，预期 `MRT0 v3`），在
-Session 的 opaque Runtime payload 内加入 Blob carriage 和 owner/direction 校验。不得把新 frame
-追加到 v2；v2 literal bytes、六类 frame meaning 与 Core 均不变。combined remote catalog 在 R1
-前不得宣称可接受。
+Runtime v2 继续拒绝 `IMMUTABLE/Blob` route；R1 的 strict MRT0 v3 handle 在 Session opaque Runtime
+payload 内加入 Host-owned Blob carriage 与 owner/direction 校验。v3 支持同 catalog 多条 Blob
+route，但每个 handle 全局只有一个 transfer；`STREAM_SAMPLE` 仍只支持 Edge→Host。v2 literal bytes、
+六类 frame meaning、Core API/source 与 Session wire 均不变。R1 已证明 portable catalog/Blob
+carriage；combined Wi-Fi+scene event loop、scheduler 与 target interoperability 留给 R2/K1。
 
 ## C0 canonical wire
 
@@ -340,19 +348,25 @@ C1/K1 启动前必须记录每一项 exact bytes、alignment、memory domain 与
 snapshot 因隐藏双代开销拒绝；该切换后 store 已用满，继续引入新 ContentId 可合法返回
 `BLOB_CAPACITY`。后续若增加 eviction，必须另行冻结与 active/candidate/published visibility 的关系。
 
-## TX fairness
+## R2 TX fairness contract（尚未实现）
 
-一个 Session 当前只有一个 TX slot。target integration 使用以下 lab scheduler contract：
+Runtime R1 只提供各发送调用的有界 `TX_BUSY`/retry truth，不实现 route scheduler。R2 target
+integration 必须在 Runtime--SDK 层满足以下 lab scheduler contract：
 
+- Host与Edge各自只调度本peer的outbound队列，并分别计successful TX slot；不得把full-duplex两个
+  方向合成一个全局slot序列。Host序列包含Host control与Blob chunk，Edge序列包含Edge control、
+  Wi-Fi sample与RenderResult；peer接收或另一方向的发送不消耗本方向round/bound；
 - control queues 与每条 data/Blob route 都固定容量；
-- control burst 最多连续 4 个成功 TX slot，随后若 data/blob pending 必须进入 data round；
-- data round 对每个 ready route最多发送一帧；Blob transfer 每轮最多一个 chunk；
+- 每个peer的control burst最多连续4个本方向成功TX slot，随后若本方向data/blob pending必须进入
+  本方向data round；
+- data round对本方向每个ready route最多发送一帧；Host Blob transfer每轮最多一个chunk；
 - `WIFI_TLM/DATA_STR` 与 `K230_SCN/RES_STR` 都 ready 时，任一路由等待不超过
-  `4 + N_ready_routes` 个成功 TX slot；
-- TX busy 不消耗 round/sequence；deadline 到期的 result 依 Stream policy 丢弃并报告 gap；Blob
+  `4 + N_edge_ready_routes` 个Edge outbound成功TX slot；Host ready Blob route对应使用
+  `4 + N_host_ready_routes` 个Host outbound成功TX slot；
+- local TX busy不消耗该peer的round/sequence；deadline到期的result依Stream policy丢弃并报告gap；Blob
   不允许用无限 retry queue 延长等待。
 
-Host/Edge loopback 用 deterministic TX-busy injection 证明 slot bound；K230D mixed run 同时传一个
+Host/Edge loopback分别对两个outbound方向用deterministic TX-busy injection证明slot bound；K230D mixed run同时传一个
 最大 Blob、10 Hz thumbnail 与 1 Hz Wi-Fi sample，Wi-Fi 无 scheduler-induced silent starvation。
 
 ## C0 executable evidence
@@ -370,8 +384,8 @@ Host/Edge loopback 用 deterministic TX-busy injection 证明 slot bound；K230D
   Session frame envelope。
 
 该C0证据只证明 portable Host codec/wire oracle；C2另行证明coordinator的digest/token/state-machine
-enforcement，但仍未证明 Runtime v3 Blob carriage、Host frontend、K230D store/renderer或board
-interop。Runtime v2 仍必须拒绝本 Profile 的 IMMUTABLE route。
+enforcement，R1再证明Profile v2/MRT0 v3 Blob carriage。C0本身不证明Host frontend、K230D
+store/renderer或board interop；Profile v1/MRT0 v2仍必须拒绝本Profile的IMMUTABLE route。
 
 ## C1 Resource fixture evidence
 
@@ -403,7 +417,7 @@ RGB565 thumbnail，不持有renderer target或job，所以SceneStatus中target/j
 
 fresh strict build与ASan+UBSan全套均CTest 22/22。该C1证据不证明独立4 MiB GPU resident arena、
 2个target set/CMA allocation、Composition token/coordinator、Runtime Blob carriage、Session、K230D
-backend或display；coordinator由下一节C2单独验证。
+backend或display；coordinator与Blob carriage分别由下一节C2/R1验证。
 
 ## C2 Portable coordinator evidence
 
@@ -434,10 +448,43 @@ ASan+UBSan全套均CTest 22/22，strict相关targets通过warnings-as-errors。m
 为1,520 bytes/alignment 8；C2完整fixture为4,794,968 bytes，memory domain仍是Host test process的
 CPU-visible heap。
 
-状态因此为`COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED`，但不包含Runtime v3 Blob carriage、
-Session wire/transport、K230D build/run、真实renderer/backend、GPU/target/job/CMA allocation、offline
-lease执行或physical output。C2是single-thread/non-reentrant，coordinator/opaque SceneStore arena必须由
-caller保持不重叠；这些P2限制不改变Core。
+状态因此为`COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED`。C2证据范围止于portable
+coordinator；Blob carriage由下一节R1单独验证。C2未验证Session transport、K230D build/run、
+真实renderer/backend、GPU/target/job/CMA allocation、offline lease执行或physical output。C2是single-thread/
+non-reentrant，coordinator/opaque SceneStore arena必须由caller保持不重叠；这些P2限制不改变Core。
+
+## R1 Runtime v3 Blob carriage evidence
+
+public commit `a8a777a` 在 portable `meiso_runtime` 增加严格 MRT0 v3；Profile v1仍选择MRT0 v2，
+`meiso_composition_scene_profile_v2()`才选择MRT0 v3。v3保留type 1..6的body合同并增加Host→Edge
+`BLOB_BEGIN(7) / CHUNK(8) / COMMIT(9) / ABORT(10)`与Edge→Host`BLOB_RESULT(11)`；完整offset、
+RESULT value与phase规则由[Runtime negotiation core v0](../../docs/runtime-core-v0.md)冻结。
+
+R1固定4096-byte chunk、zero Blob、非final chunk exact 4096、short-final；BEGIN唯一等待READY，
+CHUNK无逐块ACK，COMMIT/ABORT等待terminal RESULT。Runtime生成Session-scoped nonzero transfer ID；
+多个合法Blob route共享一个全局slot。Session或catalog discontinuity清Runtime transfer与Edge scratch，
+但不删除已发布Core Blob cache；新Session/control scope仍须显式建立SceneStore visibility。仅catalog
+replacement时外部visibility是否重建由R2 Profile integration定义，Runtime不持有它，R1未验证。
+
+COMMIT先在Runtime scratch上检查total与SHA-256，再由generic synchronous bridge执行Core BlobStore
+stage/copy/`commit_verified`。Runtime SHA与Mesh Profile verifier在同一个immutable Core verification
+snapshot上成立，只有Core `PUBLISHED/DUPLICATE`映射wire success；外部已有staging不被覆盖/abort，
+本bridge创建但失败的candidate才被强制清理。Core publication本身不激活scene object/world。
+
+`meiso_runtime_blob_wire_test`覆盖五类独立literal frame、0/4096/4097/262144边界、reserved/truncation、
+gap/overlap/replay、async terminal RESULT、abort-before-READY/late READY、TX_BUSY/alias/reentry、
+multi-route global slot、catalog/Session invalidation、Core external staging/forced abort、same-snapshot
+combined verifier、duplicate publication后显式visibility，以及v3 State/Stream/Blob共存。fresh Debug、
+strict与ASan+UBSan均CTest 23/23；clang analyzer对Runtime/composition/test为0 finding。
+
+macOS arm64 exact arenas均alignment 8：Host Runtime 14,904 bytes；Edge Runtime 277,048 bytes，其中
+262,144 bytes为完整reassembly scratch；Mesh BlobStore 4,720,304；SceneStore 31,656；Coordinator
+1,520。上述五项合计5,045,432 bytes，不含Session/State/Stream。若按C2完整fixture 4,794,968 bytes
+再加入两端Runtime，则为5,086,920 bytes，仍不含两端Session。两种口径都只表示Host test process
+CPU-visible heap，不是K230 RAM、GPU/CMA、renderer target或physical allocation。
+
+R1状态为`COMPLETE / PORTABLE BLOB CARRIAGE SEMANTIC-WIRE VERIFIED`；不证明fair scheduler、R2
+combined Session、Host editor、K230D build/run、renderer/backend、offline lease执行或physical output。
 
 ## Required sequence
 

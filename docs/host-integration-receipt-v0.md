@@ -10,7 +10,7 @@ Host 现在可以直接复用 Meiso 的 portable C11 Resource、Session、Runtim
 与 POSIX connected-stream adapter；在其上封装自己的本地 object/SDK API。不要把 Host 本地
 handle、C struct、Dashboard NDJSON 或旧 lab envelope 当作跨端协议。
 
-当前已实现的远端对象链只有：
+当前已实现的portable Session对象链为：
 
 ```text
 numeric IPv4/TCP connected fd（locator）
@@ -19,6 +19,7 @@ numeric IPv4/TCP connected fd（locator）
   -> Host desired Core State
   -> Edge actual Core State
   -> actual RUNNING 后 Edge Core Stream
+  -> exact Composition Profile v2/MRT0 v3 下：Host Blob -> Edge Core BlobStore publication
 ```
 
 没有 subscription。Host 不需要数据时发布 `desired.enabled=false`，Edge 停止生产并通过
@@ -33,7 +34,9 @@ actual `STOPPING -> STOPPED` 报告结果；不是继续采集后选择“不发
 3. 为每次连接创建新的 `MeisoSession`、local incarnation 与 nonce；调用
    `meiso_session_start`，按 writable/readable 顺序驱动四步握手。协议/Profile/limits 必须
    exact match；`READY` 前不得发送 Runtime payload。
-4. Core `READY` 后创建绑定该 Session 的 `MeisoRuntime`。Edge 首先发送完整 catalog；Host
+4. Core `READY` 后按exact Profile创建绑定该Session的Runtime：`wifi-telemetry-v0`和Composition
+   Profile v1使用MRT0 v2，Composition Profile v2显式使用MRT0 v3；不得混用或fallback。Edge首先
+   发送完整catalog；Host
    按 Profile、容量、endpoint/resource identity、owner、kind、schema 与 facet 验证后原子
    `ACCEPT` 或完整 `REJECT`，不得部分接受。
 5. Host 用 `MeisoStatePublisher` 发布 desired，经 Runtime 发送 State offer；Edge 的 delivery
@@ -62,6 +65,8 @@ Host 可以保留自己的 opaque API handle，但至少把下列作用域纳入
 | State view | route、owner scope、version | stale/conflict/new owner；delivery ACK 不等于 actual |
 | production view | desired ref、actual effective config、production epoch | actual STOPPED、new epoch、catalog/Session invalidation |
 | Stream cursor | producer incarnation、stream epoch、sequence、source clock epoch | continuity loss/new epoch；gap 必须显式暴露 |
+| Blob transfer | SessionId、catalog/route、Runtime transfer ID、ContentId/total/offset | terminal RESULT、abort、catalog/Session discontinuity |
+| Blob visibility | Core publication + current Profile/owner scope | cache 命中不恢复新 Session/world/desired/visibility |
 
 建议 Host SDK 对应用暴露 `EdgeHandle / endpoint / typed State / typed Stream`，内部再映射到上述
 tuple。应用不应看到 socket、PeerId、catalog wire、driver path 或 K230D 细节。
@@ -75,7 +80,7 @@ tuple。应用不应看到 socket、PeerId、catalog wire、driver path 或 K230
 | control object | Host desired State；有副作用且需要结果时才使用 Action，不创建通用 RPC |
 | sensor/telemetry queue | Stream；producer/epoch/sequence/source time 不可省略 |
 | peripheral resource mirror | 由 Edge catalog、capability 与 actual 驱动；Host 可以缓存镜像但不是第二 truth |
-| logical layer / presentation batch | Host SDK 的 Composition plan producer；未来映射 `PresentationPlan` State、Blob/MediaStream |
+| logical layer / presentation batch | Host SDK 的 Composition plan producer；当前scene lab映射`PresentationPlan` State与Mesh Blob，MediaStream仍后置 |
 | presentation receipt | Edge-owned `PresentationStatus`；Link ACK 不能冒充 prepared/active/presented |
 | reset epoch | 分别映射 peer/Session、endpoint incarnation、production/stream/plan generation；不得合并 |
 
@@ -89,14 +94,15 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 |---|---|
 | Resource 语义 | [Resource 契约](resource.md)；State / Stream / Action / Blob |
 | Session | [Session Core v0](session-core-v0.md)：`MSL0`、wire v1、big-endian、七类 frame |
-| Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：`MRT0`、wire v2 |
+| Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：strict `MRT0` v2/v3 |
 | 首个 Profile | [Wi-Fi telemetry v0](../profiles/wifi-telemetry-v0/README.md) |
 | direct-IP 实装 | [Direct-IP Wi-Fi Runtime v0](wifi-runtime-direct-ip-v0.md) |
-| Composition | [Composition 契约](composition.md)；[scene lab C0](../profiles/composition-scene-lab-v0/README.md) 已提供 exact Profile suffix codec/Host wire vectors，但没有 Runtime Blob/target interoperability |
+| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2 与 R1 exact Profile/codec/coordinator/Runtime v3 Blob evidence，但没有 combined scheduler、Host editor 或 target interoperability |
 
-当前 Runtime source v0 只承载 Host-owned desired State、Edge-owned actual State 与 Edge-owned
-data Stream。Action、Blob、MediaStream route、typed dispatcher、稳定 Host SDK/Virtual Edge
-尚未实现；缺失能力必须明确 `unsupported`，不能用私有消息旁路。
+当前 Runtime source v0 承载 Host-owned desired State、Edge-owned actual State、Edge-owned data
+Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Action、MediaStream、
+Edge→Host/并行/resumable Blob、fair scheduler、typed dispatcher与稳定Host SDK/Virtual Edge尚未
+实现；缺失能力必须明确`unsupported`，不能用私有消息旁路。
 
 ## 已验证与禁止外推
 
@@ -104,7 +110,8 @@ K230D Linux Edge 与 macOS Host 已在真实 Wi-Fi direct-IP 上完成同一 Ses
 重配置、停止、再次启动和 normal close；还验证了 100 ms 下 64 个连续 sample，以及显式进程
 重启后的完整重协商。准确 artifact、参数和 failure 边界见[系统进展](system-report.md)。
 
-这不证明稳定 SDK、自动重连、长稳/性能、MediaStream/Composition、discovery 或安全 transport。
+这不证明稳定SDK、自动重连、长稳/性能、MediaStream、Composition combined scheduler/target、
+discovery或安全transport。R1只证明portable Blob semantic/wire与Core publish bridge，不证明K230D。
 当前 plain TCP 的 PeerId exact check 只能防误连，不能提供认证、机密性或完整性；产品连接必须
 另行绑定经审查的安全 transport。
 

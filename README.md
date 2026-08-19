@@ -26,12 +26,13 @@ source-level implementation API，不冻结二进制 ABI。
 状态机、wire 与固定 Profile 的 four-kind 纵向 integration CI 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。
 
-当前 portable `meiso_runtime` 已实现 State/Stream-driven negotiation source v0 与 wire v2：
-它永久绑定 READY Session，原子接受 endpoint catalog，并以有界且不驱逐的 identity history
-保留 production epoch continuity、防止 retired pair 复活；desired/actual 作为 Core State、data
-作为 Core Stream 传递。State receive candidate 必须逐字节匹配同一次 `StateReplica` commit，
-只有被接受的 actual 才能开放 production epoch gate。三套 Host test 支持当前
-`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`，不构成 transport 或 target evidence。
+当前 portable `meiso_runtime` 已实现 State/Stream-driven negotiation source v0，以及严格分离的
+MRT0 wire v2/v3。v2 保留原六类 frame 与既有 Profile；v3 在相同 Session Runtime gate 内增加
+Host→Edge、Host-owned `IMMUTABLE/Blob` carriage。每个 Runtime handle 全局只允许一个 transfer，
+完整长度、SHA-256 与 Profile verifier 在同一 Core BlobStore verification snapshot 上通过后才发布；
+Blob publication 与 SceneStore/SDK visibility 仍是两层。commit `a8a777a` 的独立 literal/FSM/Core
+bridge vectors 支持 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`，不构成 transport、scheduler
+fairness 或 target evidence。
 
 POSIX build 另含 platform-layer connected-stream adapter。它借用 already-connected、
 nonblocking `SOCK_STREAM` fd，以 caller-owned bounded RX/TX buffer 对接完整 Session frame；
@@ -69,14 +70,14 @@ Composition、MediaStream、完整冷启动或产品 Profile evidence。各层�
 Runtime--SDK/application integration：Host 产生 logical plan，Edge 独占 prepare/activate/safety/
 scanout，renderer 只产生 candidate/failure，Core 不变。模块与 K230D backend 计划见
 [Edge local compositor v0](docs/edge-local-compositor-v0.md)。首个
-[Composition scene lab v0](profiles/composition-scene-lab-v0/README.md) C0 已实现 exact composite
-Profile 的 IDs/capabilities、PresentationPlan/Status、Mesh、SceneDesired/Status 与 RenderResult
-codec；C1 又以真实 Core Blob/State/Stream primitive 建立 caller-owned 的 active+candidate world
-fixture 和 deterministic off-screen generator；public commit `4210ddf` 的 C2 portable Composition
-coordinator 已验证 Plan digest/State version、Session control scope、prepared token、旧 active 保留、
-scene supersede 与 drain 后 disable，状态为 `PORTABLE COORDINATOR SEMANTIC VERIFIED`。三阶段仍是
-Host CPU-visible in-memory evidence：没有 Runtime v3 Blob carriage、Session wire 变更、Host editor、
-K230D/renderer backend、GPU/target allocation、offline lease 执行或 physical presentation；Core 不变。
+[Composition scene lab v0](profiles/composition-scene-lab-v0/README.md) 的 C0 codec、C1 bounded
+SceneStore 与 C2 portable coordinator 已完成；commit `a8a777a` 又完成 R1 Runtime v3 Blob carriage。
+该 Profile 的 v1 ProfileRef 继续选择 MRT0 v2，v2 ProfileRef 才显式选择 MRT0 v3；现有 Wi-Fi
+Profile 及 v2 golden 不受影响。R1 已验证 Blob wire/FSM、Session/catalog discontinuity 时清 Runtime
+transfer/scratch，以及 Core BlobStore publication 与 SceneStore visibility 的分层；catalog-only
+replacement 的外部 visibility 策略留给 R2 Profile integration。R1 尚未实现 combined Session
+scheduler、Host editor、K230D/renderer backend、GPU/target allocation、offline lease 执行或 physical
+presentation；Core 与 Session wire 不变。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

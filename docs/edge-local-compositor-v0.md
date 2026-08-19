@@ -1,6 +1,6 @@
 # Edge local compositor v0 开发方案
 
-> 状态：`DESIGN / C0-C2 HOST FIXTURE COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED / TARGET NOT IMPLEMENTED`。这是
+> 状态：`DESIGN / C0-C2 HOST FIXTURE COMPLETE / R1 PORTABLE BLOB CARRIAGE VERIFIED / TARGET NOT IMPLEMENTED`。这是
 > Composition 的实现计划，不是新产品规范或target evidence；通用语义由
 > [Composition 契约](composition.md)拥有。
 
@@ -8,8 +8,9 @@
 
 Edge compositor 新增在 **Edge Runtime 与 renderer/platform SDK 之间**。Core、Session wire 和
 `State / Stream / Action / Blob` primitive 不改，也不增加 compositor 专用 Core message。
-public commit `4210ddf` 只在 Profile/Runtime--SDK 层加入 portable coordinator 与 SceneStore
-control-scope seam；没有修改 Core 或 Session wire。
+public commit `4210ddf` 在 Profile/Runtime--SDK 层加入 portable coordinator 与 SceneStore
+control-scope seam；commit `a8a777a` 在 portable Runtime 加入严格 MRT0 v3 Blob carriage。两者都
+没有修改 Core 或 Session wire。
 
 当前不整仓合并外部 `looking_glass`：
 
@@ -73,9 +74,10 @@ Host logical layer 与 Edge-resident layer 使用不同 namespace。Host 每次�
 `PresentationPlan` snapshot；稳定 `LayerKey` 只用于缓存和关联，不能用跨端
 `CREATE/UPDATE/DELETE` 日志维持隐藏 truth。连续 frame 是 MediaStream；有限不可变内容才是 Blob。
 
-当前 portable Runtime source v0 只承载 desired/actual State 与 Edge-owned Stream，尚无通用
-Blob/MediaStream、Host→Edge data route或多 State facet。因此第一片先做本地/synthetic
-Composition coordinator；后续扩展 Runtime carriage，仍不改 Core。
+当前 portable Runtime source v0 承载 desired/actual State、Edge-owned Stream，以及MRT0 v3中
+Host-owned `IMMUTABLE/Blob` 的Host→Edge carriage；仍没有Action、MediaStream、Host→Edge
+continuous data route或多State facet。Blob由Runtime scratch经generic bridge同步发布到Core
+BlobStore，Profile/SceneStore visibility另行授权；这些扩展均不改Core。
 
 ## 首个正式实验：Edge-native scene
 
@@ -107,9 +109,10 @@ object 的 transform 与 mesh `ContentId`。它不是增量 CRUD 日志：同一
 
 ### 一个 Session、一个 composite Profile
 
-当前 Session handshake 只协商一个 exact `MeisoProfileRef`。Wi-Fi telemetry 与 scene 在同一
-Session 并存时，不能分别协商 `wifi-telemetry-v0` 和一个 scene Profile；首个板测必须使用
-`composition-scene-lab-v0` 定义的新 composite Profile，其 catalog 原子包含：
+当前 Session handshake 只协商一个 exact `MeisoProfileRef`。Composition Profile v1选择MRT0 v2，
+Profile v2才显式选择MRT0 v3 Blob carriage；两版不fallback。Wi-Fi telemetry 与 scene 在同一
+Session 并存时，不能分别协商`wifi-telemetry-v0`和一个scene Profile；首个板测必须使用
+`composition-scene-lab-v0:v2` composite Profile，其catalog原子包含：
 
 - 现有 `WIFI_TLM/ENDPOINT`；
 - Composition presentation endpoint；
@@ -121,10 +124,11 @@ scene 分别拥有 desired/actual、production epoch 与 data gate。v0 catalog 
 使整份 catalog binding 失效，Host 必须重新接受 catalog 并分别重发两组 desired；这不允许实现
 把两个 endpoint 的 gate 或 actual 合并。
 
-当前 Session 只有一个 TX slot。Runtime/target integration 必须在其上提供有界公平调度：control
-帧允许有限优先 burst；每个 ready data/Blob route 每轮至多提交一帧；Blob chunk 不能连续占满
-TX。Wi-Fi sample、scene result 和 Blob transfer 同时 pending 时，每条 route 都必须在声明的
-slot bound 内获得一次提交机会，过载以 gap/drop/capacity 暴露，不能静默饿死 Wi-Fi。
+当前每个peer Session handle各有一个outbound TX slot；R1 Runtime不包含scheduler。R2必须分别
+公平调度两个方向：Host outbound是Host control+Blob chunk，Edge outbound是Edge control+Wi-Fi
+sample+scene result。每方向control帧只允许有限优先burst，每个ready route每轮至多提交一帧，
+Host Blob chunk不能连续占满Host TX；full-duplex不能合并成全局slot序列。每条route必须在本方向
+声明的slot bound内获得提交机会，过载以gap/drop/capacity暴露，不能静默饿死Wi-Fi或result。
 
 ## Plan 生命周期
 
@@ -290,28 +294,39 @@ token/scene supersede/generation guards；same-owner new Session no-resurrection
 distinct-arena parallel Session scope invalidation；success/swap/status/disable。fresh normal与ASan+UBSan
 全套CTest均22/22，相关targets额外通过strict conversion/shadow/prototype warnings-as-errors。
 
-C2不含Runtime v3/Host→Edge Blob carriage、Session frame/handshake变更、K230D build/run、真实renderer/
-target/job/CMA、offline lease执行或physical output。P2边界是single-thread/non-reentrant caller discipline、
-opaque SceneStore arena不重叠前置条件与caller保证nonce全局fresh；均不提升本阶段evidence等级。
+C2证据范围止于portable coordinator；Host→Edge Blob carriage由下节R1单独验证。C2未验证
+Session transport、K230D build/run、真实renderer/target/job/CMA、offline lease执行或physical output。
+P2边界是single-thread/non-reentrant caller discipline、opaque SceneStore arena不重叠前置条件与caller保证
+nonce全局fresh；均不提升本阶段evidence等级。
 
 ### R1 — Runtime Blob carriage 与 route direction
 
-- 保持 Session Core 不变，新增 Runtime wire version（实现时冻结，预期 `MRT0 v3`）承载
-  Host-owned `IMMUTABLE/Blob` route；不得把新 frame 追加到 `MRT0 v2`。v2 的六类 frame、literal
-  bytes 和含义原样保留；
-- transfer 使用 content identity、总长、连续 offset、固定 chunk、一个有界 staging transfer 和
-  commit/abort；完整长度与 hash 验证前不得发布；Session loss 必须 abort staging；
-- route direction 从 descriptor owner/facet 验证。本实验只要求 Host→Edge Blob 与 Edge→Host
-  result Stream，不能顺便声明未测试的任意双向 Stream；
-- 加入单 TX 公平 scheduler：control burst 有上限，Blob 每轮一个 chunk，Wi-Fi/scene data route
-  round-robin；所有 pending/retry storage 固定容量。
+状态：`COMPLETE / PORTABLE BLOB CARRIAGE SEMANTIC-WIRE VERIFIED`（public commit `a8a777a`；
+不是scheduler、transport或target evidence）。
 
-完成条件：每个 truncation、reserved、offset overlap/gap、duplicate/conflict/hash/length/capacity、
-wrong Session/catalog/endpoint/resource/owner/direction 均零部分 publication；现有 Runtime v2
-golden bytes 原样通过；Core source/API 零 diff。
+- Profile v1→MRT0 v2；Profile v2→strict MRT0 v3。v2六类frame/literal/meaning原样保留，v3增加
+  BEGIN/CHUNK/COMMIT/ABORT/RESULT五类frame；不混用、不fallback；
+- 只允许Host-owned `IMMUTABLE/Blob` Host→Edge；多个route共享一个全局transfer。Runtime生成
+  Session-scoped ID，BEGIN唯一READY，CHUNK固定4096且无逐块ACK，COMMIT/ABORT返回terminal RESULT；
+- Edge Runtime完整scratch先核对length/SHA-256，再由generic bridge在同一Core verification snapshot
+  上执行SHA+Profile verifier与BlobStore atomic publish；publication后仍须显式SceneStore visibility；
+- Session/catalog discontinuity清Runtime transfer/scratch，published Core cache可保留；新Session/
+  control scope不复活desired/world/visibility。catalog-only replacement的外部visibility策略留给R2
+  Profile integration，Runtime不持有它，R1未验证；Core/Session wire无改动。
+
+独立literal、truncation/reserved、0/4096/4097/262144、offset、phase/result、TX_BUSY、alias/reentry、
+multi-route、Core staging ownership/cleanup、duplicate/visibility与State/Stream coexist vectors通过；fresh
+Debug、strict、ASan+UBSan均CTest 23/23，clang analyzer 0 finding。macOS arm64 Host/Edge Runtime
+arena为14,904/277,048 bytes、alignment 8，Edge值含262,144-byte scratch。
+
+R1明确不实现fair scheduler；control burst、round-robin与direction-local no-starvation proof移至R2。
 
 ### R2 — Combined Session/catalog loopback
 
+- 在Runtime--SDK层加入有界fair scheduler。Host与Edge按各自outbound方向独立计successful slot，
+  不能把full-duplex合为全局序列：Host调度Host control/Blob chunk，Edge调度Edge control/Wi-Fi/
+  RenderResult。每方向control burst最多4个slot，ready route round-robin，Host Blob每轮至多一个
+  chunk，local `TX_BUSY`不消耗本方向round；
 - Host/Edge 使用一个 composite ProfileRef 完成一次 Session handshake；Edge 原子 offer 三个
   endpoint/九条 route 的 catalog；
 - 同一 event loop 内完成 Mesh Blob→SceneDesired、PresentationPlan prepare/activate→SceneStatus
