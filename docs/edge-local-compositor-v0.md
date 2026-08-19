@@ -74,6 +74,55 @@ Host logical layer 与 Edge-resident layer 使用不同 namespace。Host 每次�
 Blob/MediaStream、Host→Edge data route或多 State facet。因此第一片先做本地/synthetic
 Composition coordinator；后续扩展 Runtime carriage，仍不改 Core。
 
+## 首个正式实验：Edge-native scene
+
+首个 workload 改为 `EDGE_NATIVE` 的有界 3D scene，而不是先做 Remote Projection。Host 前端
+编辑 mesh、object transform 与 camera；Edge 在本地保留一个 scene snapshot、建立 renderer
+资源并离屏渲染：
+
+```text
+Host mesh bytes ----------------------------> Mesh Blob
+Host camera + complete object snapshot -----> SceneDesired State
+Edge applied world/capacity/current use ----> SceneStatus actual State
+Edge bounded render result + 64×48 thumbnail -> RenderResult Stream
+```
+
+完整实验合同见
+[`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md)。这里的“保留 world”
+只表示同一 Edge incarnation 内跨 State 更新复用已校验 Blob/GPU buffer，并在新 snapshot 准备时
+继续使用旧 active world；它不是磁盘持久化。Session 重建后 Host 必须重新发布 plan 与 scene
+State；Edge reboot 后不能从缓存恢复 active truth。
+
+Scene 使用一个 Host-owned `SceneDesired State`，其中同时携带 camera、完整 object 列表、每个
+object 的 transform 与 mesh `ContentId`。它不是增量 CRUD 日志：同一 snapshot 内 absence 表示
+删除，新 snapshot 只有在所有 ContentId 已发布、对象/内存容量和 renderer prepare 全部通过后
+才原子替换 active world。缺 Blob、容量不足或 malformed transform 时旧 world 保持不变。
+
+首片 `RenderResult Stream` 回传固定小尺寸 raw thumbnail 和结果 metadata，用来证明真实 scene
+变化、State application 与 renderer 输出相关；它不冒充完整 framebuffer 或 MediaStream。
+完整画面回传后续走 MediaStream，不能扩大该 Stream payload。
+
+### 一个 Session、一个 composite Profile
+
+当前 Session handshake 只协商一个 exact `MeisoProfileRef`。Wi-Fi telemetry 与 scene 在同一
+Session 并存时，不能分别协商 `wifi-telemetry-v0` 和一个 scene Profile；首个板测必须使用
+`composition-scene-lab-v0` 定义的新 composite Profile，其 catalog 原子包含：
+
+- 现有 `WIFI_TLM/ENDPOINT`；
+- Composition presentation endpoint；
+- Edge-native scene endpoint。
+
+单独 scene Session 或 in-memory fixture 只可作为过渡证据，不能满足“Wi-Fi 与 compositor
+并存”验收。combined catalog 的 EndpointId、ResourceId、route 和 schema 必须互异；Wi-Fi 与
+scene 分别拥有 desired/actual、production epoch 与 data gate。v0 catalog generation 更新仍会
+使整份 catalog binding 失效，Host 必须重新接受 catalog 并分别重发两组 desired；这不允许实现
+把两个 endpoint 的 gate 或 actual 合并。
+
+当前 Session 只有一个 TX slot。Runtime/target integration 必须在其上提供有界公平调度：control
+帧允许有限优先 burst；每个 ready data/Blob route 每轮至多提交一帧；Blob chunk 不能连续占满
+TX。Wi-Fi sample、scene result 和 Blob transfer 同时 pending 时，每条 route 都必须在声明的
+slot bound 内获得一次提交机会，过载以 gap/drop/capacity 暴露，不能静默饿死 Wi-Fi。
+
 ## Plan 生命周期
 
 candidate 与 active 必须正交；准备新 plan 时旧 plan 继续显示：
@@ -160,23 +209,107 @@ worker；不能同时拥有第二套 plan/actual/display truth。
 任何源码迁移前先确认 author/license、exact source commit、clean diff 与 third-party boundary；每个
 算法/backend 单独小提交，不能用 26 GB 旧目录或整仓 copy 作为 provenance。
 
-## 实施切片
+## Ordered work units
 
-1. **Contract fixture**：定义 Composition Profile/source contract 与 golden/failure vectors；Core
-   文件和 ABI 零改动。
-2. **Synthetic control plane**：portable Composition coordinator + fake renderer，证明双代
-   prepare/token/activate/supersede/new Session。
-3. **Off-screen renderer**：接入许可明确的 stereo cut/reprojection；recorded frame/pose/depth，
-   注入 stale、deadline、capacity、device failure、partial stereo。
-4. **K230D local presentation**：固定 buffer pool、Linux accelerator seam、安全层、DRM atomic
-   display boundary；分别记录 candidate/fence/commit/vblank。
-5. **Remote projection**：补 Runtime Blob/MediaStream route；Host adapter 把 plan/unit 映射为
-   Meiso State/Blob/MediaStream，不暴露 Host 本地 object/socket ABI。
-6. **Profile gate**：冻结 format/modifier/stride、CMA/job budget、deadline/fallback、disconnect/
-   recovery、thermal/soak，完成 physical presentation 后才声明 capability。
+每个工作单元单独提交并以自己的测试闭环；后项不得用 stub 绕过前项失败。外部 renderer 源码
+迁移、physical scanout 与完整 MediaStream 不属于前四项。
 
-首个 workload 选 `REMOTE_PROJECTION + Edge local safety layer`；它最直接复用 Host renderer 和
-现有 K230 backend。`EDGE_NATIVE` 等 control plane、asset 与 scanout 稳定后再加入。
+### C0 — 冻结 composite lab contract
+
+- 固定 composite Session ProfileRef、三个 endpoint、九条 route、schema、方向、payload/
+  object/buffer 上限与 literal golden vectors；引用而不复制 Wi-Fi Profile 语义；
+- 固定 `SceneDesired` 全 snapshot、`SceneStatus` 与 `RenderResult` 字段；mesh v0 只允许一个
+  bounded canonical triangle format；
+- 固定错误分类、fair scheduler slot bound，以及 in-memory、loopback、K230D 三种 evidence 标签。
+
+完成条件：文档/parser/link/diff-check 通过；所有 ID 在 composite catalog 内唯一；现有 Wi-Fi
+Profile 和 Core API 无变更。
+
+### C1 — Resource-only in-memory fixture
+
+- 直接使用 `MeisoBlobStore`、Host StatePublisher/Edge StateReplica、Edge StatePublisher/Host
+  StateReplica 与 `MeisoStream`；不引入 Session 或 Runtime wire；
+- 发布一个 cube mesh Blob，再发布引用它的 camera/object snapshot；fake renderer 生成由 mesh、
+  transform、camera 决定的 deterministic result/thumbnail；
+- scene store 固定每 world `32 objects / 8 unique meshes`，并为 active+candidate worst case 保留
+  `16 Blob slots / 4 MiB resident mesh / 2 render targets / 4 result queue slots`；所有 arena 由
+  调用者提供。
+
+完成条件：Blob 未 commit 时 scene 不应用；完整 world 原子替换；结果引用精确 applied State
+owner/version；duplicate/stale/conflict/capacity/overflow vectors 全部通过，无 heap、socket 或 driver。
+
+### C2 — Portable Composition coordinator
+
+- 加入 presentation plan、scene world 与 renderer-plan 三个独立 lifecycle；实现
+  `old active + one preparing candidate`；
+- `SceneStatus` 正交报告 observed/applied desired、world generation、对象/Blob/buffer current use、
+  reason 与 result production epoch；
+- fake renderer 注入 prepare failure、partial output、deadline 与 supersede；只有完整 candidate
+  才能进入 result Stream，plan token/activation 仍由 Composition 拥有。
+
+完成条件：missing Blob/capacity/renderer failure 保留旧 world；disable 在 producer drain 后才
+`STOPPED`；new Session/Edge incarnation vectors 不复活 token、world 或 result epoch。
+
+### R1 — Runtime Blob carriage 与 route direction
+
+- 保持 Session Core 不变，新增 Runtime wire version（实现时冻结，预期 `MRT0 v3`）承载
+  Host-owned `IMMUTABLE/Blob` route；不得把新 frame 追加到 `MRT0 v2`。v2 的六类 frame、literal
+  bytes 和含义原样保留；
+- transfer 使用 content identity、总长、连续 offset、固定 chunk、一个有界 staging transfer 和
+  commit/abort；完整长度与 hash 验证前不得发布；Session loss 必须 abort staging；
+- route direction 从 descriptor owner/facet 验证。本实验只要求 Host→Edge Blob 与 Edge→Host
+  result Stream，不能顺便声明未测试的任意双向 Stream；
+- 加入单 TX 公平 scheduler：control burst 有上限，Blob 每轮一个 chunk，Wi-Fi/scene data route
+  round-robin；所有 pending/retry storage 固定容量。
+
+完成条件：每个 truncation、reserved、offset overlap/gap、duplicate/conflict/hash/length/capacity、
+wrong Session/catalog/endpoint/resource/owner/direction 均零部分 publication；现有 Runtime v2
+golden bytes 原样通过；Core source/API 零 diff。
+
+### R2 — Combined Session/catalog loopback
+
+- Host/Edge 使用一个 composite ProfileRef 完成一次 Session handshake；Edge 原子 offer 三个
+  endpoint/九条 route 的 catalog；
+- 同一 event loop 内完成 Mesh Blob→SceneDesired、PresentationPlan prepare/activate→SceneStatus
+  RUNNING→RenderResult，同时 Wi-Fi endpoint 继续 desired/actual/sample；
+- 分别启停、重配两 endpoint，证明 production epoch、gate、State version 和 Stream epoch 不交叉；
+- catalog replacement 后两组 desired 都必须重发；旧 route 和旧 epoch 全部拒绝。
+
+完成条件：scene-only 或 wifi-only Profile 对 composite peer 得到 exact `PROFILE_MISMATCH`；混合
+负载 scheduler vector 证明 Blob/result 不饿死 Wi-Fi，Wi-Fi 流量也不阻断 scene control。
+
+### H1 — Host editor/devtool
+
+- Host tool 只通过 typed Profile API 创建/校验 mesh、发布 Blob、提交完整 SceneDesired、观察
+  SceneStatus/RenderResult；不暴露 socket packet 或 K230 native handle；
+- UI 至少支持 create/delete object、选择 mesh、修改 position/orientation/scale、camera pose/
+  projection、enable/disable，以及同时观察 Wi-Fi；
+- thumbnail 明确标注 off-screen/result Stream、applied scene State version 与 gap，不能伪装为
+  physical display capture。
+
+完成条件：同一输入 fixture 可驱动 in-memory、local TCP 和 recorded backend；刷新 UI 不重放
+Blob/desired 或制造第二个 truth owner。
+
+### K1 — K230D Linux off-screen target
+
+- 先用最小 CPU/reference backend，再替换经许可和 provenance 检查的 RVV/VGLite backend；
+- 固定 320×240 color/depth target、两个 target slot、mesh/GPU/CMA 上限；严格区分 Blob
+  publication、world prepare、render complete 和 thumbnail emitted；
+- 在当前 direct-IP carrier 上运行 composite Profile，捕获 object/camera 改动导致不同真实
+  thumbnail/checksum，并保持 Wi-Fi Stream 连续。
+
+完成条件：exact target binary/source receipt、board-side capacity counters、至少 create→move→
+camera move→delete→disable 的 transcript；不得把 off-screen 结果标为 scanout/physical evidence。
+
+### K2 — Physical present 与完整 media（后置）
+
+- 只有 K1 稳定后才接 DRM/display boundary、安全层、vblank 与物理 panel evidence；
+- 完整或持续 framebuffer 回传改用 MediaStream，并继承 active plan、epoch、deadline、recovery
+  与 bounded backpressure；不得扩大 `RenderResult Stream` 充当视频通道；
+- 最后再做 format/modifier/stride、CMA、thermal、disconnect/recovery 与 soak Profile gate。
+
+完成条件：candidate/fence/commit/vblank/physical capture 分层验收；未完成前不声明 presentation
+`BOARD_VERIFIED`。
 
 ## 验收门
 
@@ -187,5 +320,10 @@ worker；不能同时拥有第二套 plan/actual/display truth。
 - 新 Session token 失效，Edge restart no-resurrection，offline lease 不被重传续期；
 - safety layer 始终可覆盖 Host layer；候选、fence、commit、vblank evidence 不合并成一个布尔值；
 - macOS synthetic Host 与 K230D 使用同一 plan/status/frame fixture；
+- 同一 exact composite Profile/Session 下 catalog 同时含 Wi-Fi 与 scene；两 endpoint 的 desired、
+  actual、production epoch、data gate、Stream sequence 与 failure counter 独立；
+- 单 TX 混合负载满足 scheduler slot bound；Blob chunk 与 thumbnail 不能饿死 Wi-Fi；
+- scene 总对象、unique mesh、Blob published/staging、resident mesh bytes、target/job/result queue
+  均有固定上限，超限保持旧 active world 并发布明确 reason；
 - physical display 前只标 `HOST_SEMANTIC/WIRE` 或 target off-screen evidence，不标 presentation
   `BOARD_VERIFIED`。

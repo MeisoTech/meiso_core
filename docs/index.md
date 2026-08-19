@@ -43,6 +43,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 
 ## 当前实验入口
 
+- [Composition scene lab v0](../profiles/composition-scene-lab-v0/README.md)：拟定的 exact composite
+  Session Profile 实验合同（IDs/codec 待 C0 冻结）；Mesh Blob、camera/object State、Edge retained
+  world 与有界 result-thumbnail Stream，当前尚未实现；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
 - [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与固定

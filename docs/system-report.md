@@ -1,6 +1,6 @@
 # 系统进展
 
-> 日期：2026-08-17
+> 日期：2026-08-20
 > 状态：公开、已脱敏的 evidence report；不是产品规范，不包含原始日志、地址、凭据、
 > 唯一设备标识或本机路径。
 
@@ -219,8 +219,13 @@ remote encoding 直接作为 Edge wire。
 
 [Edge local compositor v0 开发方案](edge-local-compositor-v0.md) 已选定 Runtime--SDK 边界、
 plan prepare/activate authority、renderer/present seam、K230D Linux 首发与选择性源码迁移规则。
-本轮没有合并外部 Host compositor、旧本地素材、vendor SDK 或二进制，也没有新增 compositor
-source、Profile、wire、MediaStream route、target build 或 physical presentation evidence。
+新增的 [`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md) 只冻结待实现的
+composite Profile 实验合同：同一 Session/catalog 中并存 Wi-Fi、presentation 与 scene endpoint，
+Mesh 用 Host Blob，camera/object snapshot 用 Host State，Edge world/capacity 用 actual State，固定
+thumbnail 用 Edge Stream。当前 Runtime v2 尚无 Blob carriage，故 remote combined catalog 尚不可
+接受；下一 Runtime wire version、portable coordinator、target backend 均未实现。本轮没有合并
+外部 Host compositor、旧本地素材、vendor SDK 或二进制，也没有 compositor source、target build
+或 physical presentation evidence。
 
 ## K230D lab evidence
 
@@ -290,7 +295,7 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - Composition Profile/wire、portable coordinator、prepared generation、renderer/present backend 与
   真实 presentation endpoint；当前只有产品契约和实现计划；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
-- K230D 自动化 cold-boot/restart evidence、CI、fuzz、并发、板端资源预算和长期
+- K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。
 
 这些 gap 是无序能力集合。实际下一项由当前产品问题、可用硬件、风险和可执行验收选择，

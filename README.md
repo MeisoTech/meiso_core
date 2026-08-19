@@ -54,10 +54,10 @@ desired/actual 都是 Core State，数据是 Core Stream，不存在 subscriptio
 协议 truth。
 
 这套实现仍不是 application-facing 完整产品 Runtime 或产品系统；它不包含 endpoint
-facet/direction/QoS/permission schema、真实 probe/hotplug adapter、typed dispatcher、Virtual
-Edge/SDK、Composition Runtime、MediaStream data path、通用 discovery/reconnect/service、认证
-或安全 transport。所选 Wi-Fi target 的 config/probe 与 connect/listen 是 platform slice，不进入
-portable Core。
+facet/direction/QoS/permission schema、通用 multi-endpoint probe/hotplug orchestration、typed
+dispatcher、Virtual Edge/SDK、Composition Runtime、MediaStream data path、通用 discovery/
+reconnect/service、认证或安全 transport。所选 Wi-Fi target 的 config/probe 与 connect/listen
+是 platform slice，不进入 portable Core。
 K230D conformance target 已完成 host-side cross-build、image inspection，并在
 `CanMV-K230D-Zero V1.1` 上得到七套 suite 全部通过的 `BOARD_VERIFIED` evidence。这个状态只
 覆盖 Resource semantic core v0 的单进程 target runner，不构成 remote backend、LinkSession、
@@ -94,6 +94,7 @@ ctest --preset windows-msvc-debug
 - [Composition 契约](docs/composition.md)
 - [Host 集成回执 v0](docs/host-integration-receipt-v0.md)
 - [Edge local compositor v0 开发方案](docs/edge-local-compositor-v0.md)
+- [Composition scene lab v0 实验合同](profiles/composition-scene-lab-v0/README.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Resource semantic core v0 实现与验证基线](docs/resource-core-v0.md)
 - [系统进展](docs/system-report.md)
