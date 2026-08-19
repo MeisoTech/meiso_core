@@ -30,6 +30,7 @@ struct MeisoCompositionSceneStore {
     uint8_t active_slot;
     uint8_t candidate_slot;
     uint64_t world_generation;
+    uint64_t control_scope_generation;
     uint64_t owner_incarnation;
     bool disabled;
     bool has_observation;
@@ -143,6 +144,10 @@ static bool store_valid(const MeisoCompositionSceneStore *store)
         (store->candidate_slot == NO_SLOT ||
          store->candidate_slot < WORLD_SLOT_COUNT) &&
         store->candidate_slot != store->active_slot &&
+        ((store->control_scope_generation == 0U &&
+          store->owner_incarnation == 0U) ||
+         (store->control_scope_generation != 0U &&
+          store->owner_incarnation != 0U)) &&
         store->tracked_blob_count <=
             MEISO_COMPOSITION_SCENE_MAX_PUBLISHED_BLOBS &&
         meiso_blob_store_stats(store->blob_store, &ignored);
@@ -435,7 +440,7 @@ MeisoCompositionSceneStoreInitStatus meiso_composition_scene_store_init(
     return MEISO_COMPOSITION_SCENE_STORE_INIT_OK;
 }
 
-MeisoCompositionSceneOwnerStatus meiso_composition_scene_store_begin_owner(
+static MeisoCompositionSceneOwnerStatus reset_control_scope(
     MeisoCompositionSceneStore *store,
     uint64_t desired_owner_incarnation
 )
@@ -443,19 +448,15 @@ MeisoCompositionSceneOwnerStatus meiso_composition_scene_store_begin_owner(
     if (!store_valid(store) || desired_owner_incarnation == 0U) {
         return MEISO_COMPOSITION_SCENE_OWNER_INVALID_ARGUMENT;
     }
-    if (store->owner_incarnation == desired_owner_incarnation) {
-        return MEISO_COMPOSITION_SCENE_OWNER_UNCHANGED;
-    }
-    if (store->owner_incarnation == 0U) {
-        increment_saturated(&store->stats.owner_starts);
-    } else {
-        increment_saturated(&store->stats.owner_changes);
+    if (store->control_scope_generation == UINT64_MAX) {
+        return MEISO_COMPOSITION_SCENE_OWNER_SCOPE_COUNTER_EXHAUSTED;
     }
     clear_world(&store->worlds[0]);
     clear_world(&store->worlds[1]);
     store->active_slot = 0U;
     store->candidate_slot = NO_SLOT;
     store->owner_incarnation = desired_owner_incarnation;
+    ++store->control_scope_generation;
     store->disabled = true;
     store->has_observation = false;
     store->observation_has_canonical = false;
@@ -473,6 +474,73 @@ MeisoCompositionSceneOwnerStatus meiso_composition_scene_store_begin_owner(
     store->last_result_stream_epoch = 0U;
     store->last_result_sequence = 0U;
     return MEISO_COMPOSITION_SCENE_OWNER_STARTED;
+}
+
+MeisoCompositionSceneOwnerStatus meiso_composition_scene_store_begin_owner(
+    MeisoCompositionSceneStore *store,
+    uint64_t desired_owner_incarnation
+)
+{
+    if (!store_valid(store) || desired_owner_incarnation == 0U) {
+        return MEISO_COMPOSITION_SCENE_OWNER_INVALID_ARGUMENT;
+    }
+    if (store->owner_incarnation == desired_owner_incarnation) {
+        return MEISO_COMPOSITION_SCENE_OWNER_UNCHANGED;
+    }
+    if (store->control_scope_generation == UINT64_MAX) {
+        return MEISO_COMPOSITION_SCENE_OWNER_SCOPE_COUNTER_EXHAUSTED;
+    }
+    if (store->owner_incarnation == 0U) {
+        increment_saturated(&store->stats.owner_starts);
+    } else {
+        increment_saturated(&store->stats.owner_changes);
+    }
+    return reset_control_scope(store, desired_owner_incarnation);
+}
+
+MeisoCompositionSceneOwnerStatus
+meiso_composition_scene_store_reset_control_scope(
+    MeisoCompositionSceneStore *store,
+    uint64_t desired_owner_incarnation
+)
+{
+    MeisoCompositionSceneOwnerStatus status;
+    bool same_owner;
+
+    if (!store_valid(store) || desired_owner_incarnation == 0U) {
+        return MEISO_COMPOSITION_SCENE_OWNER_INVALID_ARGUMENT;
+    }
+    if (store->control_scope_generation == UINT64_MAX) {
+        return MEISO_COMPOSITION_SCENE_OWNER_SCOPE_COUNTER_EXHAUSTED;
+    }
+    same_owner = store->owner_incarnation == desired_owner_incarnation;
+    if (store->owner_incarnation == 0U) {
+        increment_saturated(&store->stats.owner_starts);
+    } else if (same_owner) {
+        increment_saturated(&store->stats.control_scope_resets);
+    } else {
+        increment_saturated(&store->stats.owner_changes);
+    }
+    status = reset_control_scope(store, desired_owner_incarnation);
+    if (status != MEISO_COMPOSITION_SCENE_OWNER_STARTED) {
+        return status;
+    }
+    return same_owner ? MEISO_COMPOSITION_SCENE_OWNER_SCOPE_RESET : status;
+}
+
+bool meiso_composition_scene_store_control_scope(
+    const MeisoCompositionSceneStore *store,
+    MeisoCompositionSceneControlScope *out_scope
+)
+{
+    if (!store_valid(store) || out_scope == NULL ||
+        output_overlaps_store(store, out_scope, sizeof(*out_scope))) {
+        return false;
+    }
+    out_scope->desired_owner_incarnation = store->owner_incarnation;
+    out_scope->control_scope_generation =
+        store->control_scope_generation;
+    return true;
 }
 
 MeisoCompositionSceneBlobVisibilityStatus

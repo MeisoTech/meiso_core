@@ -74,6 +74,7 @@ add_library(
     meiso_composition_scene_profile
     profiles/composition-scene-lab-v0/composition_scene.c
     profiles/composition-scene-lab-v0/scene_store.c
+    profiles/composition-scene-lab-v0/composition_coordinator.c
 )
 target_include_directories(
     meiso_composition_scene_profile
@@ -221,6 +222,16 @@ target_link_libraries(
 )
 meiso_enable_warnings(meiso_composition_scene_resource_test)
 
+add_executable(
+    meiso_composition_coordinator_test
+    tests/test_composition_coordinator.c
+)
+target_link_libraries(
+    meiso_composition_coordinator_test
+    PRIVATE meiso_composition_scene_profile
+)
+meiso_enable_warnings(meiso_composition_coordinator_test)
+
 if(TARGET meiso_posix_tcp_adapter)
     add_executable(meiso_posix_tcp_test tests/test_posix_tcp.c)
     target_link_libraries(
@@ -332,6 +343,10 @@ add_test(
 add_test(
     NAME meiso_composition_scene_resource_test
     COMMAND meiso_composition_scene_resource_test
+)
+add_test(
+    NAME meiso_composition_coordinator_test
+    COMMAND meiso_composition_coordinator_test
 )
 if(TARGET meiso_posix_tcp_test)
     add_test(NAME meiso_posix_tcp_test COMMAND meiso_posix_tcp_test)

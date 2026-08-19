@@ -35,6 +35,11 @@ typedef struct {
     uint64_t resident_mesh_bytes;
 } MeisoCompositionSceneWorldView;
 
+typedef struct {
+    uint64_t desired_owner_incarnation;
+    uint64_t control_scope_generation;
+} MeisoCompositionSceneControlScope;
+
 typedef uint8_t MeisoCompositionSceneStoreInitStatus;
 enum {
     MEISO_COMPOSITION_SCENE_STORE_INIT_OK = 0,
@@ -48,7 +53,9 @@ typedef uint8_t MeisoCompositionSceneOwnerStatus;
 enum {
     MEISO_COMPOSITION_SCENE_OWNER_STARTED = 0,
     MEISO_COMPOSITION_SCENE_OWNER_UNCHANGED = 1,
-    MEISO_COMPOSITION_SCENE_OWNER_INVALID_ARGUMENT = 2
+    MEISO_COMPOSITION_SCENE_OWNER_INVALID_ARGUMENT = 2,
+    MEISO_COMPOSITION_SCENE_OWNER_SCOPE_RESET = 3,
+    MEISO_COMPOSITION_SCENE_OWNER_SCOPE_COUNTER_EXHAUSTED = 4
 };
 
 typedef uint8_t MeisoCompositionSceneBlobVisibilityStatus;
@@ -113,6 +120,7 @@ enum {
 typedef struct {
     uint64_t owner_starts;
     uint64_t owner_changes;
+    uint64_t control_scope_resets;
     uint64_t blobs_made_visible;
     uint64_t blob_visibility_duplicates;
     uint64_t blob_visibility_rejections;
@@ -187,6 +195,24 @@ MeisoCompositionSceneOwnerStatus meiso_composition_scene_store_begin_owner(
     uint64_t desired_owner_incarnation
 );
 
+/*
+ * Starts a fresh Session/control scope even when the desired owner
+ * incarnation is unchanged. This clears active/candidate worlds,
+ * observations, result references, and per-scope Blob visibility while
+ * retaining the immutable BlobStore cache and world-generation high-water.
+ */
+MeisoCompositionSceneOwnerStatus
+meiso_composition_scene_store_reset_control_scope(
+    MeisoCompositionSceneStore *store,
+    uint64_t desired_owner_incarnation
+);
+
+/* Generation is zero only before the first successful owner/scope start. */
+bool meiso_composition_scene_store_control_scope(
+    const MeisoCompositionSceneStore *store,
+    MeisoCompositionSceneControlScope *out_scope
+);
+
 /* Suitable directly as MeisoBlobVerifier for canonical Mesh Blob commits. */
 bool meiso_composition_scene_mesh_blob_verify(
     const MeisoContentId *expected_content_id,
@@ -248,7 +274,8 @@ MeisoCompositionSceneDisableStatus meiso_composition_scene_store_disable(
 
 /*
  * WorldView.desired is borrowed. An active borrow ends at activate, disable,
- * or begin_owner; a candidate borrow also ends at prepare or discard.
+ * begin_owner, or reset_control_scope; a candidate borrow also ends at
+ * prepare or discard.
  */
 bool meiso_composition_scene_store_active(
     const MeisoCompositionSceneStore *store,
