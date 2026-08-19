@@ -3186,6 +3186,8 @@ static int run_edge(uint16_t port, unsigned int sessions)
 }
 
 #ifdef MEISO_LAB_INTERNAL_TEST
+static bool wait_child_exit_bounded(pid_t child, unsigned int timeout_ms);
+
 static void finish_thermal_fixture(ThermalChild *child)
 {
     thermal_child_terminate_nonblocking(child);
@@ -3260,8 +3262,7 @@ static bool self_test_thermal_stdout_eof(void)
     pid_t runner;
     struct timespec deadline;
     bool eof = false;
-    bool runner_ok = false;
-    int runner_status = 0;
+    bool runner_ok;
 
     if (!make_thermal_pipe(descriptors) ||
         !make_deadline_after_ms(&deadline, 2000U)) {
@@ -3300,7 +3301,6 @@ static bool self_test_thermal_stdout_eof(void)
     while (!eof && deadline_wait_ms(&deadline) != 0) {
         uint8_t buffer[16];
         const ssize_t count = read(descriptors[0], buffer, sizeof(buffer));
-        pid_t waited;
 
         if (count == 0) {
             eof = true;
@@ -3308,27 +3308,14 @@ static bool self_test_thermal_stdout_eof(void)
                    errno != EINTR) {
             break;
         }
-        waited = waitpid(runner, &runner_status, WNOHANG);
-        if (waited == runner) {
-            runner_ok = WIFEXITED(runner_status) &&
-                WEXITSTATUS(runner_status) == 0;
-        }
         if (!eof) {
             (void)poll(NULL, (nfds_t)0U, 10);
         }
     }
     close_fd(&descriptors[0]);
-    if (!runner_ok) {
-        const pid_t waited = waitpid(runner, &runner_status, WNOHANG);
-        if (waited == runner) {
-            runner_ok = WIFEXITED(runner_status) &&
-                WEXITSTATUS(runner_status) == 0;
-        }
-    }
-    if (!runner_ok) {
-        (void)kill(runner, SIGKILL);
-        (void)waitpid(runner, &runner_status, WNOHANG);
-    }
+    runner_ok = wait_child_exit_bounded(
+        runner, LAB_THERMAL_PREFLIGHT_TIMEOUT_MS
+    );
     return eof && runner_ok;
 }
 
@@ -3529,8 +3516,12 @@ static bool wait_child_exit_bounded(pid_t child, unsigned int timeout_ms)
         }
         (void)poll(NULL, (nfds_t)0U, 10);
     }
-    (void)kill(child, SIGKILL);
-    (void)waitpid(child, &status, WNOHANG);
+    if (kill(child, SIGKILL) == 0 || errno == ESRCH) {
+        pid_t result;
+        do {
+            result = waitpid(child, &status, 0);
+        } while (result < 0 && errno == EINTR);
+    }
     return false;
 }
 
