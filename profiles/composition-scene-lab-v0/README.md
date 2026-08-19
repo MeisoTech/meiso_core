@@ -1,6 +1,6 @@
 # Composition scene lab v0
 
-> 状态：`C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED / C1 RESOURCE SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY / NO RUNTIME-BLOB OR BOARD INTEROP`。
+> 状态：`C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY / NO RUNTIME-BLOB OR BOARD INTEROP`。
 > 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
@@ -369,8 +369,8 @@ Host/Edge loopback 用 deterministic TX-busy injection 证明 slot bound；K230D
 - compile-time 920-byte combined catalog、3812-byte Scene State、6460-byte result Stream 与 8236-byte
   Session frame envelope。
 
-该证据只证明 portable Host codec/wire oracle；尚未证明 Runtime v3 Blob carriage、Composition
-coordinator 的 digest/token/state-machine enforcement、Host frontend、K230D store/renderer 或 board
+该C0证据只证明 portable Host codec/wire oracle；C2另行证明coordinator的digest/token/state-machine
+enforcement，但仍未证明 Runtime v3 Blob carriage、Host frontend、K230D store/renderer或board
 interop。Runtime v2 仍必须拒绝本 Profile 的 IMMUTABLE route。
 
 ## C1 Resource fixture evidence
@@ -395,15 +395,49 @@ commit `4bccc12` 的 `meiso_composition_scene_resource_test` 使用真实Core pr
 
 当前macOS arm64 ABI记录的exact caller arenas为：BlobStore 4,720,304 bytes、desired
 publisher/replica 3,920/3,856、actual publisher/replica 384/320、result Stream 32,272、scene store
-31,640；均要求8-byte alignment，合计4,792,696 bytes。它们均由Host test process heap提供且
+31,656；均要求8-byte alignment，合计4,792,712 bytes。它们均由Host test process heap提供且
 CPU-visible，没有GPU/CMA arena。`resident_mesh_bytes` 是每world引用的
 canonical vertex+index逻辑字节，8+8边界为4,193,280 bytes；
 CPU fixture从BlobStore零拷贝读取。fake renderer逐pixel流式计算320×240 target SHA-256和64×48
 RGB565 thumbnail，不持有renderer target或job，所以SceneStatus中target/job如实为`0/0`。
 
-fresh strict build与ASan+UBSan全套均CTest 21/21。该证据不证明独立4 MiB GPU resident arena、
+fresh strict build与ASan+UBSan全套均CTest 22/22。该C1证据不证明独立4 MiB GPU resident arena、
 2个target set/CMA allocation、Composition token/coordinator、Runtime Blob carriage、Session、K230D
-backend或display。
+backend或display；coordinator由下一节C2单独验证。
+
+## C2 Portable coordinator evidence
+
+public commit `4210ddf` 的[`composition_coordinator.h`](composition_coordinator.h)与
+[`composition_coordinator.c`](composition_coordinator.c)在Core Resource之上、renderer SDK seam之前
+加入caller-owned portable coordinator；Core source/API与Session wire均未改变。它验证：
+
+- Runtime desired shape精确为disabled的8-byte canonical prefix/零Profile suffix，或enabled的同一prefix
+  加exact 128-byte `PLN0`；每owner/control-scope `plan_generation`不复用，同generation Plan除token echo
+  外不可变，State version只按PREPARING/terminal/PREPARED/active规则推进；
+- Plan digest复算C0 canonical preimage，独立literal SHA-256 golden不以被测API为oracle；backend report
+  必须回交exact `PlanRef(owner/version/generation/digest)`，late callback与arena alias零副作用拒绝；
+- token绑定完整SessionId、SceneStore scope generation、Edge/desired owner、serial、capability、PlanRef、
+  Scene ref、prepare time、selected config与caller nonce。它是deterministic binding而非authentication；
+  caller保证nonce全生命周期fresh，coordinator仅额外检测最近一次成功nonce；
+- fresh Session即使沿用同一desired owner，也由首次`begin_owner`推进SceneStore control-scope generation并
+  使旧coordinator失效；old world/token/result ref/Blob visibility不能复活，immutable Blob cache与world
+  generation high-water只保留为未授权的process-local cache/counter；
+- prepare/reject/capacity/caller-reported local deadline保留old active；PREPARED后的scene supersede会令
+  activation拒绝旧token、候选回PREPARING并要求新token；SceneStore activate成功后才原子提交active；
+- disable先取消candidate并等待producer drain；`producer_drained=false`对observation/status/stats/active/
+  world/time零副作用，drained=true才在frame boundary退役plan/world。`offline_lease_ms`只验证/保留，
+  因C2无Session-loss signal而不执行hold/expiry。
+
+8组vectors覆盖独立digest、Runtime shape/order、async/late、token/scene/generation、same-owner新Session、
+arena/alias/time、parallel Session scope invalidation及success/swap/status/disable；fresh normal与
+ASan+UBSan全套均CTest 22/22，strict相关targets通过warnings-as-errors。macOS arm64 coordinator arena
+为1,520 bytes/alignment 8；C2完整fixture为4,794,968 bytes，memory domain仍是Host test process的
+CPU-visible heap。
+
+状态因此为`COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED`，但不包含Runtime v3 Blob carriage、
+Session wire/transport、K230D build/run、真实renderer/backend、GPU/target/job/CMA allocation、offline
+lease执行或physical output。C2是single-thread/non-reentrant，coordinator/opaque SceneStore arena必须由
+caller保持不重叠；这些P2限制不改变Core。
 
 ## Required sequence
 

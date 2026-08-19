@@ -227,13 +227,14 @@ remote encoding 直接作为 Edge wire。
 
 [Edge local compositor v0 开发方案](edge-local-compositor-v0.md) 已选定 Runtime--SDK 边界、
 plan prepare/activate authority、renderer/present seam、K230D Linux 首发与选择性源码迁移规则。
-[`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md) 的 C0 已实现 composite
-Profile codec：同一合同包含 Wi-Fi、presentation 与 scene endpoint；Mesh 用 Host Blob，camera/
-object snapshot 用 Host State，Edge world/capacity 用 actual State，固定 thumbnail 用 Edge Stream。
+[`composition-scene-lab-v0`](../profiles/composition-scene-lab-v0/README.md) 当前完成C0--C2的Host侧
+分层证据：同一composite合同包含Wi-Fi、presentation与scene endpoint；Mesh用Host Blob，camera/
+object snapshot用Host State，Edge world/capacity用actual State，固定thumbnail用Edge Stream。
 commit `3b9ef023edffba1c2e652c778723768f1bc7c8cf` 冻结 exact IDs、32/52-byte capability、2 个新
 endpoint/6 条新 route、PresentationPlan/Status、canonical Mesh、SceneDesired/Status 与 6304-byte
 RenderResult。literal/negative/max-boundary Host test 验证 920-byte combined catalog、3812-byte State、
-6460-byte Stream 和与 Wi-Fi namespace disjoint；fresh strict Debug 与 ASan/UBSan 全套均通过。
+6460-byte Stream、与Wi-Fi namespace disjoint及独立计算的Plan SHA-256 preimage/digest；它只构成C0
+codec/wire oracle。
 
 commit `4bccc12` 的 `scene_store.h/.c` 与 `meiso_composition_scene_resource_test` 又完成 C1 Resource
 fixture：真实
@@ -243,20 +244,45 @@ owner 会清 world、candidate、store内last-result引用与Blob visibility，�
 duplicate 后才可引用底层 cache；外部Stream queue/history不由store清理。
 missing/invalid Blob、新 desired supersede、33 objects、9 meshes、16-slot publication、8+8 distinct
 logical mesh boundary、State duplicate/stale/conflict、4-slot Stream overflow与world/Blob授权
-no-resurrection均有确定性vector。fresh strict与ASan+UBSan全套均CTest 21/21。
+no-resurrection均有确定性vector。
 
 该 evidence 支持 `C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED` 与
 `C1 RESOURCE SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY`。当前macOS arm64 ABI中，Blob、desired
 publisher/replica、actual publisher/replica、result Stream、scene metadata arena依次为
-4,720,304 / 3,920 / 3,856 / 384 / 320 / 32,272 / 31,640 bytes；均要求8-byte alignment，合计
-4,792,696 bytes，memory domain是Host test process的CPU-visible heap，不含GPU/CMA arena。CPU
+4,720,304 / 3,920 / 3,856 / 384 / 320 / 32,272 / 31,656 bytes；均要求8-byte alignment，合计
+4,792,712 bytes，memory domain是Host test process的CPU-visible heap，不含GPU/CMA arena。CPU
 fixture零拷贝借用已发布 Blob，
 `resident_mesh_bytes` 是 canonical vertex+index 的逻辑引用量；fake renderer流式生成 hash/thumbnail，
 所以如实报告 target/job `0/0`。它没有证明独立 4 MiB GPU resident arena、renderer target/CMA分配。
-当前 Runtime v2 尚无 Blob carriage并明确拒绝 IMMUTABLE route，故 remote combined catalog仍不可接受；
-下一 Runtime wire version、portable coordinator、Host editor 与 target backend均未实现。本轮没有合并
-外部 Host compositor、旧本地素材、vendor SDK 或二进制，也没有 K230D build/run 或 physical
-presentation evidence。
+
+public commit `4210ddf` 的`composition_coordinator.h/.c`与扩展后的SceneStore完成C2，状态为
+`COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED`。Coordinator借用caller-owned SceneStore并绑定
+exact READY SessionId；fresh coordinator首次`begin_owner`推进monotonic control-scope generation，
+same-owner新Session也会清world/candidate/result引用与Blob visibility并使旧coordinator所有API失效。
+immutable Blob cache和world-generation high-water可保留，但不能跨scope授权复活。
+
+C2只接受decoded Runtime desired的两种exact形状：disabled为canonical 8-byte prefix且无Profile suffix，
+enabled为同一prefix加128-byte`PLN0`。Plan generation为每owner/scope不复用high-water；coordinator复算
+C0 digest，backend completion必须带exact `PlanRef(owner/version/generation/digest)`。prepared token绑定
+完整SessionId、scope generation、Edge/desired owner、serial、capability、PlanRef、Scene ref、prepare
+time、selected config与caller nonce；它是deterministic binding，不是authentication，nonce全生命周期
+fresh仍是caller前置条件。late report、wrong token、same-generation conflict与arena alias不替换candidate/
+active；PREPARED后scene supersede使旧token失效并回PREPARING，old active保留。SceneStore activation是
+transaction最后一个fallible调用；disable只有在producer drained后才在frame boundary退役plan/world，
+未drain的`WAITING_DRAIN`对observation/status/stats/active/world/time零副作用。
+
+8组deterministic vectors覆盖independent C0 digest、Runtime shape/order、async failure/late completion、
+token/scene/generation、same-owner new Session、arena/alias/time、parallel Session scope invalidation与
+success/swap/status/disable。fresh normal及ASan+UBSan全套CTest均22/22，相关targets另过strict
+conversion/shadow/prototype warnings-as-errors。Coordinator arena为1,520 bytes/alignment 8；包含
+BlobStore、SceneStore、Coordinator、Scene desired、Presentation desired/actual State pair及result Stream
+的C2 fixture合计4,794,968 bytes，同样只来自macOS arm64 Host test process CPU-visible heap。
+
+当前Runtime v2仍无Blob carriage并明确拒绝IMMUTABLE route，故remote combined catalog不可接受；没有
+Runtime v3、Session wire变更、Host editor、K230D build/run、renderer backend、GPU/target/job/CMA、
+offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有Session-loss signal，
+backend `DEADLINE`只是caller报告的本地attempt结果。Core source/API无Composition改动；本轮也没有合并
+外部Host compositor、旧本地素材、vendor SDK或二进制。
 
 ## K230D lab evidence
 
@@ -323,9 +349,9 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition Runtime Blob wire/portable coordinator、prepared/activation enforcement、Host editor、
-  renderer/present backend 与真实 presentation endpoint；当前只有 C0 Profile codec/Host wire vectors，
-  没有 Runtime/target interoperability；
+- Composition Runtime Blob wire、Host editor、renderer/present backend与真实presentation endpoint；
+  portable coordinator及prepared/activation enforcement已有C2 Host semantic evidence，但没有Runtime/
+  target interoperability、offline lease execution或physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。

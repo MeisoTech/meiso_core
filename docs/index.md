@@ -37,7 +37,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [Host 集成回执 v0](host-integration-receipt-v0.md)：当前 direct-IP Session→Runtime→Resource
   接入顺序、Host handle 生命周期、协议入口与证据边界；不是 SDK API。
 - [Edge local compositor v0 开发方案](edge-local-compositor-v0.md)：Runtime--SDK 层的
-  Composition coordinator、renderer/present seam、选择性迁移与验收；Core 不变，当前未实现。
+  Composition coordinator、renderer/present seam、选择性迁移与验收；Core 不变。C2 portable
+  coordinator 已由public commit `4210ddf` 完成Host in-memory semantic verification，target
+  backend/present尚未实现。
 - [K230D Linux Edge 开发基线](k230d-linux-edge-development-baseline.md)：当前候选实现中
   大小核、Linux、NuttX、sensor、network 与 rendering 的责任分工；它不是互操作 Profile。
 
@@ -46,7 +48,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [Composition scene lab v0](../profiles/composition-scene-lab-v0/README.md)：exact composite Session
   Profile 实验合同；C0 已冻结 IDs、capabilities、Presentation/Scene/Mesh/RenderResult codec 与 Host
   wire vectors；C1 已用真实 Blob/State/Stream primitive 验证 bounded world store、atomic activation
-  与 deterministic result。Runtime Blob carriage、coordinator、Host editor 和 K230D renderer 尚未实现；
+  与 deterministic result；C2 已验证 portable coordinator 的 desired shape、generation/digest/token、
+  Session scope、supersede/disable transaction。Runtime Blob carriage、Host editor、K230D renderer 和
+  physical output 尚未实现；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
 - [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与固定

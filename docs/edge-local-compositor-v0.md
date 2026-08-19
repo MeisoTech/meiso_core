@@ -1,6 +1,6 @@
 # Edge local compositor v0 开发方案
 
-> 状态：`DESIGN / C0-C1 HOST FIXTURE COMPLETE / COORDINATOR+TARGET NOT IMPLEMENTED`。这是
+> 状态：`DESIGN / C0-C2 HOST FIXTURE COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED / TARGET NOT IMPLEMENTED`。这是
 > Composition 的实现计划，不是新产品规范或target evidence；通用语义由
 > [Composition 契约](composition.md)拥有。
 
@@ -8,6 +8,8 @@
 
 Edge compositor 新增在 **Edge Runtime 与 renderer/platform SDK 之间**。Core、Session wire 和
 `State / Stream / Action / Blob` primitive 不改，也不增加 compositor 专用 Core message。
+public commit `4210ddf` 只在 Profile/Runtime--SDK 层加入 portable coordinator 与 SceneStore
+control-scope seam；没有修改 Core 或 Session wire。
 
 当前不整仓合并外部 `looking_glass`：
 
@@ -250,21 +252,47 @@ fixture只在caller一侧分配测试arena，且不使用socket或driver。
 实现证据：`scene_store.h/.c` 提供 bounded owner/Blob visibility、canonical SHA-256 Mesh verifier、
 prepare/observation、CAS activate、disable、status与deterministic fake render；
 `meiso_composition_scene_resource_test` 直接串起Core Blob/State/Stream。fresh strict与ASan+UBSan全套
-均21/21。当前macOS arm64 ABI中全部caller arena合计4,792,696 bytes、alignment均为8；其中store
-arena为31,640 bytes。memory domain是Host test process的CPU-visible heap；logical resident边界不另
-分配GPU/CMA arena，external Stream清理留给C2/integration。
+均22/22。当前macOS arm64 ABI中C1全部caller arena合计4,792,712 bytes、alignment均为8；其中store
+arena为31,656 bytes。memory domain是Host test process的CPU-visible heap；logical resident边界不另
+分配GPU/CMA arena；external Stream的Session边界清理仍留给后续Runtime integration。
 
 ### C2 — Portable Composition coordinator
 
-- 加入 presentation plan、scene world 与 renderer-plan 三个独立 lifecycle；实现
-  `old active + one preparing candidate`；
-- `SceneStatus` 正交报告 observed/applied desired、world generation、对象/Blob/buffer current use、
-  reason 与 result production epoch；
-- fake renderer 注入 prepare failure、partial output、deadline 与 supersede；只有完整 candidate
-  才能进入 result Stream，plan token/activation 仍由 Composition 拥有。
+状态：`COMPLETE / PORTABLE COORDINATOR SEMANTIC VERIFIED`（public commit `4210ddf`；Host
+in-memory semantics，不是 Runtime/Session wire、renderer 或 target evidence）。
 
-完成条件：missing Blob/capacity/renderer failure 保留旧 world；disable 在 producer drain 后才
-`STOPPED`；new Session/Edge incarnation vectors 不复活 token、world 或 result epoch。
+- `composition_coordinator.h/.c` 借用 caller-owned SceneStore；自身 arena 1,520 bytes、alignment 8，
+  无内部 heap/socket/driver。C2 完整 fixture 含 BlobStore、SceneStore、coordinator、Scene desired、
+  Presentation desired/actual State pair 与 RenderResult Stream，共4,794,968 bytes，均为macOS arm64
+  Host test process的CPU-visible heap；
+- desired 直接取一次 Core StateReplica commit 解码后的 Runtime value：`enabled=false` 只接受canonical
+  8-byte Runtime prefix且Profile suffix为0；`enabled=true`只接受exact 128-byte `PLN0` suffix。
+  `plan_generation` 是每owner/control scope不复用high-water；同generation内容不可变，State version与
+  token echo只按明确阶段推进；
+- coordinator复算C0 canonical Plan SHA-256；test含独立literal digest，不用被测API生成oracle。
+  backend completion携带exact `PlanRef(owner/version/generation/digest)`，late report不能命中新candidate；
+- prepared token确定性绑定完整SessionId、SceneStore control-scope generation、Edge/desired owner、
+  serial、capability generation、PlanRef、Scene world ref、prepare time、selected config与caller nonce。
+  token不是authentication；nonce全生命周期fresh是caller前置条件，实现只额外拦截最近一次成功nonce；
+- fresh coordinator的首次`begin_owner`总是推进SceneStore control-scope generation；即使owner相同，旧
+  coordinator所有query/report/activate API也立即失效。world/candidate/result引用与Blob visibility清空，
+  immutable BlobStore cache和world-generation high-water保留但不能越scope授权复活；
+- prepare/reject/capacity/local backend deadline、wrong token与supersede保持old active。PREPARED后
+  Scene candidate改变会在activation boundary拒绝旧token、回到PREPARING并要求新token；SceneStore
+  activate是transaction最后一个可能失败的调用，成功后才提交active plan；
+- `enabled=false`先形成disable intent并取消candidate；`producer_drained=false`返回
+  `WAITING_DRAIN`且observation/status/stats/active/world/time均不变，只有drained=true的frame boundary
+  才同时退役plan与world。`offline_lease_ms`只校验并保留；C2没有Session-loss signal，不计算或执行
+  lease，backend `DEADLINE`只是caller报告的本地prepare/render结果。
+
+8组deterministic vectors覆盖：独立C0 digest；Runtime shape/order；async failure与late completion；
+token/scene supersede/generation guards；same-owner new Session no-resurrection；API arena/alias/time；
+distinct-arena parallel Session scope invalidation；success/swap/status/disable。fresh normal与ASan+UBSan
+全套CTest均22/22，相关targets额外通过strict conversion/shadow/prototype warnings-as-errors。
+
+C2不含Runtime v3/Host→Edge Blob carriage、Session frame/handshake变更、K230D build/run、真实renderer/
+target/job/CMA、offline lease执行或physical output。P2边界是single-thread/non-reentrant caller discipline、
+opaque SceneStore arena不重叠前置条件与caller保证nonce全局fresh；均不提升本阶段evidence等级。
 
 ### R1 — Runtime Blob carriage 与 route direction
 

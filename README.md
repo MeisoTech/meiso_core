@@ -72,8 +72,11 @@ scanout，renderer 只产生 candidate/failure，Core 不变。模块与 K230D b
 [Composition scene lab v0](profiles/composition-scene-lab-v0/README.md) C0 已实现 exact composite
 Profile 的 IDs/capabilities、PresentationPlan/Status、Mesh、SceneDesired/Status 与 RenderResult
 codec；C1 又以真实 Core Blob/State/Stream primitive 建立 caller-owned 的 active+candidate world
-fixture 和 deterministic off-screen generator。它仍没有 Runtime Blob carriage、coordinator、Host
-editor、K230D renderer、GPU/target allocation 或 physical presentation evidence。
+fixture 和 deterministic off-screen generator；public commit `4210ddf` 的 C2 portable Composition
+coordinator 已验证 Plan digest/State version、Session control scope、prepared token、旧 active 保留、
+scene supersede 与 drain 后 disable，状态为 `PORTABLE COORDINATOR SEMANTIC VERIFIED`。三阶段仍是
+Host CPU-visible in-memory evidence：没有 Runtime v3 Blob carriage、Session wire 变更、Host editor、
+K230D/renderer backend、GPU/target allocation、offline lease 执行或 physical presentation；Core 不变。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
