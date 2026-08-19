@@ -60,6 +60,14 @@ static const MeisoProfileRef COMPOSITE_PROFILE = {
     MEISO_COMPOSITION_SCENE_PROFILE_VERSION
 };
 
+static const MeisoProfileRef COMPOSITE_PROFILE_V2 = {
+    {
+        UINT64_C(0x4b3233305f53434e),
+        UINT64_C(0x5f4c41425f563030)
+    },
+    MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V2
+};
+
 static const MeisoEndpointId PRESENTATION_ENDPOINT = {
     UINT64_C(0x4b3233305f53434e),
     UINT64_C(0x50524553454e545f)
@@ -845,6 +853,11 @@ static bool presentation_status_valid(
 const MeisoProfileRef *meiso_composition_scene_profile(void)
 {
     return &COMPOSITE_PROFILE;
+}
+
+const MeisoProfileRef *meiso_composition_scene_profile_v2(void)
+{
+    return &COMPOSITE_PROFILE_V2;
 }
 
 const MeisoEndpointId *meiso_composition_scene_presentation_endpoint(void)

@@ -2,6 +2,7 @@
 #define MEISO_RUNTIME_H
 
 #include "meiso_session.h"
+#include "meiso_blob.h"
 #include "meiso_state.h"
 #include "meiso_stream.h"
 
@@ -13,10 +14,36 @@
 extern "C" {
 #endif
 
-#define MEISO_RUNTIME_WIRE_VERSION 2U
+#define MEISO_RUNTIME_WIRE_VERSION_V2 2U
+#define MEISO_RUNTIME_WIRE_VERSION_V3 3U
+/* Compatibility name: the original initializer and wire remain v2. */
+#define MEISO_RUNTIME_WIRE_VERSION MEISO_RUNTIME_WIRE_VERSION_V2
 #define MEISO_RUNTIME_WIRE_HEADER_SIZE 12U
 #define MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE 8U
 #define MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE 56U
+#define MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE 4096U
+#define MEISO_RUNTIME_V3_CONTENT_ID_WIRE_SIZE 36U
+#define MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE 120U
+#define MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE 84U
+#define MEISO_RUNTIME_V3_BLOB_COMMIT_WIRE_SIZE 120U
+#define MEISO_RUNTIME_V3_BLOB_ABORT_WIRE_SIZE 84U
+#define MEISO_RUNTIME_V3_BLOB_RESULT_WIRE_SIZE 96U
+
+/*
+ * MRT0 v3 Blob bodies begin after the common 12-byte header. All integers are
+ * big-endian and every reserved byte is zero:
+ *   BEGIN/COMMIT: route[0..55], transfer_id[56..63], ContentId[64..99],
+ *                 total_size[100..107].
+ *   CHUNK:        route[0..55], transfer_id[56..63], offset[64..71],
+ *                 bytes[72..end] (the frame remainder is the byte count).
+ *   ABORT:        route[0..55], transfer_id[56..63], reason[64],
+ *                 reserved[65..71].
+ *   RESULT:       route[0..55], transfer_id[56..63], operation[64],
+ *                 result[65], reserved[66..67], next_offset[68..75],
+ *                 total_size[76..83].
+ * ContentId wire bytes are algorithm:u16, digest_size:u8, reserved:u8, then
+ * the 32-byte SHA-256 digest. Noncanonical ContentIds are rejected.
+ */
 
 typedef struct MeisoRuntime MeisoRuntime;
 
@@ -70,6 +97,17 @@ typedef struct {
     uint32_t max_actual_profile_bytes_per_endpoint;
 } MeisoRuntimeConfig;
 
+/*
+ * v3 extends the v2 Runtime arena with one bounded Host-to-Edge Blob
+ * transfer. max_blob_transfer_bytes is an admission limit on both peers and
+ * reserves reassembly bytes only in an Edge Runtime arena. memory_required
+ * therefore depends on the role of the READY bound Session.
+ */
+typedef struct {
+    MeisoRuntimeConfig base;
+    uint32_t max_blob_transfer_bytes;
+} MeisoRuntimeV3Config;
+
 typedef uint8_t MeisoRuntimeInitStatus;
 enum {
     MEISO_RUNTIME_INIT_OK = 0,
@@ -105,7 +143,11 @@ enum {
     MEISO_RUNTIME_PAYLOAD_CAPACITY = 20,
     MEISO_RUNTIME_PRODUCTION_EPOCH_MISMATCH = 21,
     MEISO_RUNTIME_STATE_INVALID = 22,
-    MEISO_RUNTIME_STREAM_INVALID = 23
+    MEISO_RUNTIME_STREAM_INVALID = 23,
+    MEISO_RUNTIME_WIRE_VERSION_MISMATCH = 24,
+    MEISO_RUNTIME_BLOB_BUSY = 25,
+    MEISO_RUNTIME_BLOB_NOT_ACTIVE = 26,
+    MEISO_RUNTIME_BLOB_INVALID = 27
 };
 
 typedef uint16_t MeisoRuntimeProductionReason;
@@ -192,6 +234,67 @@ enum {
     MEISO_RUNTIME_CATALOG_REJECT_CAPACITY = 3
 };
 
+typedef uint8_t MeisoRuntimeBlobOperation;
+enum {
+    MEISO_RUNTIME_BLOB_BEGIN = 1,
+    MEISO_RUNTIME_BLOB_CHUNK = 2,
+    MEISO_RUNTIME_BLOB_COMMIT = 3,
+    MEISO_RUNTIME_BLOB_ABORT = 4
+};
+
+/*
+ * READY is the sole non-terminal result and is valid only for BEGIN.
+ * PUBLISHED, DUPLICATE, and ABORTED are successful terminal results; all
+ * remaining values are terminal rejections. A terminal result retires the
+ * exact Session-scoped transfer on the Host when accepted. Legal wire pairs
+ * are BEGIN+READY; BEGIN+terminal rejection; CHUNK+DISCONTINUITY or
+ * RECEIVER_FAILURE; COMMIT+PUBLISHED, DUPLICATE, or terminal rejection; and
+ * ABORT+ABORTED. READY has next_offset=0. PUBLISHED and DUPLICATE have
+ * next_offset=total_size. ABORTED and every rejection report the bytes
+ * accepted before that operation (zero for a rejected BEGIN). Every RESULT
+ * echoes the transfer's declared total_size. An impossible pair, nonzero
+ * reserved byte, wrong total/next value, or non-exact current Host route/id is
+ * MALFORMED or CONFLICT and never retires a different/current transfer.
+ */
+typedef uint8_t MeisoRuntimeBlobResult;
+enum {
+    MEISO_RUNTIME_BLOB_RESULT_READY = 1,
+    MEISO_RUNTIME_BLOB_RESULT_PUBLISHED = 2,
+    MEISO_RUNTIME_BLOB_RESULT_DUPLICATE = 3,
+    MEISO_RUNTIME_BLOB_RESULT_ABORTED = 4,
+    MEISO_RUNTIME_BLOB_RESULT_BUSY = 5,
+    MEISO_RUNTIME_BLOB_RESULT_CONFLICT = 6,
+    MEISO_RUNTIME_BLOB_RESULT_INVALID_CONTENT_ID = 7,
+    MEISO_RUNTIME_BLOB_RESULT_LENGTH_MISMATCH = 8,
+    MEISO_RUNTIME_BLOB_RESULT_INTEGRITY_FAILED = 9,
+    MEISO_RUNTIME_BLOB_RESULT_CAPACITY = 10,
+    MEISO_RUNTIME_BLOB_RESULT_DISCONTINUITY = 11,
+    MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE = 12
+};
+
+typedef uint8_t MeisoRuntimeBlobAbortReason;
+enum {
+    MEISO_RUNTIME_BLOB_ABORT_CALLER_REQUEST = 1
+};
+
+/* transfer_id is nonzero, Runtime-generated, and never reused per Session. */
+typedef struct {
+    MeisoRuntimeRouteKey route;
+    uint64_t transfer_id;
+    MeisoContentId content_id;
+    uint64_t total_size;
+} MeisoRuntimeBlobTransferRef;
+
+typedef struct {
+    MeisoBlobStageStatus stage_status;
+    MeisoBlobCommitStatus commit_status;
+    MeisoBlobAbortStatus forced_abort_status;
+    MeisoRuntimeBlobResult result;
+    bool stage_attempted;
+    bool commit_attempted;
+    bool forced_abort_attempted;
+} MeisoRuntimeBlobPublishReport;
+
 typedef uint8_t MeisoRuntimeEventType;
 enum {
     MEISO_RUNTIME_EVENT_CATALOG_OFFERED = 1,
@@ -199,7 +302,9 @@ enum {
     MEISO_RUNTIME_EVENT_CATALOG_REJECTED = 3,
     MEISO_RUNTIME_EVENT_STATE_OFFER = 4,
     MEISO_RUNTIME_EVENT_STATE_ACCEPT = 5,
-    MEISO_RUNTIME_EVENT_STREAM_SAMPLE = 6
+    MEISO_RUNTIME_EVENT_STREAM_SAMPLE = 6,
+    MEISO_RUNTIME_EVENT_BLOB_REQUEST = 7,
+    MEISO_RUNTIME_EVENT_BLOB_RESULT = 8
 };
 
 typedef struct {
@@ -213,7 +318,33 @@ typedef struct {
     uint64_t state_accept_version;
     uint64_t production_epoch;
     MeisoStreamSample stream_sample;
+    MeisoRuntimeBlobOperation blob_operation;
+    MeisoRuntimeBlobTransferRef blob_transfer;
+    uint64_t blob_offset;
+    MeisoByteView blob_payload;
+    MeisoRuntimeBlobResult blob_result;
+    uint64_t blob_next_offset;
 } MeisoRuntimeEvent;
+
+typedef struct {
+    /*
+     * When result_pending, transfer/next_offset identify that pending RESULT
+     * (which may reject a second BEGIN while transfer_active still describes
+     * the occupied slot). Otherwise they identify the active transfer.
+     */
+    MeisoRuntimeBlobTransferRef transfer;
+    MeisoRuntimeBlobOperation pending_operation;
+    MeisoRuntimeBlobResult pending_result;
+    uint64_t next_offset;
+    uint64_t transfer_id_high_water;
+    uint32_t max_transfer_bytes;
+    uint8_t wire_version;
+    bool transfer_active;
+    bool begin_ready;
+    bool publish_pending;
+    bool result_pending;
+    bool core_ready;
+} MeisoRuntimeBlobSnapshot;
 
 typedef struct {
     MeisoSessionId session_id;
@@ -272,12 +403,27 @@ bool meiso_runtime_actual_state_decode(
 
 size_t meiso_runtime_alignment_required(void);
 size_t meiso_runtime_memory_required(const MeisoRuntimeConfig *config);
+size_t meiso_runtime_v3_memory_required(const MeisoRuntimeV3Config *config);
 
 /* A handle is permanently bound to this READY SessionId and role. */
 MeisoRuntimeInitStatus meiso_runtime_init(
     void *arena,
     size_t arena_size,
     const MeisoRuntimeConfig *config,
+    MeisoRuntime **out_runtime
+);
+
+/*
+ * Creates a strict MRT0 v3 handle. It rejects MRT0 v2 frames; a v2 handle
+ * likewise rejects v3. The Session/Profile layer is responsible for choosing
+ * v3 symmetrically (the composition profile selects it beginning at its v2
+ * ProfileRef). A Runtime remains permanently bound to the exact READY
+ * SessionId and role observed here.
+ */
+MeisoRuntimeInitStatus meiso_runtime_v3_init(
+    void *arena,
+    size_t arena_size,
+    const MeisoRuntimeV3Config *config,
     MeisoRuntime **out_runtime
 );
 
@@ -328,14 +474,109 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
 );
 
 /*
+ * MRT0 v3 Host-only Blob carriage. The exact active route must be a
+ * Host-owned BLOB/IMMUTABLE route. BEGIN is stop-and-wait: no CHUNK is legal
+ * until the Edge READY result arrives. CHUNK frames are then sent in exact
+ * offset order without per-chunk acknowledgement; a short chunk is legal
+ * only when it ends at total_size. ABORT is also legal while waiting for
+ * READY; a crossing late READY is observational and cannot reopen transfer.
+ * COMMIT and ABORT await one terminal result.
+ *
+ * A successful BEGIN queue generates and consumes a strictly increasing
+ * Session-scoped transfer_id and writes the complete reference to out_transfer.
+ * Caller-provided transfer IDs are impossible. On TX_BUSY, out_transfer is
+ * untouched and these calls leave transfer identity, high-water, offset, and
+ * pending result state unchanged.
+ * All Blob send/publish/result calls return CONFLICT without consuming the
+ * pending State receive when its StateReplica outcome has not been committed.
+ */
+MeisoRuntimeStatus meiso_runtime_send_blob_begin(
+    MeisoRuntime *runtime,
+    MeisoRuntimeRouteKey route,
+    const MeisoContentId *content_id,
+    uint64_t total_size,
+    MeisoRuntimeBlobTransferRef *out_transfer
+);
+MeisoRuntimeStatus meiso_runtime_send_blob_chunk(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    uint64_t offset,
+    MeisoByteView payload
+);
+MeisoRuntimeStatus meiso_runtime_send_blob_commit(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer
+);
+MeisoRuntimeStatus meiso_runtime_send_blob_abort(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    MeisoRuntimeBlobAbortReason reason
+);
+
+/*
  * message must be the exact borrow returned by the bound Session. State and
  * Stream byte views in the event borrow that message and expire before the
- * next non-const call on either handle.
+ * next non-const call on either handle. For BLOB_REQUEST, BEGIN and ABORT have
+ * an empty blob_payload; CHUNK borrows the current Session message; COMMIT
+ * borrows the complete reassembly scratch in the Runtime arena. Both Blob
+ * borrows expire before the next non-const call on Runtime or Session.
+ * After a COMMIT event, publish_blob_receive must be the immediate next
+ * Runtime mutation only when blob_snapshot reports publish_pending and no
+ * result_pending. A failed length/SHA precheck instead reports result_pending
+ * and requires send_blob_result. BLOB_RESULT always has an empty blob_payload.
  */
 MeisoRuntimeStatus meiso_runtime_receive(
     MeisoRuntime *runtime,
     const MeisoSessionRuntimeMessage *message,
     MeisoRuntimeEvent *out_event
+);
+
+/*
+ * Edge only, immediately after the exact COMMIT BLOB_REQUEST event. Runtime
+ * has already reassembled the complete bytes and checked their SHA-256
+ * ContentId. This synchronous bridge performs BlobStore stage, bounded copy,
+ * and commit_verified with a combined SHA-256 and caller schema/Profile
+ * verifier over the same Core verification snapshot. It never retains store,
+ * verifier, or context. The caller must prove that store was initialized from
+ * and is exclusively bound to the exact active ResourceDescriptor named by
+ * expected_transfer.route; Runtime cannot inspect an opaque BlobStore to
+ * distinguish a different capacity-compatible route. Every Core failure that
+ * can retain a
+ * staging candidate successfully STARTED by this call is followed by
+ * TRANSFER_DISCONTINUITY abort before a terminal result becomes pending.
+ * UNCHANGED, BUSY, and every other pre-existing staging candidate are never
+ * aborted or overwritten. Runtime, BlobStore, and output arenas must be
+ * caller-proven disjoint. A verifier attempt to re-enter this Runtime is
+ * rejected (RuntimeStatus APIs return CONFLICT; query APIs fail) without
+ * changing the pending publication.
+ * Publication does not grant SDK/Profile visibility.
+ */
+MeisoRuntimeStatus meiso_runtime_publish_blob_receive(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *expected_transfer,
+    MeisoBlobStore *store,
+    MeisoBlobVerifier verifier,
+    void *verifier_context,
+    MeisoRuntimeBlobPublishReport *out_report
+);
+
+/*
+ * Edge only. Queues the exact pending READY or terminal RESULT. READY echoes
+ * next_offset=0 and the declared total. PUBLISHED/DUPLICATE echo
+ * next_offset=total; ABORTED and failures echo the number of accepted bytes.
+ * TX_BUSY is retryable and byte-for-byte state preserving.
+ */
+MeisoRuntimeStatus meiso_runtime_send_blob_result(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *expected_transfer,
+    MeisoRuntimeBlobOperation expected_operation
+);
+
+/* Generic SHA-256 identity verifier; schema/Profile verifiers may be stricter. */
+bool meiso_runtime_blob_sha256_verify(
+    const MeisoContentId *expected_content_id,
+    MeisoByteView content,
+    void *context
 );
 
 /*
@@ -353,6 +594,10 @@ MeisoRuntimeStatus meiso_runtime_commit_state_receive(
 bool meiso_runtime_snapshot(
     const MeisoRuntime *runtime,
     MeisoRuntimeSnapshot *out_snapshot
+);
+bool meiso_runtime_blob_snapshot(
+    const MeisoRuntime *runtime,
+    MeisoRuntimeBlobSnapshot *out_snapshot
 );
 
 /* Catalog views borrow the Runtime arena until its next non-const call. */

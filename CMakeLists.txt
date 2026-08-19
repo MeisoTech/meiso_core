@@ -182,6 +182,13 @@ add_executable(meiso_runtime_wire_test tests/test_runtime_wire.c)
 target_link_libraries(meiso_runtime_wire_test PRIVATE meiso_runtime)
 meiso_enable_warnings(meiso_runtime_wire_test)
 
+add_executable(meiso_runtime_blob_wire_test tests/test_runtime_blob_wire.c)
+target_link_libraries(
+    meiso_runtime_blob_wire_test
+    PRIVATE meiso_runtime meiso_composition_scene_profile
+)
+meiso_enable_warnings(meiso_runtime_blob_wire_test)
+
 add_executable(
     meiso_wifi_telemetry_profile_test
     tests/test_wifi_telemetry_profile.c
@@ -328,6 +335,10 @@ add_test(NAME meiso_session_four_kind_test COMMAND meiso_session_four_kind_test)
 add_test(NAME meiso_runtime_test COMMAND meiso_runtime_test)
 add_test(NAME meiso_runtime_session_test COMMAND meiso_runtime_session_test)
 add_test(NAME meiso_runtime_wire_test COMMAND meiso_runtime_wire_test)
+add_test(
+    NAME meiso_runtime_blob_wire_test
+    COMMAND meiso_runtime_blob_wire_test
+)
 add_test(
     NAME meiso_wifi_telemetry_profile_test
     COMMAND meiso_wifi_telemetry_profile_test

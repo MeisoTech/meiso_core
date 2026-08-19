@@ -12,7 +12,12 @@ enum {
     WIRE_CATALOG_REJECT = 3,
     WIRE_STATE_OFFER = 4,
     WIRE_STATE_ACCEPT = 5,
-    WIRE_STREAM_SAMPLE = 6
+    WIRE_STREAM_SAMPLE = 6,
+    WIRE_BLOB_BEGIN = 7,
+    WIRE_BLOB_CHUNK = 8,
+    WIRE_BLOB_COMMIT = 9,
+    WIRE_BLOB_ABORT = 10,
+    WIRE_BLOB_RESULT = 11
 };
 
 enum {
@@ -24,8 +29,40 @@ enum {
     ROUTE_KEY_SIZE = 56,
     STATE_OFFER_PREFIX_SIZE = 96,
     STATE_ACCEPT_SIZE = 88,
-    STREAM_SAMPLE_PREFIX_SIZE = 144
+    STREAM_SAMPLE_PREFIX_SIZE = 144,
+    CONTENT_ID_WIRE_SIZE = 36,
+    BLOB_BEGIN_SIZE = 108,
+    BLOB_CHUNK_PREFIX_SIZE = 72,
+    BLOB_COMMIT_SIZE = 108,
+    BLOB_ABORT_SIZE = 72,
+    BLOB_RESULT_SIZE = 84
 };
+
+_Static_assert(
+    MEISO_RUNTIME_WIRE_HEADER_SIZE + BLOB_BEGIN_SIZE ==
+        MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE,
+    "Blob BEGIN wire size"
+);
+_Static_assert(
+    MEISO_RUNTIME_WIRE_HEADER_SIZE + BLOB_CHUNK_PREFIX_SIZE ==
+        MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE,
+    "Blob CHUNK prefix wire size"
+);
+_Static_assert(
+    MEISO_RUNTIME_WIRE_HEADER_SIZE + BLOB_COMMIT_SIZE ==
+        MEISO_RUNTIME_V3_BLOB_COMMIT_WIRE_SIZE,
+    "Blob COMMIT wire size"
+);
+_Static_assert(
+    MEISO_RUNTIME_WIRE_HEADER_SIZE + BLOB_ABORT_SIZE ==
+        MEISO_RUNTIME_V3_BLOB_ABORT_WIRE_SIZE,
+    "Blob ABORT wire size"
+);
+_Static_assert(
+    MEISO_RUNTIME_WIRE_HEADER_SIZE + BLOB_RESULT_SIZE ==
+        MEISO_RUNTIME_V3_BLOB_RESULT_WIRE_SIZE,
+    "Blob RESULT wire size"
+);
 
 typedef struct {
     MeisoEndpointId id;
@@ -64,6 +101,7 @@ struct MeisoRuntime {
     size_t pending_desired_payload_offset;
     size_t pending_actual_profile_offset;
     size_t tx_offset;
+    size_t blob_scratch_offset;
     uint64_t highest_catalog_generation;
     uint64_t pending_catalog_generation;
     uint64_t generation[2];
@@ -76,8 +114,10 @@ struct MeisoRuntime {
     uint32_t max_capability_bytes;
     uint32_t max_desired_profile_bytes_per_endpoint;
     uint32_t max_actual_profile_bytes_per_endpoint;
+    uint32_t max_blob_transfer_bytes;
     uint32_t identity_count;
     MeisoSessionRole local_role;
+    uint8_t wire_version;
     uint8_t active_bank;
     MeisoRuntimeRouteKey pending_actual_route;
     MeisoDeliveryGeneration pending_actual_delivery;
@@ -86,11 +126,24 @@ struct MeisoRuntime {
     uint32_t pending_desired_payload_size;
     uint32_t pending_actual_profile_size;
     MeisoRuntimeProductionSnapshot pending_actual_value;
+    MeisoRuntimeBlobTransferRef blob_transfer;
+    MeisoRuntimeBlobTransferRef blob_result_transfer;
+    uint64_t blob_next_offset;
+    uint64_t blob_result_next_offset;
+    uint64_t blob_transfer_id_high_water;
+    MeisoRuntimeBlobOperation blob_pending_operation;
+    MeisoRuntimeBlobResult blob_pending_result;
     bool active_present;
     bool staged_present;
     bool catalog_decision_pending;
     bool pending_desired_receive;
     bool pending_actual_receive;
+    bool blob_transfer_active;
+    bool blob_begin_ready;
+    bool blob_publish_pending;
+    bool blob_result_pending;
+    bool blob_outbound_terminal_wait;
+    bool blob_bridge_active;
     bool invalidated;
     uint8_t storage[];
 };
@@ -104,6 +157,7 @@ typedef struct {
     size_t pending_desired_payload_offset;
     size_t pending_actual_profile_offset;
     size_t tx_offset;
+    size_t blob_scratch_offset;
     size_t required;
 } RuntimeLayout;
 
@@ -631,6 +685,9 @@ static bool calculate_layout(
     uint32_t max_desired_profile_bytes_per_endpoint,
     uint32_t max_actual_profile_bytes_per_endpoint,
     uint32_t max_runtime_payload_bytes,
+    uint8_t wire_version,
+    MeisoSessionRole local_role,
+    uint32_t max_blob_transfer_bytes,
     RuntimeLayout *out
 )
 {
@@ -686,6 +743,14 @@ static bool calculate_layout(
         ) ||
         !add_aligned_array(
             &cursor, 1U, max_runtime_payload_bytes, 1U, &value.tx_offset
+        ) || !add_aligned_array(
+            &cursor,
+            1U,
+            wire_version == MEISO_RUNTIME_WIRE_VERSION_V3 &&
+                    local_role == MEISO_SESSION_ROLE_EDGE ?
+                max_blob_transfer_bytes : 0U,
+            1U,
+            &value.blob_scratch_offset
         ) ||
         !align_up(cursor, _Alignof(max_align_t), &value.required)) {
         return false;
@@ -707,8 +772,10 @@ static bool snapshot_ready(
          out_snapshot->local_role == MEISO_SESSION_ROLE_EDGE);
 }
 
-static bool config_layout(
+static bool config_layout_versioned(
     const MeisoRuntimeConfig *config,
+    uint8_t wire_version,
+    uint32_t max_blob_transfer_bytes,
     MeisoSessionSnapshot *out_snapshot,
     RuntimeLayout *out_layout
 )
@@ -719,7 +786,16 @@ static bool config_layout(
         !snapshot_ready(config->session, out_snapshot) ||
         config->max_endpoints == 0U ||
         config->max_endpoint_history < config->max_endpoints ||
-        config->max_routes == 0U) {
+        config->max_routes == 0U ||
+        (wire_version != MEISO_RUNTIME_WIRE_VERSION_V2 &&
+         wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) ||
+        (wire_version == MEISO_RUNTIME_WIRE_VERSION_V2 &&
+         max_blob_transfer_bytes != 0U) ||
+        (wire_version == MEISO_RUNTIME_WIRE_VERSION_V3 &&
+         (max_blob_transfer_bytes == 0U ||
+          out_snapshot->negotiated_limits.max_runtime_payload_bytes <
+              MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE +
+                  MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE))) {
         return false;
     }
     entry_capacity = (uint64_t)config->max_endpoints + config->max_routes;
@@ -740,8 +816,26 @@ static bool config_layout(
             config->max_desired_profile_bytes_per_endpoint,
             config->max_actual_profile_bytes_per_endpoint,
             out_snapshot->negotiated_limits.max_runtime_payload_bytes,
+            wire_version,
+            out_snapshot->local_role,
+            max_blob_transfer_bytes,
             out_layout
         );
+}
+
+static bool config_layout(
+    const MeisoRuntimeConfig *config,
+    MeisoSessionSnapshot *out_snapshot,
+    RuntimeLayout *out_layout
+)
+{
+    return config_layout_versioned(
+        config,
+        MEISO_RUNTIME_WIRE_VERSION_V2,
+        0U,
+        out_snapshot,
+        out_layout
+    );
 }
 
 static EndpointSlot *endpoint_slots(MeisoRuntime *runtime, uint8_t bank)
@@ -841,6 +935,39 @@ static uint8_t *tx_bytes(MeisoRuntime *runtime)
     return (uint8_t *)(void *)runtime + runtime->tx_offset;
 }
 
+static uint8_t *blob_scratch(MeisoRuntime *runtime)
+{
+    return (uint8_t *)(void *)runtime + runtime->blob_scratch_offset;
+}
+
+static void clear_blob_transfer(MeisoRuntime *runtime)
+{
+    if (runtime->wire_version == MEISO_RUNTIME_WIRE_VERSION_V3 &&
+        runtime->local_role == MEISO_SESSION_ROLE_EDGE &&
+        runtime->max_blob_transfer_bytes != 0U) {
+        memset(
+            blob_scratch(runtime),
+            0,
+            runtime->max_blob_transfer_bytes
+        );
+    }
+    memset(&runtime->blob_transfer, 0, sizeof(runtime->blob_transfer));
+    memset(
+        &runtime->blob_result_transfer,
+        0,
+        sizeof(runtime->blob_result_transfer)
+    );
+    runtime->blob_next_offset = 0U;
+    runtime->blob_result_next_offset = 0U;
+    runtime->blob_pending_operation = 0U;
+    runtime->blob_pending_result = 0U;
+    runtime->blob_transfer_active = false;
+    runtime->blob_begin_ready = false;
+    runtime->blob_publish_pending = false;
+    runtime->blob_result_pending = false;
+    runtime->blob_outbound_terminal_wait = false;
+}
+
 static uint8_t staging_bank(const MeisoRuntime *runtime)
 {
     return (uint8_t)(runtime->active_bank ^ 1U);
@@ -860,6 +987,9 @@ static bool runtime_layout_valid(const MeisoRuntime *runtime)
             runtime->max_desired_profile_bytes_per_endpoint,
             runtime->max_actual_profile_bytes_per_endpoint,
             runtime->limits.max_runtime_payload_bytes,
+            runtime->wire_version,
+            runtime->local_role,
+            runtime->max_blob_transfer_bytes,
             &layout
         ) && runtime->arena_size == layout.required &&
         runtime->endpoint_offset[0] == layout.endpoint_offset[0] &&
@@ -876,6 +1006,7 @@ static bool runtime_layout_valid(const MeisoRuntime *runtime)
         runtime->pending_actual_profile_offset ==
             layout.pending_actual_profile_offset &&
         runtime->tx_offset == layout.tx_offset &&
+        runtime->blob_scratch_offset == layout.blob_scratch_offset &&
         runtime->endpoint_count[0] <= runtime->max_endpoints &&
         runtime->endpoint_count[1] <= runtime->max_endpoints &&
         runtime->route_count[0] <= runtime->max_routes &&
@@ -889,6 +1020,10 @@ static bool runtime_layout_valid(const MeisoRuntime *runtime)
                 runtime->max_desired_profile_bytes_per_endpoint &&
         runtime->pending_actual_profile_size <=
             runtime->max_actual_profile_bytes_per_endpoint &&
+        ((runtime->wire_version == MEISO_RUNTIME_WIRE_VERSION_V2 &&
+          runtime->max_blob_transfer_bytes == 0U) ||
+         (runtime->wire_version == MEISO_RUNTIME_WIRE_VERSION_V3 &&
+          runtime->max_blob_transfer_bytes != 0U)) &&
         (runtime->local_role == MEISO_SESSION_ROLE_HOST ||
          runtime->local_role == MEISO_SESSION_ROLE_EDGE);
 }
@@ -945,6 +1080,7 @@ static void clear_pending_state_receive(MeisoRuntime *runtime)
 
 static void invalidate_runtime(MeisoRuntime *runtime)
 {
+    clear_blob_transfer(runtime);
     runtime->invalidated = true;
     runtime->active_present = false;
     runtime->staged_present = false;
@@ -954,7 +1090,10 @@ static void invalidate_runtime(MeisoRuntime *runtime)
     clear_catalog_bank(runtime, 1U);
 }
 
-static MeisoRuntimeStatus check_bound_mutable(MeisoRuntime *runtime)
+static MeisoRuntimeStatus check_bound_mutable_internal(
+    MeisoRuntime *runtime,
+    bool preserve_blob_publish
+)
 {
     MeisoSessionSnapshot snapshot;
 
@@ -963,6 +1102,9 @@ static MeisoRuntimeStatus check_bound_mutable(MeisoRuntime *runtime)
     }
     if (runtime->invalidated) {
         return MEISO_RUNTIME_STALE_SESSION;
+    }
+    if (runtime->blob_bridge_active) {
+        return MEISO_RUNTIME_CONFLICT;
     }
     if (!meiso_session_snapshot(runtime->session, &snapshot) ||
         snapshot.state != MEISO_SESSION_STATE_READY ||
@@ -980,7 +1122,15 @@ static MeisoRuntimeStatus check_bound_mutable(MeisoRuntime *runtime)
         invalidate_runtime(runtime);
         return MEISO_RUNTIME_STALE_SESSION;
     }
+    if (runtime->blob_publish_pending && !preserve_blob_publish) {
+        clear_blob_transfer(runtime);
+    }
     return MEISO_RUNTIME_OK;
+}
+
+static MeisoRuntimeStatus check_bound_mutable(MeisoRuntime *runtime)
+{
+    return check_bound_mutable_internal(runtime, false);
 }
 
 static MeisoRuntimeStatus check_bound_const(const MeisoRuntime *runtime)
@@ -992,6 +1142,9 @@ static MeisoRuntimeStatus check_bound_const(const MeisoRuntime *runtime)
     }
     if (runtime->invalidated) {
         return MEISO_RUNTIME_STALE_SESSION;
+    }
+    if (runtime->blob_bridge_active) {
+        return MEISO_RUNTIME_CONFLICT;
     }
     if (!meiso_session_snapshot(runtime->session, &snapshot) ||
         snapshot.state != MEISO_SESSION_STATE_READY ||
@@ -1017,27 +1170,36 @@ static bool output_overlaps_runtime_or_session(
         ranges_overlap(runtime->session, 1U, output, output_size);
 }
 
-static void encode_header(uint8_t *target, uint8_t type, uint32_t size)
+static void encode_header(
+    const MeisoRuntime *runtime,
+    uint8_t *target,
+    uint8_t type,
+    uint32_t size
+)
 {
     target[0] = (uint8_t)'M';
     target[1] = (uint8_t)'R';
     target[2] = (uint8_t)'T';
     target[3] = (uint8_t)'0';
-    target[4] = (uint8_t)MEISO_RUNTIME_WIRE_VERSION;
+    target[4] = runtime->wire_version;
     target[5] = type;
     target[6] = 0U;
     target[7] = 0U;
     put_u32(target + 8U, size);
 }
 
-static bool decode_header(MeisoByteView frame, uint8_t *out_type)
+static bool decode_header(
+    const MeisoRuntime *runtime,
+    MeisoByteView frame,
+    uint8_t *out_type
+)
 {
-    if (out_type == NULL || frame.data == NULL ||
+    if (runtime == NULL || out_type == NULL || frame.data == NULL ||
         frame.size < MEISO_RUNTIME_WIRE_HEADER_SIZE ||
         frame.size > UINT32_MAX || frame.data[0] != (uint8_t)'M' ||
         frame.data[1] != (uint8_t)'R' || frame.data[2] != (uint8_t)'T' ||
         frame.data[3] != (uint8_t)'0' ||
-        frame.data[4] != (uint8_t)MEISO_RUNTIME_WIRE_VERSION ||
+        frame.data[4] != runtime->wire_version ||
         frame.data[6] != 0U || frame.data[7] != 0U ||
         get_u32(frame.data + 8U) != frame.size) {
         return false;
@@ -1070,6 +1232,19 @@ static MeisoRuntimeStatus submit_bytes(MeisoRuntime *runtime, size_t size)
     }
 }
 
+static MeisoRuntimeStatus blob_tx_preflight(const MeisoRuntime *runtime)
+{
+    MeisoSessionSnapshot snapshot;
+
+    if (!meiso_session_snapshot(runtime->session, &snapshot) ||
+        snapshot.state != MEISO_SESSION_STATE_READY ||
+        !snapshot.session_id_known) {
+        return MEISO_RUNTIME_CORE_NOT_READY;
+    }
+    return snapshot.outbound_pending ?
+        MEISO_RUNTIME_TX_BUSY : MEISO_RUNTIME_OK;
+}
+
 size_t meiso_runtime_alignment_required(void)
 {
     return _Alignof(max_align_t);
@@ -1083,10 +1258,28 @@ size_t meiso_runtime_memory_required(const MeisoRuntimeConfig *config)
     return config_layout(config, &snapshot, &layout) ? layout.required : 0U;
 }
 
-MeisoRuntimeInitStatus meiso_runtime_init(
+size_t meiso_runtime_v3_memory_required(const MeisoRuntimeV3Config *config)
+{
+    MeisoSessionSnapshot snapshot;
+    RuntimeLayout layout;
+
+    return config != NULL && config_layout_versioned(
+        &config->base,
+        MEISO_RUNTIME_WIRE_VERSION_V3,
+        config->max_blob_transfer_bytes,
+        &snapshot,
+        &layout
+    ) ? layout.required : 0U;
+}
+
+static MeisoRuntimeInitStatus runtime_init_versioned(
     void *arena,
     size_t arena_size,
     const MeisoRuntimeConfig *config,
+    const void *config_object,
+    size_t config_object_size,
+    uint8_t wire_version,
+    uint32_t max_blob_transfer_bytes,
     MeisoRuntime **out_runtime
 )
 {
@@ -1101,8 +1294,11 @@ MeisoRuntimeInitStatus meiso_runtime_init(
     if ((arena != NULL && ranges_overlap(
             arena, arena_size, out_runtime, sizeof(*out_runtime)
         )) ||
-        (config != NULL && ranges_overlap(
-            config, sizeof(*config), out_runtime, sizeof(*out_runtime)
+        (config_object != NULL && ranges_overlap(
+            config_object,
+            config_object_size,
+            out_runtime,
+            sizeof(*out_runtime)
         )) ||
         (config != NULL && config->session != NULL && ranges_overlap(
             config->session, 1U, out_runtime, sizeof(*out_runtime)
@@ -1118,7 +1314,13 @@ MeisoRuntimeInitStatus meiso_runtime_init(
     if (!snapshot_ready(config->session, &snapshot)) {
         return MEISO_RUNTIME_INIT_CORE_NOT_READY;
     }
-    if (!config_layout(config, &snapshot, &layout)) {
+    if (!config_layout_versioned(
+            config,
+            wire_version,
+            max_blob_transfer_bytes,
+            &snapshot,
+            &layout
+        )) {
         return MEISO_RUNTIME_INIT_INVALID_CONFIG;
     }
     if (arena == NULL ||
@@ -1151,6 +1353,7 @@ MeisoRuntimeInitStatus meiso_runtime_init(
     runtime->pending_actual_profile_offset =
         layout.pending_actual_profile_offset;
     runtime->tx_offset = layout.tx_offset;
+    runtime->blob_scratch_offset = layout.blob_scratch_offset;
     runtime->max_endpoints = config_copy.max_endpoints;
     runtime->max_endpoint_history = config_copy.max_endpoint_history;
     runtime->max_routes = config_copy.max_routes;
@@ -1159,9 +1362,49 @@ MeisoRuntimeInitStatus meiso_runtime_init(
         config_copy.max_desired_profile_bytes_per_endpoint;
     runtime->max_actual_profile_bytes_per_endpoint =
         config_copy.max_actual_profile_bytes_per_endpoint;
+    runtime->max_blob_transfer_bytes = max_blob_transfer_bytes;
     runtime->local_role = snapshot.local_role;
+    runtime->wire_version = wire_version;
     *out_runtime = runtime;
     return MEISO_RUNTIME_INIT_OK;
+}
+
+MeisoRuntimeInitStatus meiso_runtime_init(
+    void *arena,
+    size_t arena_size,
+    const MeisoRuntimeConfig *config,
+    MeisoRuntime **out_runtime
+)
+{
+    return runtime_init_versioned(
+        arena,
+        arena_size,
+        config,
+        config,
+        config != NULL ? sizeof(*config) : 0U,
+        MEISO_RUNTIME_WIRE_VERSION_V2,
+        0U,
+        out_runtime
+    );
+}
+
+MeisoRuntimeInitStatus meiso_runtime_v3_init(
+    void *arena,
+    size_t arena_size,
+    const MeisoRuntimeV3Config *config,
+    MeisoRuntime **out_runtime
+)
+{
+    return runtime_init_versioned(
+        arena,
+        arena_size,
+        config != NULL ? &config->base : NULL,
+        config,
+        config != NULL ? sizeof(*config) : 0U,
+        MEISO_RUNTIME_WIRE_VERSION_V3,
+        config != NULL ? config->max_blob_transfer_bytes : 0U,
+        out_runtime
+    );
 }
 
 static int endpoint_index_in_bank(
@@ -1337,13 +1580,30 @@ static MeisoRuntimeStatus route_input_validate(
         minimum_wire = MEISO_RUNTIME_WIRE_HEADER_SIZE +
             STREAM_SAMPLE_PREFIX_SIZE;
         break;
+    case MEISO_RUNTIME_FACET_IMMUTABLE:
+        if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+            return MEISO_RUNTIME_UNSUPPORTED_KIND;
+        }
+        if (route->resource.kind != MEISO_RESOURCE_KIND_BLOB) {
+            return MEISO_RUNTIME_UNSUPPORTED_KIND;
+        }
+        if (route->resource.owner != MEISO_OWNER_ROLE_HOST) {
+            return MEISO_RUNTIME_OWNER_MISMATCH;
+        }
+        if (route->resource.max_payload_size >
+            runtime->max_blob_transfer_bytes) {
+            return MEISO_RUNTIME_PAYLOAD_CAPACITY;
+        }
+        minimum_wire = MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE;
+        break;
     default:
-        /* v0 capability is inline; Action/Blob carriage is not implemented. */
+        /* Capability is inline and Action carriage is not implemented. */
         return MEISO_RUNTIME_UNSUPPORTED_KIND;
     }
     if (minimum_wire > runtime->limits.max_runtime_payload_bytes ||
-        route->resource.max_payload_size >
-            runtime->limits.max_runtime_payload_bytes - minimum_wire) {
+        (route->facet != MEISO_RUNTIME_FACET_IMMUTABLE &&
+         route->resource.max_payload_size >
+            runtime->limits.max_runtime_payload_bytes - minimum_wire)) {
         return MEISO_RUNTIME_PAYLOAD_CAPACITY;
     }
     return MEISO_RUNTIME_OK;
@@ -1616,7 +1876,7 @@ static size_t encode_catalog(MeisoRuntime *runtime, uint8_t bank)
         );
         cursor += ROUTE_RECORD_SIZE;
     }
-    encode_header(output, WIRE_CATALOG, (uint32_t)cursor);
+    encode_header(runtime, output, WIRE_CATALOG, (uint32_t)cursor);
     return cursor;
 }
 
@@ -1907,6 +2167,7 @@ static void commit_staged(MeisoRuntime *runtime)
         next[next_index].production.production_epoch_high_water =
             ledger[(size_t)ledger_index].production_epoch_high_water;
     }
+    clear_blob_transfer(runtime);
     runtime->active_bank = new_bank;
     runtime->active_present = true;
     runtime->staged_present = false;
@@ -1936,7 +2197,7 @@ static MeisoRuntimeStatus submit_catalog_decision(
         output[MEISO_RUNTIME_WIRE_HEADER_SIZE + 11U] = 0U;
         size = MEISO_RUNTIME_WIRE_HEADER_SIZE + CATALOG_REJECT_SIZE;
     }
-    encode_header(output, type, (uint32_t)size);
+    encode_header(runtime, output, type, (uint32_t)size);
     return submit_bytes(runtime, size);
 }
 
@@ -2084,6 +2345,69 @@ static bool decode_route_key(
         out_key->endpoint_incarnation != 0U &&
         meiso_resource_id_valid(out_key->resource_id) &&
         meiso_runtime_facet_valid(out_key->facet);
+}
+
+static void canonicalize_content_id(
+    const MeisoContentId *source,
+    MeisoContentId *target
+)
+{
+    memset(target, 0, sizeof(*target));
+    target->algorithm = source->algorithm;
+    target->digest_size = source->digest_size;
+    memmove(target->digest, source->digest, source->digest_size);
+}
+
+static void encode_content_id(uint8_t *output, const MeisoContentId *value)
+{
+    put_u16(output, value->algorithm);
+    output[2] = value->digest_size;
+    output[3] = 0U;
+    memmove(output + 4U, value->digest, MEISO_SHA256_DIGEST_SIZE);
+}
+
+static bool decode_content_id(
+    const uint8_t input[CONTENT_ID_WIRE_SIZE],
+    MeisoContentId *out_value
+)
+{
+    MeisoContentId value;
+
+    if (input == NULL || out_value == NULL || input[3] != 0U) {
+        return false;
+    }
+    memset(&value, 0, sizeof(value));
+    value.algorithm = get_u16(input);
+    value.digest_size = input[2];
+    memmove(value.digest, input + 4U, MEISO_SHA256_DIGEST_SIZE);
+    if (!meiso_content_id_valid(&value)) {
+        return false;
+    }
+    *out_value = value;
+    return true;
+}
+
+static bool blob_transfer_equal(
+    const MeisoRuntimeBlobTransferRef *lhs,
+    const MeisoRuntimeBlobTransferRef *rhs
+)
+{
+    return lhs != NULL && rhs != NULL &&
+        route_key_equal(lhs->route, rhs->route) &&
+        lhs->transfer_id == rhs->transfer_id &&
+        meiso_content_id_equal(&lhs->content_id, &rhs->content_id) &&
+        lhs->total_size == rhs->total_size;
+}
+
+static bool blob_operation_valid(MeisoRuntimeBlobOperation value)
+{
+    return value >= MEISO_RUNTIME_BLOB_BEGIN &&
+        value <= MEISO_RUNTIME_BLOB_ABORT;
+}
+
+static bool blob_abort_reason_valid(MeisoRuntimeBlobAbortReason value)
+{
+    return value == MEISO_RUNTIME_BLOB_ABORT_CALLER_REQUEST;
 }
 
 static MeisoOwnerRole owner_role_for_session(MeisoSessionRole role)
@@ -2321,7 +2645,7 @@ MeisoRuntimeStatus meiso_runtime_send_state_offer(
         )) {
         return MEISO_RUNTIME_STATE_INVALID;
     }
-    encode_header(output, WIRE_STATE_OFFER, (uint32_t)size);
+    encode_header(runtime, output, WIRE_STATE_OFFER, (uint32_t)size);
     status = submit_bytes(runtime, size);
     if (status == MEISO_RUNTIME_OK) {
         if (route->value.facet == MEISO_RUNTIME_FACET_ACTUAL) {
@@ -2392,7 +2716,7 @@ MeisoRuntimeStatus meiso_runtime_send_state_accept(
         owner.incarnation
     );
     put_u64(output + MEISO_RUNTIME_WIRE_HEADER_SIZE + 80U, version);
-    encode_header(output, WIRE_STATE_ACCEPT, (uint32_t)size);
+    encode_header(runtime, output, WIRE_STATE_ACCEPT, (uint32_t)size);
     return submit_bytes(runtime, size);
 }
 
@@ -2544,8 +2868,301 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
             sample->payload.size
         );
     }
-    encode_header(output, WIRE_STREAM_SAMPLE, (uint32_t)size);
+    encode_header(runtime, output, WIRE_STREAM_SAMPLE, (uint32_t)size);
     return submit_bytes(runtime, size);
+}
+
+static MeisoRuntimeStatus resolve_blob_route(
+    MeisoRuntime *runtime,
+    MeisoRuntimeRouteKey key,
+    RouteSlot **out_route
+)
+{
+    EndpointSlot *endpoint;
+    MeisoRuntimeStatus status;
+
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    status = resolve_active_route(runtime, key, out_route, &endpoint);
+    (void)endpoint;
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if ((*out_route)->value.facet != MEISO_RUNTIME_FACET_IMMUTABLE) {
+        return MEISO_RUNTIME_FACET_MISMATCH;
+    }
+    if ((*out_route)->value.resource.kind != MEISO_RESOURCE_KIND_BLOB) {
+        return MEISO_RUNTIME_UNSUPPORTED_KIND;
+    }
+    if ((*out_route)->value.resource.owner != MEISO_OWNER_ROLE_HOST) {
+        return MEISO_RUNTIME_OWNER_MISMATCH;
+    }
+    return MEISO_RUNTIME_OK;
+}
+
+MeisoRuntimeStatus meiso_runtime_send_blob_begin(
+    MeisoRuntime *runtime,
+    MeisoRuntimeRouteKey route_key,
+    const MeisoContentId *content_id,
+    uint64_t total_size,
+    MeisoRuntimeBlobTransferRef *out_transfer
+)
+{
+    MeisoRuntimeStatus status = check_bound_mutable(runtime);
+    MeisoRuntimeBlobTransferRef transfer;
+    RouteSlot *route;
+    uint8_t *body;
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_HOST) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (out_transfer == NULL || !meiso_content_id_valid(content_id) ||
+        output_overlaps_runtime_or_session(
+            runtime, out_transfer, sizeof(*out_transfer)
+        ) || ranges_overlap(
+            runtime, runtime->arena_size, content_id, sizeof(*content_id)
+        )) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    if (runtime->blob_transfer_active || runtime->blob_result_pending ||
+        runtime->blob_publish_pending) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    status = resolve_blob_route(runtime, route_key, &route);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (total_size > runtime->max_blob_transfer_bytes ||
+        total_size > route->value.resource.max_payload_size) {
+        return MEISO_RUNTIME_PAYLOAD_CAPACITY;
+    }
+    if (runtime->blob_transfer_id_high_water == UINT64_MAX) {
+        return MEISO_RUNTIME_CAPACITY;
+    }
+    status = blob_tx_preflight(runtime);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    memset(&transfer, 0, sizeof(transfer));
+    transfer.route = route_key;
+    transfer.transfer_id = runtime->blob_transfer_id_high_water + 1U;
+    canonicalize_content_id(content_id, &transfer.content_id);
+    transfer.total_size = total_size;
+    body = tx_bytes(runtime) + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    encode_route_key(body, transfer.route);
+    put_u64(body + 56U, transfer.transfer_id);
+    encode_content_id(body + 64U, &transfer.content_id);
+    put_u64(body + 100U, transfer.total_size);
+    encode_header(
+        runtime,
+        tx_bytes(runtime),
+        WIRE_BLOB_BEGIN,
+        MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE
+    );
+    status = submit_bytes(
+        runtime, MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE
+    );
+    if (status == MEISO_RUNTIME_OK) {
+        runtime->blob_transfer = transfer;
+        runtime->blob_transfer_id_high_water = transfer.transfer_id;
+        runtime->blob_transfer_active = true;
+        runtime->blob_begin_ready = false;
+        runtime->blob_next_offset = 0U;
+        *out_transfer = transfer;
+    }
+    return status;
+}
+
+MeisoRuntimeStatus meiso_runtime_send_blob_chunk(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    uint64_t offset,
+    MeisoByteView payload
+)
+{
+    MeisoRuntimeStatus status = check_bound_mutable(runtime);
+    uint8_t *body;
+    uint64_t end;
+    size_t size;
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_HOST) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (transfer == NULL || !meiso_byte_view_valid(payload) ||
+        payload.size == 0U ||
+        payload.size > MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE ||
+        ranges_overlap(
+            runtime, runtime->arena_size, transfer, sizeof(*transfer)
+        ) || ranges_overlap(
+            runtime, runtime->arena_size, payload.data, payload.size
+        )) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (!blob_transfer_equal(transfer, &runtime->blob_transfer)) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (!runtime->blob_begin_ready ||
+        runtime->blob_outbound_terminal_wait) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    if (offset != runtime->blob_next_offset ||
+        payload.size > UINT64_MAX - offset) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    end = offset + payload.size;
+    if (end > transfer->total_size ||
+        (payload.size < MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE &&
+         end != transfer->total_size)) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    status = blob_tx_preflight(runtime);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    size = MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE + payload.size;
+    body = tx_bytes(runtime) + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    encode_route_key(body, transfer->route);
+    put_u64(body + 56U, transfer->transfer_id);
+    put_u64(body + 64U, offset);
+    memmove(body + BLOB_CHUNK_PREFIX_SIZE, payload.data, payload.size);
+    encode_header(runtime, tx_bytes(runtime), WIRE_BLOB_CHUNK, (uint32_t)size);
+    status = submit_bytes(runtime, size);
+    if (status == MEISO_RUNTIME_OK) {
+        runtime->blob_next_offset = end;
+    }
+    return status;
+}
+
+MeisoRuntimeStatus meiso_runtime_send_blob_commit(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer
+)
+{
+    MeisoRuntimeStatus status = check_bound_mutable(runtime);
+    uint8_t *body;
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_HOST) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (transfer == NULL || ranges_overlap(
+            runtime, runtime->arena_size, transfer, sizeof(*transfer)
+        )) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (!blob_transfer_equal(transfer, &runtime->blob_transfer)) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (!runtime->blob_begin_ready ||
+        runtime->blob_outbound_terminal_wait) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    if (runtime->blob_next_offset != transfer->total_size) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    status = blob_tx_preflight(runtime);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    body = tx_bytes(runtime) + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    encode_route_key(body, transfer->route);
+    put_u64(body + 56U, transfer->transfer_id);
+    encode_content_id(body + 64U, &transfer->content_id);
+    put_u64(body + 100U, transfer->total_size);
+    encode_header(
+        runtime,
+        tx_bytes(runtime),
+        WIRE_BLOB_COMMIT,
+        MEISO_RUNTIME_V3_BLOB_COMMIT_WIRE_SIZE
+    );
+    status = submit_bytes(
+        runtime, MEISO_RUNTIME_V3_BLOB_COMMIT_WIRE_SIZE
+    );
+    if (status == MEISO_RUNTIME_OK) {
+        runtime->blob_outbound_terminal_wait = true;
+        runtime->blob_pending_operation = MEISO_RUNTIME_BLOB_COMMIT;
+    }
+    return status;
+}
+
+MeisoRuntimeStatus meiso_runtime_send_blob_abort(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    MeisoRuntimeBlobAbortReason reason
+)
+{
+    MeisoRuntimeStatus status = check_bound_mutable(runtime);
+    uint8_t *body;
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_HOST) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (transfer == NULL || !blob_abort_reason_valid(reason) ||
+        ranges_overlap(
+            runtime, runtime->arena_size, transfer, sizeof(*transfer)
+        )) {
+        return MEISO_RUNTIME_BLOB_INVALID;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (!blob_transfer_equal(transfer, &runtime->blob_transfer)) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->blob_outbound_terminal_wait) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    status = blob_tx_preflight(runtime);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    body = tx_bytes(runtime) + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    encode_route_key(body, transfer->route);
+    put_u64(body + 56U, transfer->transfer_id);
+    body[64U] = reason;
+    memset(body + 65U, 0, 7U);
+    encode_header(
+        runtime,
+        tx_bytes(runtime),
+        WIRE_BLOB_ABORT,
+        MEISO_RUNTIME_V3_BLOB_ABORT_WIRE_SIZE
+    );
+    status = submit_bytes(runtime, MEISO_RUNTIME_V3_BLOB_ABORT_WIRE_SIZE);
+    if (status == MEISO_RUNTIME_OK) {
+        runtime->blob_outbound_terminal_wait = true;
+        runtime->blob_pending_operation = MEISO_RUNTIME_BLOB_ABORT;
+    }
+    return status;
 }
 
 static MeisoRuntimeStatus receive_catalog(
@@ -2887,6 +3504,506 @@ static MeisoRuntimeStatus receive_stream_sample(
     return MEISO_RUNTIME_OK;
 }
 
+static void set_blob_result(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    MeisoRuntimeBlobOperation operation,
+    MeisoRuntimeBlobResult result,
+    uint64_t next_offset
+)
+{
+    runtime->blob_result_transfer = *transfer;
+    runtime->blob_pending_operation = operation;
+    runtime->blob_pending_result = result;
+    runtime->blob_result_next_offset = next_offset;
+    runtime->blob_result_pending = true;
+}
+
+static void fill_blob_request_event(
+    MeisoRuntimeEvent *event,
+    MeisoRuntimeBlobOperation operation,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    uint64_t offset,
+    MeisoByteView payload
+)
+{
+    event->type = MEISO_RUNTIME_EVENT_BLOB_REQUEST;
+    event->catalog_generation = transfer->route.catalog_generation;
+    event->route = transfer->route;
+    event->blob_operation = operation;
+    event->blob_transfer = *transfer;
+    event->blob_offset = offset;
+    event->blob_payload = payload;
+}
+
+static bool blob_result_is_terminal(MeisoRuntimeBlobResult result)
+{
+    return result >= MEISO_RUNTIME_BLOB_RESULT_PUBLISHED &&
+        result <= MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE;
+}
+
+static bool blob_result_reference_equal(
+    const MeisoRuntimeBlobTransferRef *lhs,
+    const MeisoRuntimeBlobTransferRef *rhs
+)
+{
+    return lhs != NULL && rhs != NULL &&
+        route_key_equal(lhs->route, rhs->route) &&
+        lhs->transfer_id == rhs->transfer_id &&
+        lhs->total_size == rhs->total_size;
+}
+
+static bool blob_result_combination_valid(
+    MeisoRuntimeBlobOperation operation,
+    MeisoRuntimeBlobResult result
+)
+{
+    if (!blob_operation_valid(operation)) {
+        return false;
+    }
+    if (operation == MEISO_RUNTIME_BLOB_BEGIN) {
+        return result == MEISO_RUNTIME_BLOB_RESULT_READY ||
+            (result >= MEISO_RUNTIME_BLOB_RESULT_BUSY &&
+             result <= MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE);
+    }
+    if (operation == MEISO_RUNTIME_BLOB_CHUNK) {
+        return result == MEISO_RUNTIME_BLOB_RESULT_DISCONTINUITY ||
+            result == MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE;
+    }
+    if (operation == MEISO_RUNTIME_BLOB_COMMIT) {
+        return result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED ||
+            result == MEISO_RUNTIME_BLOB_RESULT_DUPLICATE ||
+            (result >= MEISO_RUNTIME_BLOB_RESULT_BUSY &&
+             result <= MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE);
+    }
+    return result == MEISO_RUNTIME_BLOB_RESULT_ABORTED;
+}
+
+static MeisoRuntimeStatus receive_blob_begin(
+    MeisoRuntime *runtime,
+    MeisoByteView frame,
+    MeisoRuntimeEvent *event
+)
+{
+    const uint8_t *body = frame.data + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    MeisoRuntimeBlobTransferRef transfer;
+    RouteSlot *route;
+    MeisoRuntimeStatus status;
+    bool content_valid;
+
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (frame.size != MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE ||
+        !decode_route_key(body, &transfer.route) || body[67U] != 0U) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    memset(&transfer.content_id, 0, sizeof(transfer.content_id));
+    transfer.transfer_id = get_u64(body + 56U);
+    content_valid = decode_content_id(body + 64U, &transfer.content_id);
+    transfer.total_size = get_u64(body + 100U);
+    if (transfer.transfer_id == 0U) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    status = resolve_blob_route(runtime, transfer.route, &route);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->blob_result_pending || runtime->blob_publish_pending) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    if (runtime->blob_transfer_active &&
+        transfer.transfer_id == runtime->blob_transfer.transfer_id) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (transfer.transfer_id <= runtime->blob_transfer_id_high_water) {
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_BEGIN,
+            MEISO_RUNTIME_BLOB_RESULT_CONFLICT,
+            0U
+        );
+        fill_blob_request_event(
+            event,
+            MEISO_RUNTIME_BLOB_BEGIN,
+            &transfer,
+            0U,
+            (MeisoByteView){NULL, 0U}
+        );
+        return MEISO_RUNTIME_OK;
+    }
+    runtime->blob_transfer_id_high_water = transfer.transfer_id;
+    if (!content_valid) {
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_BEGIN,
+            MEISO_RUNTIME_BLOB_RESULT_INVALID_CONTENT_ID,
+            0U
+        );
+    } else if (runtime->blob_transfer_active) {
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_BEGIN,
+            MEISO_RUNTIME_BLOB_RESULT_BUSY,
+            0U
+        );
+    } else if (transfer.total_size > runtime->max_blob_transfer_bytes ||
+               transfer.total_size > route->value.resource.max_payload_size ||
+               (sizeof(size_t) < sizeof(uint64_t) &&
+                transfer.total_size > (uint64_t)SIZE_MAX)) {
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_BEGIN,
+            MEISO_RUNTIME_BLOB_RESULT_CAPACITY,
+            0U
+        );
+    } else {
+        if (runtime->max_blob_transfer_bytes != 0U) {
+            memset(
+                blob_scratch(runtime),
+                0,
+                runtime->max_blob_transfer_bytes
+            );
+        }
+        runtime->blob_transfer = transfer;
+        runtime->blob_next_offset = 0U;
+        runtime->blob_transfer_active = true;
+        runtime->blob_begin_ready = false;
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_BEGIN,
+            MEISO_RUNTIME_BLOB_RESULT_READY,
+            0U
+        );
+    }
+    fill_blob_request_event(
+        event,
+        MEISO_RUNTIME_BLOB_BEGIN,
+        &transfer,
+        0U,
+        (MeisoByteView){NULL, 0U}
+    );
+    return MEISO_RUNTIME_OK;
+}
+
+static MeisoRuntimeStatus receive_blob_chunk(
+    MeisoRuntime *runtime,
+    MeisoByteView frame,
+    MeisoRuntimeEvent *event
+)
+{
+    const uint8_t *body = frame.data + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    MeisoRuntimeRouteKey route;
+    MeisoByteView payload;
+    uint64_t transfer_id;
+    uint64_t offset;
+    uint64_t end;
+    RouteSlot *route_slot;
+    MeisoRuntimeStatus status;
+
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (frame.size <= MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE ||
+        frame.size > MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE +
+                MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE ||
+        !decode_route_key(body, &route)) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    transfer_id = get_u64(body + 56U);
+    offset = get_u64(body + 64U);
+    payload.data = body + BLOB_CHUNK_PREFIX_SIZE;
+    payload.size = frame.size - MEISO_RUNTIME_V3_BLOB_CHUNK_PREFIX_WIRE_SIZE;
+    status = resolve_blob_route(runtime, route, &route_slot);
+    (void)route_slot;
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (!route_key_equal(route, runtime->blob_transfer.route) ||
+        transfer_id != runtime->blob_transfer.transfer_id) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->blob_result_pending || runtime->blob_publish_pending ||
+        !runtime->blob_begin_ready) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    if (offset != runtime->blob_next_offset ||
+        payload.size > UINT64_MAX - offset) {
+        set_blob_result(
+            runtime,
+            &runtime->blob_transfer,
+            MEISO_RUNTIME_BLOB_CHUNK,
+            MEISO_RUNTIME_BLOB_RESULT_DISCONTINUITY,
+            runtime->blob_next_offset
+        );
+    } else {
+        end = offset + payload.size;
+        if (end > runtime->blob_transfer.total_size ||
+            (payload.size < MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE &&
+             end != runtime->blob_transfer.total_size)) {
+            set_blob_result(
+                runtime,
+                &runtime->blob_transfer,
+                MEISO_RUNTIME_BLOB_CHUNK,
+                MEISO_RUNTIME_BLOB_RESULT_DISCONTINUITY,
+                runtime->blob_next_offset
+            );
+        } else {
+            memmove(blob_scratch(runtime) + (size_t)offset,
+                    payload.data, payload.size);
+            runtime->blob_next_offset = end;
+        }
+    }
+    fill_blob_request_event(
+        event,
+        MEISO_RUNTIME_BLOB_CHUNK,
+        &runtime->blob_transfer,
+        offset,
+        payload
+    );
+    return MEISO_RUNTIME_OK;
+}
+
+static MeisoRuntimeStatus receive_blob_commit(
+    MeisoRuntime *runtime,
+    MeisoByteView frame,
+    MeisoRuntimeEvent *event
+)
+{
+    const uint8_t *body = frame.data + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    MeisoRuntimeBlobTransferRef transfer;
+    RouteSlot *route;
+    MeisoRuntimeStatus status;
+    MeisoByteView content;
+
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (frame.size != MEISO_RUNTIME_V3_BLOB_COMMIT_WIRE_SIZE ||
+        !decode_route_key(body, &transfer.route) ||
+        !decode_content_id(body + 64U, &transfer.content_id)) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    transfer.transfer_id = get_u64(body + 56U);
+    transfer.total_size = get_u64(body + 100U);
+    status = resolve_blob_route(runtime, transfer.route, &route);
+    (void)route;
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (!blob_transfer_equal(&transfer, &runtime->blob_transfer)) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->blob_result_pending || runtime->blob_publish_pending ||
+        !runtime->blob_begin_ready) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    content.data = blob_scratch(runtime);
+    content.size = (size_t)transfer.total_size;
+    if (runtime->blob_next_offset != transfer.total_size) {
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_COMMIT,
+            MEISO_RUNTIME_BLOB_RESULT_LENGTH_MISMATCH,
+            runtime->blob_next_offset
+        );
+    } else if (!meiso_runtime_blob_sha256_verify(
+                   &transfer.content_id, content, NULL
+               )) {
+        set_blob_result(
+            runtime,
+            &transfer,
+            MEISO_RUNTIME_BLOB_COMMIT,
+            MEISO_RUNTIME_BLOB_RESULT_INTEGRITY_FAILED,
+            runtime->blob_next_offset
+        );
+    } else {
+        runtime->blob_publish_pending = true;
+        runtime->blob_pending_operation = MEISO_RUNTIME_BLOB_COMMIT;
+    }
+    fill_blob_request_event(
+        event,
+        MEISO_RUNTIME_BLOB_COMMIT,
+        &transfer,
+        0U,
+        content
+    );
+    return MEISO_RUNTIME_OK;
+}
+
+static MeisoRuntimeStatus receive_blob_abort(
+    MeisoRuntime *runtime,
+    MeisoByteView frame,
+    MeisoRuntimeEvent *event
+)
+{
+    const uint8_t *body = frame.data + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    MeisoRuntimeRouteKey route;
+    uint64_t transfer_id;
+    RouteSlot *route_slot;
+    MeisoRuntimeStatus status;
+
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (frame.size != MEISO_RUNTIME_V3_BLOB_ABORT_WIRE_SIZE ||
+        !decode_route_key(body, &route) ||
+        !blob_abort_reason_valid(body[64U]) ||
+        !bytes_zero(body + 65U, 7U)) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    transfer_id = get_u64(body + 56U);
+    status = resolve_blob_route(runtime, route, &route_slot);
+    (void)route_slot;
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (!route_key_equal(route, runtime->blob_transfer.route) ||
+        transfer_id != runtime->blob_transfer.transfer_id) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->blob_publish_pending ||
+        (runtime->blob_result_pending &&
+         runtime->blob_pending_result != MEISO_RUNTIME_BLOB_RESULT_READY)) {
+        return MEISO_RUNTIME_BLOB_BUSY;
+    }
+    memset(blob_scratch(runtime), 0, runtime->max_blob_transfer_bytes);
+    set_blob_result(
+        runtime,
+        &runtime->blob_transfer,
+        MEISO_RUNTIME_BLOB_ABORT,
+        MEISO_RUNTIME_BLOB_RESULT_ABORTED,
+        runtime->blob_next_offset
+    );
+    fill_blob_request_event(
+        event,
+        MEISO_RUNTIME_BLOB_ABORT,
+        &runtime->blob_transfer,
+        runtime->blob_next_offset,
+        (MeisoByteView){NULL, 0U}
+    );
+    return MEISO_RUNTIME_OK;
+}
+
+static MeisoRuntimeStatus receive_blob_result(
+    MeisoRuntime *runtime,
+    MeisoByteView frame,
+    MeisoRuntimeEvent *event
+)
+{
+    const uint8_t *body = frame.data + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    MeisoRuntimeRouteKey route;
+    MeisoRuntimeBlobOperation operation;
+    MeisoRuntimeBlobResult result;
+    uint64_t transfer_id;
+    uint64_t next_offset;
+    uint64_t total_size;
+    MeisoRuntimeBlobTransferRef transfer;
+    bool terminal;
+    bool canonical_prefix;
+
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_HOST) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (frame.size != MEISO_RUNTIME_V3_BLOB_RESULT_WIRE_SIZE ||
+        !decode_route_key(body, &route) || !bytes_zero(body + 66U, 2U)) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    transfer_id = get_u64(body + 56U);
+    operation = body[64U];
+    result = body[65U];
+    next_offset = get_u64(body + 68U);
+    total_size = get_u64(body + 76U);
+    if (!blob_result_combination_valid(operation, result)) {
+        return MEISO_RUNTIME_MALFORMED;
+    }
+    if (!runtime->blob_transfer_active) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    transfer = runtime->blob_transfer;
+    if (!route_key_equal(route, transfer.route) ||
+        transfer_id != transfer.transfer_id ||
+        total_size != transfer.total_size || next_offset > total_size) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    terminal = blob_result_is_terminal(result);
+    canonical_prefix = next_offset <= runtime->blob_next_offset &&
+        (next_offset == total_size ||
+         next_offset % MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE == 0U);
+    if (operation == MEISO_RUNTIME_BLOB_BEGIN) {
+        if (next_offset != 0U) {
+            return MEISO_RUNTIME_MALFORMED;
+        }
+        if (result == MEISO_RUNTIME_BLOB_RESULT_READY) {
+            if (runtime->blob_begin_ready) {
+                return MEISO_RUNTIME_CONFLICT;
+            }
+        } else if (runtime->blob_begin_ready) {
+            return MEISO_RUNTIME_CONFLICT;
+        }
+    } else if (operation == MEISO_RUNTIME_BLOB_CHUNK) {
+        if (!runtime->blob_begin_ready || runtime->blob_next_offset == 0U ||
+            !canonical_prefix) {
+            return MEISO_RUNTIME_CONFLICT;
+        }
+    } else if (operation == MEISO_RUNTIME_BLOB_COMMIT) {
+        if (!runtime->blob_outbound_terminal_wait ||
+            runtime->blob_pending_operation != MEISO_RUNTIME_BLOB_COMMIT ||
+            ((result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED ||
+              result == MEISO_RUNTIME_BLOB_RESULT_DUPLICATE) ?
+                next_offset != total_size : !canonical_prefix)) {
+            return MEISO_RUNTIME_CONFLICT;
+        }
+    } else if (!runtime->blob_outbound_terminal_wait ||
+               runtime->blob_pending_operation != MEISO_RUNTIME_BLOB_ABORT ||
+               !canonical_prefix) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    event->type = MEISO_RUNTIME_EVENT_BLOB_RESULT;
+    event->catalog_generation = route.catalog_generation;
+    event->route = route;
+    event->blob_operation = operation;
+    event->blob_transfer = transfer;
+    event->blob_result = result;
+    event->blob_next_offset = next_offset;
+    if (terminal) {
+        clear_blob_transfer(runtime);
+    } else if (!runtime->blob_outbound_terminal_wait) {
+        runtime->blob_begin_ready = true;
+    }
+    return MEISO_RUNTIME_OK;
+}
+
 MeisoRuntimeStatus meiso_runtime_receive(
     MeisoRuntime *runtime,
     const MeisoSessionRuntimeMessage *message,
@@ -2915,7 +4032,19 @@ MeisoRuntimeStatus meiso_runtime_receive(
             !meiso_session_id_equal(message->session_id, runtime->session_id) ?
             MEISO_RUNTIME_STALE_SESSION : MEISO_RUNTIME_INVALID_ARGUMENT;
     }
-    if (!decode_header(message->payload, &type)) {
+    if (message->payload.size >= MEISO_RUNTIME_WIRE_HEADER_SIZE &&
+        message->payload.size <= UINT32_MAX &&
+        message->payload.data[0] == (uint8_t)'M' &&
+        message->payload.data[1] == (uint8_t)'R' &&
+        message->payload.data[2] == (uint8_t)'T' &&
+        message->payload.data[3] == (uint8_t)'0' &&
+        message->payload.data[6] == 0U &&
+        message->payload.data[7] == 0U &&
+        get_u32(message->payload.data + 8U) == message->payload.size &&
+        message->payload.data[4] != runtime->wire_version) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (!decode_header(runtime, message->payload, &type)) {
         return MEISO_RUNTIME_MALFORMED;
     }
     memset(out_event, 0, sizeof(*out_event));
@@ -2932,9 +4061,462 @@ MeisoRuntimeStatus meiso_runtime_receive(
         return receive_state_accept(runtime, message->payload, out_event);
     case WIRE_STREAM_SAMPLE:
         return receive_stream_sample(runtime, message->payload, out_event);
+    case WIRE_BLOB_BEGIN:
+        return receive_blob_begin(runtime, message->payload, out_event);
+    case WIRE_BLOB_CHUNK:
+        return receive_blob_chunk(runtime, message->payload, out_event);
+    case WIRE_BLOB_COMMIT:
+        return receive_blob_commit(runtime, message->payload, out_event);
+    case WIRE_BLOB_ABORT:
+        return receive_blob_abort(runtime, message->payload, out_event);
+    case WIRE_BLOB_RESULT:
+        return receive_blob_result(runtime, message->payload, out_event);
     default:
         return MEISO_RUNTIME_MALFORMED;
     }
+}
+
+typedef struct {
+    uint32_t state[8];
+    uint8_t block[64];
+    uint64_t total_bytes;
+    size_t block_size;
+} RuntimeSha256;
+
+static uint32_t runtime_rotate_right(uint32_t value, uint32_t count)
+{
+    return (value >> count) | (value << (32U - count));
+}
+
+static void runtime_sha256_transform(
+    RuntimeSha256 *sha,
+    const uint8_t block[64]
+)
+{
+    static const uint32_t constants[64] = {
+        0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+        0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+        0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+        0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+        0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+        0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+        0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+        0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+        0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+        0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+        0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+        0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+        0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+        0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+        0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+        0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
+    };
+    uint32_t words[64];
+    uint32_t a;
+    uint32_t b;
+    uint32_t c;
+    uint32_t d;
+    uint32_t e;
+    uint32_t f;
+    uint32_t g;
+    uint32_t h;
+    size_t index;
+
+    for (index = 0U; index < 16U; ++index) {
+        words[index] = get_u32(block + index * 4U);
+    }
+    for (; index < 64U; ++index) {
+        const uint32_t s0 =
+            runtime_rotate_right(words[index - 15U], 7U) ^
+            runtime_rotate_right(words[index - 15U], 18U) ^
+            (words[index - 15U] >> 3U);
+        const uint32_t s1 =
+            runtime_rotate_right(words[index - 2U], 17U) ^
+            runtime_rotate_right(words[index - 2U], 19U) ^
+            (words[index - 2U] >> 10U);
+        words[index] = words[index - 16U] + s0 +
+            words[index - 7U] + s1;
+    }
+    a = sha->state[0];
+    b = sha->state[1];
+    c = sha->state[2];
+    d = sha->state[3];
+    e = sha->state[4];
+    f = sha->state[5];
+    g = sha->state[6];
+    h = sha->state[7];
+    for (index = 0U; index < 64U; ++index) {
+        const uint32_t s1 = runtime_rotate_right(e, 6U) ^
+            runtime_rotate_right(e, 11U) ^ runtime_rotate_right(e, 25U);
+        const uint32_t choice = (e & f) ^ (~e & g);
+        const uint32_t t1 = h + s1 + choice + constants[index] + words[index];
+        const uint32_t s0 = runtime_rotate_right(a, 2U) ^
+            runtime_rotate_right(a, 13U) ^ runtime_rotate_right(a, 22U);
+        const uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
+        const uint32_t t2 = s0 + majority;
+        h = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
+    }
+    sha->state[0] += a;
+    sha->state[1] += b;
+    sha->state[2] += c;
+    sha->state[3] += d;
+    sha->state[4] += e;
+    sha->state[5] += f;
+    sha->state[6] += g;
+    sha->state[7] += h;
+}
+
+static void runtime_sha256_init(RuntimeSha256 *sha)
+{
+    static const uint32_t initial[8] = {
+        0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+        0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U
+    };
+
+    memset(sha, 0, sizeof(*sha));
+    memmove(sha->state, initial, sizeof(initial));
+}
+
+static void runtime_sha256_update(
+    RuntimeSha256 *sha,
+    const uint8_t *data,
+    size_t size
+)
+{
+    while (size != 0U) {
+        const size_t available = sizeof(sha->block) - sha->block_size;
+        const size_t take = size < available ? size : available;
+
+        memmove(sha->block + sha->block_size, data, take);
+        sha->block_size += take;
+        sha->total_bytes += take;
+        data += take;
+        size -= take;
+        if (sha->block_size == sizeof(sha->block)) {
+            runtime_sha256_transform(sha, sha->block);
+            sha->block_size = 0U;
+        }
+    }
+}
+
+static void runtime_sha256_final(
+    RuntimeSha256 *sha,
+    uint8_t digest[MEISO_SHA256_DIGEST_SIZE]
+)
+{
+    const uint64_t total_bits = sha->total_bytes * 8U;
+    size_t index;
+
+    sha->block[sha->block_size++] = 0x80U;
+    if (sha->block_size > 56U) {
+        memset(sha->block + sha->block_size, 0,
+               sizeof(sha->block) - sha->block_size);
+        runtime_sha256_transform(sha, sha->block);
+        sha->block_size = 0U;
+    }
+    memset(sha->block + sha->block_size, 0, 56U - sha->block_size);
+    for (index = 0U; index < 8U; ++index) {
+        sha->block[56U + index] =
+            (uint8_t)(total_bits >> (56U - index * 8U));
+    }
+    runtime_sha256_transform(sha, sha->block);
+    for (index = 0U; index < 8U; ++index) {
+        put_u32(digest + index * 4U, sha->state[index]);
+    }
+}
+
+bool meiso_runtime_blob_sha256_verify(
+    const MeisoContentId *expected_content_id,
+    MeisoByteView content,
+    void *context
+)
+{
+    RuntimeSha256 sha;
+    uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
+
+    (void)context;
+    if (!meiso_content_id_valid(expected_content_id) ||
+        !meiso_byte_view_valid(content)) {
+        return false;
+    }
+    runtime_sha256_init(&sha);
+    runtime_sha256_update(&sha, content.data, content.size);
+    runtime_sha256_final(&sha, digest);
+    return memcmp(
+        digest,
+        expected_content_id->digest,
+        MEISO_SHA256_DIGEST_SIZE
+    ) == 0;
+}
+
+static MeisoRuntimeBlobResult blob_stage_result(MeisoBlobStageStatus status)
+{
+    switch (status) {
+    case MEISO_BLOB_STAGE_UNCHANGED:
+    case MEISO_BLOB_STAGE_BUSY:
+        return MEISO_RUNTIME_BLOB_RESULT_BUSY;
+    case MEISO_BLOB_STAGE_CONFLICT:
+        return MEISO_RUNTIME_BLOB_RESULT_CONFLICT;
+    case MEISO_BLOB_STAGE_INVALID_CONTENT_ID:
+        return MEISO_RUNTIME_BLOB_RESULT_INVALID_CONTENT_ID;
+    case MEISO_BLOB_STAGE_CAPACITY:
+        return MEISO_RUNTIME_BLOB_RESULT_CAPACITY;
+    default:
+        return MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE;
+    }
+}
+
+static MeisoRuntimeBlobResult blob_commit_result(MeisoBlobCommitStatus status)
+{
+    switch (status) {
+    case MEISO_BLOB_COMMIT_PUBLISHED:
+        return MEISO_RUNTIME_BLOB_RESULT_PUBLISHED;
+    case MEISO_BLOB_COMMIT_DUPLICATE:
+        return MEISO_RUNTIME_BLOB_RESULT_DUPLICATE;
+    case MEISO_BLOB_COMMIT_CONFLICT:
+        return MEISO_RUNTIME_BLOB_RESULT_CONFLICT;
+    case MEISO_BLOB_COMMIT_LENGTH_MISMATCH:
+        return MEISO_RUNTIME_BLOB_RESULT_LENGTH_MISMATCH;
+    case MEISO_BLOB_COMMIT_INTEGRITY_FAILED:
+        return MEISO_RUNTIME_BLOB_RESULT_INTEGRITY_FAILED;
+    case MEISO_BLOB_COMMIT_CAPACITY:
+        return MEISO_RUNTIME_BLOB_RESULT_CAPACITY;
+    default:
+        return MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE;
+    }
+}
+
+typedef struct {
+    MeisoBlobVerifier verifier;
+    void *context;
+} RuntimeBlobVerifierContext;
+
+static bool runtime_blob_combined_verifier(
+    const MeisoContentId *expected_content_id,
+    MeisoByteView content,
+    void *context
+)
+{
+    RuntimeBlobVerifierContext *combined = context;
+
+    return combined != NULL && combined->verifier != NULL &&
+        meiso_runtime_blob_sha256_verify(
+            expected_content_id, content, NULL
+        ) && combined->verifier(
+            expected_content_id, content, combined->context
+        );
+}
+
+MeisoRuntimeStatus meiso_runtime_publish_blob_receive(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *expected_transfer,
+    MeisoBlobStore *store,
+    MeisoBlobVerifier verifier,
+    void *verifier_context,
+    MeisoRuntimeBlobPublishReport *out_report
+)
+{
+    MeisoRuntimeStatus status = check_bound_mutable_internal(runtime, true);
+    MeisoRuntimeBlobPublishReport report;
+    RuntimeBlobVerifierContext combined;
+    MeisoMutableBuffer staging;
+    MeisoBlobStageStatus stage_status;
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (expected_transfer == NULL || store == NULL || verifier == NULL ||
+        out_report == NULL || ranges_overlap(
+            runtime,
+            runtime->arena_size,
+            expected_transfer,
+            sizeof(*expected_transfer)
+        ) || output_overlaps_runtime_or_session(
+            runtime, out_report, sizeof(*out_report)
+        ) || ranges_overlap(
+            expected_transfer,
+            sizeof(*expected_transfer),
+            out_report,
+            sizeof(*out_report)
+        )) {
+        return MEISO_RUNTIME_INVALID_ARGUMENT;
+    }
+    if (!runtime->blob_transfer_active || !runtime->blob_publish_pending) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (runtime->blob_result_pending ||
+        !blob_transfer_equal(expected_transfer, &runtime->blob_transfer)) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    memset(&report, 0, sizeof(report));
+    runtime->blob_bridge_active = true;
+    report.stage_attempted = true;
+    stage_status = meiso_blob_store_stage_begin(
+        store,
+        &runtime->blob_transfer.content_id,
+        (size_t)runtime->blob_transfer.total_size
+    );
+    report.stage_status = stage_status;
+    if (stage_status != MEISO_BLOB_STAGE_STARTED) {
+        report.result = blob_stage_result(stage_status);
+    } else {
+        if (!meiso_blob_store_staging_buffer(store, &staging) ||
+            staging.capacity != (size_t)runtime->blob_transfer.total_size) {
+            report.commit_status = MEISO_BLOB_COMMIT_INVALID;
+            report.result = MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE;
+        } else {
+            if (staging.capacity != 0U) {
+                memmove(
+                    staging.data,
+                    blob_scratch(runtime),
+                    staging.capacity
+                );
+            }
+            report.commit_attempted = true;
+            combined.verifier = verifier;
+            combined.context = verifier_context;
+            report.commit_status = meiso_blob_store_commit_verified(
+                store,
+                staging.capacity,
+                runtime_blob_combined_verifier,
+                &combined
+            );
+            report.result = blob_commit_result(report.commit_status);
+        }
+        if (report.result != MEISO_RUNTIME_BLOB_RESULT_PUBLISHED &&
+            report.result != MEISO_RUNTIME_BLOB_RESULT_DUPLICATE) {
+            report.forced_abort_attempted = true;
+            report.forced_abort_status = meiso_blob_store_abort_staging(
+                store, MEISO_BLOB_ABORT_TRANSFER_DISCONTINUITY
+            );
+            if (report.forced_abort_status != MEISO_BLOB_ABORTED &&
+                report.forced_abort_status != MEISO_BLOB_ABORT_NO_STAGING) {
+                report.result =
+                    MEISO_RUNTIME_BLOB_RESULT_RECEIVER_FAILURE;
+            }
+        }
+    }
+    runtime->blob_bridge_active = false;
+    runtime->blob_publish_pending = false;
+    set_blob_result(
+        runtime,
+        &runtime->blob_transfer,
+        MEISO_RUNTIME_BLOB_COMMIT,
+        report.result,
+        runtime->blob_next_offset
+    );
+    *out_report = report;
+    return MEISO_RUNTIME_OK;
+}
+
+static void clear_pending_blob_result(MeisoRuntime *runtime)
+{
+    memset(
+        &runtime->blob_result_transfer,
+        0,
+        sizeof(runtime->blob_result_transfer)
+    );
+    runtime->blob_result_next_offset = 0U;
+    runtime->blob_pending_operation = 0U;
+    runtime->blob_pending_result = 0U;
+    runtime->blob_result_pending = false;
+}
+
+MeisoRuntimeStatus meiso_runtime_send_blob_result(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *expected_transfer,
+    MeisoRuntimeBlobOperation expected_operation
+)
+{
+    MeisoRuntimeStatus status = check_bound_mutable(runtime);
+    uint8_t *body;
+    bool result_for_active;
+    MeisoRuntimeBlobResult result;
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V3) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (expected_transfer == NULL ||
+        !blob_operation_valid(expected_operation) || ranges_overlap(
+            runtime,
+            runtime->arena_size,
+            expected_transfer,
+            sizeof(*expected_transfer)
+        )) {
+        return MEISO_RUNTIME_INVALID_ARGUMENT;
+    }
+    if (!runtime->blob_result_pending) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (expected_operation != runtime->blob_pending_operation ||
+        !blob_result_reference_equal(
+            expected_transfer, &runtime->blob_result_transfer
+        )) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    status = blob_tx_preflight(runtime);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    body = tx_bytes(runtime) + MEISO_RUNTIME_WIRE_HEADER_SIZE;
+    encode_route_key(body, runtime->blob_result_transfer.route);
+    put_u64(body + 56U, runtime->blob_result_transfer.transfer_id);
+    body[64U] = runtime->blob_pending_operation;
+    body[65U] = runtime->blob_pending_result;
+    memset(body + 66U, 0, 2U);
+    put_u64(body + 68U, runtime->blob_result_next_offset);
+    put_u64(body + 76U, runtime->blob_result_transfer.total_size);
+    encode_header(
+        runtime,
+        tx_bytes(runtime),
+        WIRE_BLOB_RESULT,
+        MEISO_RUNTIME_V3_BLOB_RESULT_WIRE_SIZE
+    );
+    status = submit_bytes(runtime, MEISO_RUNTIME_V3_BLOB_RESULT_WIRE_SIZE);
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    result = runtime->blob_pending_result;
+    result_for_active = runtime->blob_transfer_active &&
+        blob_transfer_equal(
+            &runtime->blob_result_transfer, &runtime->blob_transfer
+        );
+    if (result == MEISO_RUNTIME_BLOB_RESULT_READY) {
+        if (result_for_active) {
+            runtime->blob_begin_ready = true;
+        }
+        clear_pending_blob_result(runtime);
+    } else if (result_for_active) {
+        clear_blob_transfer(runtime);
+    } else {
+        clear_pending_blob_result(runtime);
+    }
+    return MEISO_RUNTIME_OK;
 }
 
 static bool production_snapshot_equal(
@@ -3090,6 +4672,9 @@ bool meiso_runtime_snapshot(
         return false;
     }
     status = check_bound_const(runtime);
+    if (status == MEISO_RUNTIME_CONFLICT) {
+        return false;
+    }
     memset(out_snapshot, 0, sizeof(*out_snapshot));
     out_snapshot->session_id = runtime->session_id;
     out_snapshot->local_role = runtime->local_role;
@@ -3115,6 +4700,47 @@ bool meiso_runtime_snapshot(
         out_snapshot->staged_catalog_generation = runtime->generation[staged];
         out_snapshot->staged_endpoint_count = runtime->endpoint_count[staged];
         out_snapshot->staged_route_count = runtime->route_count[staged];
+    }
+    return true;
+}
+
+bool meiso_runtime_blob_snapshot(
+    const MeisoRuntime *runtime,
+    MeisoRuntimeBlobSnapshot *out_snapshot
+)
+{
+    MeisoRuntimeStatus status;
+
+    if (runtime == NULL || out_snapshot == NULL ||
+        !runtime_layout_valid(runtime) || output_overlaps_runtime_or_session(
+            runtime, out_snapshot, sizeof(*out_snapshot)
+        )) {
+        return false;
+    }
+    status = check_bound_const(runtime);
+    if (status != MEISO_RUNTIME_OK &&
+        status != MEISO_RUNTIME_CORE_NOT_READY &&
+        status != MEISO_RUNTIME_STALE_SESSION) {
+        return false;
+    }
+    memset(out_snapshot, 0, sizeof(*out_snapshot));
+    out_snapshot->wire_version = runtime->wire_version;
+    out_snapshot->max_transfer_bytes = runtime->max_blob_transfer_bytes;
+    out_snapshot->transfer_id_high_water =
+        runtime->blob_transfer_id_high_water;
+    out_snapshot->transfer_active = runtime->blob_transfer_active;
+    out_snapshot->begin_ready = runtime->blob_begin_ready;
+    out_snapshot->publish_pending = runtime->blob_publish_pending;
+    out_snapshot->result_pending = runtime->blob_result_pending;
+    out_snapshot->core_ready = status == MEISO_RUNTIME_OK;
+    out_snapshot->next_offset = runtime->blob_result_pending ?
+        runtime->blob_result_next_offset : runtime->blob_next_offset;
+    out_snapshot->pending_operation = runtime->blob_pending_operation;
+    out_snapshot->pending_result = runtime->blob_pending_result;
+    if (runtime->blob_result_pending) {
+        out_snapshot->transfer = runtime->blob_result_transfer;
+    } else if (runtime->blob_transfer_active) {
+        out_snapshot->transfer = runtime->blob_transfer;
     }
     return true;
 }

@@ -11,7 +11,15 @@
 extern "C" {
 #endif
 
-#define MEISO_COMPOSITION_SCENE_PROFILE_VERSION 1U
+#define MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V1 1U
+#define MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V2 2U
+/* Compatibility selection: existing callers remain on Profile v1/MRT0 v2. */
+#define MEISO_COMPOSITION_SCENE_PROFILE_VERSION \
+    MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V1
+#define MEISO_COMPOSITION_SCENE_PROFILE_V1_RUNTIME_WIRE_VERSION \
+    MEISO_RUNTIME_WIRE_VERSION_V2
+#define MEISO_COMPOSITION_SCENE_PROFILE_V2_RUNTIME_WIRE_VERSION \
+    MEISO_RUNTIME_WIRE_VERSION_V3
 
 #define MEISO_COMPOSITION_SCENE_ENDPOINT_COUNT 2U
 #define MEISO_COMPOSITION_SCENE_RESOURCE_COUNT 6U
@@ -357,6 +365,8 @@ typedef struct {
 } MeisoCompositionSceneRenderResult;
 
 const MeisoProfileRef *meiso_composition_scene_profile(void);
+/* Explicit opt-in ProfileRef for MRT0 v3 Host-to-Edge Blob carriage. */
+const MeisoProfileRef *meiso_composition_scene_profile_v2(void);
 const MeisoEndpointId *meiso_composition_scene_presentation_endpoint(void);
 const MeisoEndpointId *meiso_composition_scene_scene_endpoint(void);
 const MeisoSchemaRef *
