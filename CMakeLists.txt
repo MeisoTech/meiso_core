@@ -59,6 +59,11 @@ target_include_directories(meiso_runtime PUBLIC include)
 target_link_libraries(meiso_runtime PUBLIC meiso_core)
 meiso_enable_warnings(meiso_runtime)
 
+add_library(meiso_runtime_scheduler src/meiso_runtime_scheduler.c)
+target_include_directories(meiso_runtime_scheduler PUBLIC include)
+target_link_libraries(meiso_runtime_scheduler PUBLIC meiso_runtime)
+meiso_enable_warnings(meiso_runtime_scheduler)
+
 add_library(
     meiso_wifi_telemetry_profile
     profiles/wifi-telemetry-v0/wifi_telemetry.c
@@ -82,6 +87,20 @@ target_include_directories(
 )
 target_link_libraries(meiso_composition_scene_profile PUBLIC meiso_runtime)
 meiso_enable_warnings(meiso_composition_scene_profile)
+
+add_library(
+    meiso_composition_session_v2_profile
+    profiles/composition-scene-lab-v0/composition_session_v2.c
+)
+target_include_directories(
+    meiso_composition_session_v2_profile
+    PUBLIC profiles/composition-scene-lab-v0
+)
+target_link_libraries(
+    meiso_composition_session_v2_profile
+    PUBLIC meiso_composition_scene_profile meiso_wifi_telemetry_profile
+)
+meiso_enable_warnings(meiso_composition_session_v2_profile)
 
 add_library(
     meiso_four_kind_lab_protocol
@@ -239,6 +258,16 @@ target_link_libraries(
 )
 meiso_enable_warnings(meiso_composition_coordinator_test)
 
+add_executable(
+    meiso_composition_tx_scheduler_test
+    tests/test_composition_tx_scheduler.c
+)
+target_link_libraries(
+    meiso_composition_tx_scheduler_test
+    PRIVATE meiso_runtime_scheduler meiso_composition_session_v2_profile
+)
+meiso_enable_warnings(meiso_composition_tx_scheduler_test)
+
 if(TARGET meiso_posix_tcp_adapter)
     add_executable(meiso_posix_tcp_test tests/test_posix_tcp.c)
     target_link_libraries(
@@ -358,6 +387,10 @@ add_test(
 add_test(
     NAME meiso_composition_coordinator_test
     COMMAND meiso_composition_coordinator_test
+)
+add_test(
+    NAME meiso_composition_tx_scheduler_test
+    COMMAND meiso_composition_tx_scheduler_test
 )
 if(TARGET meiso_posix_tcp_test)
     add_test(NAME meiso_posix_tcp_test COMMAND meiso_posix_tcp_test)
