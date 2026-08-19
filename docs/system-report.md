@@ -235,11 +235,28 @@ endpoint/6 条新 route、PresentationPlan/Status、canonical Mesh、SceneDesire
 RenderResult。literal/negative/max-boundary Host test 验证 920-byte combined catalog、3812-byte State、
 6460-byte Stream 和与 Wi-Fi namespace disjoint；fresh strict Debug 与 ASan/UBSan 全套均通过。
 
-该 evidence 只支持 `C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED`。当前 Runtime v2 尚无
-Blob carriage并明确拒绝 IMMUTABLE route，故 remote combined catalog 仍不可接受；下一 Runtime
-wire version、portable coordinator、Host editor 与 target backend 均未实现。本轮没有合并外部 Host
-compositor、旧本地素材、vendor SDK 或二进制，也没有 K230D build/run 或 physical presentation
-evidence。
+commit `4bccc12` 的 `scene_store.h/.c` 与 `meiso_composition_scene_resource_test` 又完成 C1 Resource
+fixture：真实
+`MeisoBlobStore`、Host/Edge StatePublisher/Replica 与 `MeisoStream` 贯通 cube commit、完整 scene
+snapshot、candidate、显式 frame-boundary activate、SceneStatus 和 deterministic RenderResult；新 State
+owner 会清 world、candidate、store内last-result引用与Blob visibility，只有重新 publish 或 verified
+duplicate 后才可引用底层 cache；外部Stream queue/history不由store清理。
+missing/invalid Blob、新 desired supersede、33 objects、9 meshes、16-slot publication、8+8 distinct
+logical mesh boundary、State duplicate/stale/conflict、4-slot Stream overflow与world/Blob授权
+no-resurrection均有确定性vector。fresh strict与ASan+UBSan全套均CTest 21/21。
+
+该 evidence 支持 `C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED` 与
+`C1 RESOURCE SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY`。当前macOS arm64 ABI中，Blob、desired
+publisher/replica、actual publisher/replica、result Stream、scene metadata arena依次为
+4,720,304 / 3,920 / 3,856 / 384 / 320 / 32,272 / 31,640 bytes；均要求8-byte alignment，合计
+4,792,696 bytes，memory domain是Host test process的CPU-visible heap，不含GPU/CMA arena。CPU
+fixture零拷贝借用已发布 Blob，
+`resident_mesh_bytes` 是 canonical vertex+index 的逻辑引用量；fake renderer流式生成 hash/thumbnail，
+所以如实报告 target/job `0/0`。它没有证明独立 4 MiB GPU resident arena、renderer target/CMA分配。
+当前 Runtime v2 尚无 Blob carriage并明确拒绝 IMMUTABLE route，故 remote combined catalog仍不可接受；
+下一 Runtime wire version、portable coordinator、Host editor 与 target backend均未实现。本轮没有合并
+外部 Host compositor、旧本地素材、vendor SDK 或二进制，也没有 K230D build/run 或 physical
+presentation evidence。
 
 ## K230D lab evidence
 

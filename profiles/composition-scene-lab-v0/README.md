@@ -1,6 +1,6 @@
 # Composition scene lab v0
 
-> 状态：`C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED / NO RUNTIME-BLOB OR BOARD INTEROP`。
+> 状态：`C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED / C1 RESOURCE SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY / NO RUNTIME-BLOB OR BOARD INTEROP`。
 > 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
@@ -10,7 +10,7 @@
 Host 前端创建 canonical triangle mesh，修改 object transform 与 camera；K230D Edge 在本地保留
 一个有界 scene world、离屏渲染，并以 Stream 返回结果 metadata 和小尺寸 raw thumbnail。
 
-本实验只证明：
+本实验完成后的最终验收范围是：
 
 - Host Blob、Host State、Edge actual State、Edge Stream 组成一个真实 Edge-native scene；
 - 完整 world snapshot 在 Edge 原子应用，mesh/buffer/object storage 全部有界；
@@ -373,6 +373,38 @@ Host/Edge loopback 用 deterministic TX-busy injection 证明 slot bound；K230D
 coordinator 的 digest/token/state-machine enforcement、Host frontend、K230D store/renderer 或 board
 interop。Runtime v2 仍必须拒绝本 Profile 的 IMMUTABLE route。
 
+## C1 Resource fixture evidence
+
+[`scene_store.h`](scene_store.h) 与 [`scene_store.c`](scene_store.c) 是无heap、无driver的
+caller-owned Resource fixture；测试不创建Session/Runtime handle，也不走Session/Runtime wire。
+commit `4bccc12` 的 `meiso_composition_scene_resource_test` 使用真实Core primitive验证：
+
+- canonical Mesh用完整bytes的SHA-256作为ContentId；commit前不可见，bad digest或invalid Mesh不可
+  授权；new desired失败会淘汰旧candidate但不改变old active；
+- Host desired StatePublisher→Edge StateReplica→SceneStore，Edge SceneStatus StatePublisher→Host
+  StateReplica，RenderResult进入4-slot `MeisoStream`；没有mock Resource合同；
+- cube→TRS move→camera move→second Mesh→shared Mesh→delete保持精确owner/version/world identity；
+  disable按expected active ref原子退役并停止render；mesh/camera/TRS各自独立改变full-target SHA-256
+  与thumbnail；
+- 新State owner清active/candidate/observation、store内last-result引用与per-owner Blob visibility；底层
+  immutable cache可留，但只有新owner重新publish或verified duplicate后才能重新引用；world
+  generation在同一Edge store lifetime内保持单调。外部Stream queue/history不由store清理；
+- 33 objects、9 unique meshes、16 publication slots、8+8 distinct logical mesh bytes、State
+  duplicate/stale/conflict、late Blob、output alias、Stream duplicate/stale/epoch mismatch与DROP_OLDEST
+  都有确定性vector。
+
+当前macOS arm64 ABI记录的exact caller arenas为：BlobStore 4,720,304 bytes、desired
+publisher/replica 3,920/3,856、actual publisher/replica 384/320、result Stream 32,272、scene store
+31,640；均要求8-byte alignment，合计4,792,696 bytes。它们均由Host test process heap提供且
+CPU-visible，没有GPU/CMA arena。`resident_mesh_bytes` 是每world引用的
+canonical vertex+index逻辑字节，8+8边界为4,193,280 bytes；
+CPU fixture从BlobStore零拷贝读取。fake renderer逐pixel流式计算320×240 target SHA-256和64×48
+RGB565 thumbnail，不持有renderer target或job，所以SceneStatus中target/job如实为`0/0`。
+
+fresh strict build与ASan+UBSan全套均CTest 21/21。该证据不证明独立4 MiB GPU resident arena、
+2个target set/CMA allocation、Composition token/coordinator、Runtime Blob carriage、Session、K230D
+backend或display。
+
 ## Required sequence
 
 ```text
@@ -414,6 +446,7 @@ Plan 可早于 Blob/scene 到达，但只能保持 preparing；它不能让 inco
   no-resurrection。
 
 最小 success transcript 是：`cube publish → one object → object move → camera move → second
-object sharing same mesh → delete first → scene disable`。每一步 Host 收到新 applied SceneDesired
-version 和不同或按 oracle 预期相同的 result SHA-256/thumbnail；共享 mesh 不重复占 published Blob
-slot。全过程同时保持 Wi-Fi Stream，且没有跨 endpoint gate、epoch 或 payload routing。
+object sharing same mesh → delete first → scene disable`。cube publish只验证Blob可见；从one object
+到delete的每个scene snapshot步骤，Host收到新applied SceneDesired version和不同或按generator预期
+相同的result SHA-256/thumbnail；disable验证STOPPED且不再产生result。共享mesh不重复占published
+Blob slot。全过程同时保持Wi-Fi Stream，且没有跨endpoint gate、epoch或payload routing。

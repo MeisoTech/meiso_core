@@ -1,7 +1,8 @@
 # Edge local compositor v0 开发方案
 
-> 状态：`DESIGN / NOT_IMPLEMENTED`。这是 Composition 的实现计划，不是新产品规范或 target
-> evidence；通用语义由[Composition 契约](composition.md)拥有。
+> 状态：`DESIGN / C0-C1 HOST FIXTURE COMPLETE / COORDINATOR+TARGET NOT IMPLEMENTED`。这是
+> Composition 的实现计划，不是新产品规范或target evidence；通用语义由
+> [Composition 契约](composition.md)拥有。
 
 ## 决策
 
@@ -231,16 +232,27 @@ IMMUTABLE route，故 C0 不证明 remote combined catalog。
 
 ### C1 — Resource-only in-memory fixture
 
+状态：`COMPLETE / RESOURCE SEMANTIC VERIFIED / LOGICAL ADMISSION ONLY`。
+
 - 直接使用 `MeisoBlobStore`、Host StatePublisher/Edge StateReplica、Edge StatePublisher/Host
   StateReplica 与 `MeisoStream`；不引入 Session 或 Runtime wire；
 - 发布一个 cube mesh Blob，再发布引用它的 camera/object snapshot；fake renderer 生成由 mesh、
   transform、camera 决定的 deterministic result/thumbnail；
-- scene store 固定每 world `32 objects / 8 unique meshes`，并为 active+candidate worst case 保留
-  `16 Blob slots / 4 MiB resident mesh / 2 render targets / 4 result queue slots`；所有 arena 由
-  调用者提供。
+- scene store固定每 world `32 objects / 8 unique meshes`，借用 caller-owned 16-slot BlobStore，并以
+  logical vertex+index bytes执行 active+candidate 4 MiB admission；result queue固定4 slots；
+- CPU fixture零拷贝借用 Blob bytes，streaming fake renderer 不持有 target/job，因此 truthfully报告
+  target/job `0/0`。独立 GPU resident、2 target sets与CMA/backend arena必须在K1实际预分配后另验。
 
 完成条件：Blob 未 commit 时 scene 不应用；完整 world 原子替换；结果引用精确 applied State
-owner/version；duplicate/stale/conflict/capacity/overflow vectors 全部通过，无 heap、socket 或 driver。
+owner/version；duplicate/stale/conflict/capacity/overflow vectors 全部通过；scene store自身不调用heap，
+fixture只在caller一侧分配测试arena，且不使用socket或driver。
+
+实现证据：`scene_store.h/.c` 提供 bounded owner/Blob visibility、canonical SHA-256 Mesh verifier、
+prepare/observation、CAS activate、disable、status与deterministic fake render；
+`meiso_composition_scene_resource_test` 直接串起Core Blob/State/Stream。fresh strict与ASan+UBSan全套
+均21/21。当前macOS arm64 ABI中全部caller arena合计4,792,696 bytes、alignment均为8；其中store
+arena为31,640 bytes。memory domain是Host test process的CPU-visible heap；logical resident边界不另
+分配GPU/CMA arena，external Stream清理留给C2/integration。
 
 ### C2 — Portable Composition coordinator
 

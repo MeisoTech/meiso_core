@@ -71,8 +71,9 @@ scanout，renderer 只产生 candidate/failure，Core 不变。模块与 K230D b
 [Edge local compositor v0](docs/edge-local-compositor-v0.md)。首个
 [Composition scene lab v0](profiles/composition-scene-lab-v0/README.md) C0 已实现 exact composite
 Profile 的 IDs/capabilities、PresentationPlan/Status、Mesh、SceneDesired/Status 与 RenderResult
-codec，并以 literal Host wire vectors 验证；它仍没有 Runtime Blob carriage、coordinator、Host
-editor、K230D renderer 或 physical presentation evidence。
+codec；C1 又以真实 Core Blob/State/Stream primitive 建立 caller-owned 的 active+candidate world
+fixture 和 deterministic off-screen generator。它仍没有 Runtime Blob carriage、coordinator、Host
+editor、K230D renderer、GPU/target allocation 或 physical presentation evidence。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
