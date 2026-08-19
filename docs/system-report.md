@@ -51,6 +51,14 @@ source tree 的
 `ctest --test-dir <build> -N` 与实际 `ctest --output-on-failure` 输出为准；本报告不把测试总数
 固化为长期事实。
 
+GitHub Actions run `32289451531` 对 source
+`5a53790d44be9a8097e37ebab05bf8f2cb9b8e0e` 完成四个 blocking job：Ubuntu 24.04 GCC Debug、
+macOS 15 AppleClang Release、Ubuntu 24.04 Clang ASan+UBSan，以及 Python warnings-as-errors/
+Node.js 的两个 Dashboard 与 Markdown link gate；全部成功。每个 native job 先单独执行 retained
+four-kind integration fixture，再执行完整 CTest。该 CI 证明对应 hosted runner/source 的 build、
+Host tests 与 sanitizer 路径，不证明 K230D cross-build、board execution、target-in-loop、Windows、
+长稳或产品性能。
+
 当前 portable `meiso_runtime` 依赖 `meiso_core`，不把 Runtime 反向纳入 Core。Source v0
 永久绑定 READY Session，使用双 bank 原子 catalog；endpoint 内联 capability，route 绑定
 EndpointId/incarnation、Core Resource descriptor 与 facet。当前 catalog 只接受 Host-owned
