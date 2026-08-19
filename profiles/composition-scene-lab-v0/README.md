@@ -1,7 +1,7 @@
 # Composition scene lab v0
 
-> 状态：`EXPERIMENT CONTRACT / NOT IMPLEMENTED / NO INTEROPERABILITY CLAIM`。
-> 本页固定首个 Edge-native scene 实验的 selected Profile、Resource Graph、容量和验收；不重定义
+> 状态：`C0 CODEC IMPLEMENTED / HOST PROFILE-WIRE VERIFIED / NO RUNTIME-BLOB OR BOARD INTEROP`。
+> 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
 
@@ -22,9 +22,9 @@ durable world persistence、通用 scene graph、任意 material/shader、animat
 
 ## Exact composite Session Profile
 
-Session 只有一个 `MeisoProfileRef`。本实验必须新增并冻结一个 composite ProfileRef，符号名为
-`K230_SCN/_LAB_V00:v1`；实现工作单元在写 codec 前给它分配唯一 128-bit ProfileId，并以 literal
-handshake golden bytes 固定。它不是同时协商两个 Profile，而是精确包含：
+Session 只有一个 `MeisoProfileRef`。本实验 composite ProfileRef 已冻结为
+`{0x4b3233305f53434e, 0x5f4c41425f563030}:v1`（ASCII `K230_SCN/_LAB_V00`）。
+它不是同时协商两个 Profile，而是精确包含：
 
 1. [`wifi-telemetry-v0`](../wifi-telemetry-v0/README.md) 的 endpoint/schema/行为；
 2. 本页的 presentation endpoint；
@@ -39,7 +39,7 @@ combined board acceptance。
 | limit | 值 / 下界 |
 |---|---:|
 | `max_runtime_payload_bytes` | 8192 |
-| `max_frame_bytes` | 至少 `8192 + MEISO_SESSION_WIRE_HEADER_SIZE` |
+| `max_frame_bytes` | 至少 8236（8192 payload + 32-byte Runtime prefix + 12-byte Session header） |
 | `max_registry_entries` | 至少 12 |
 | Runtime `max_endpoints` | 至少 3 |
 | Runtime `max_endpoint_history` | 至少 3 |
@@ -52,20 +52,25 @@ combined board acceptance。
 
 ## Combined Resource Graph
 
-Endpoint/Resource/schema 使用独立的 `WIFI_TLM/*` 与 `K230_SCN/*` namespace。下列符号名在 C0
-转为非零 128-bit constant；任何 collision 使完整 catalog reject。
+Endpoint/Resource/schema 使用独立的 `WIFI_TLM/*` 与 `K230_SCN/*` namespace。所有 composition
+identifier 的 high word 分别为 `K230_SCN` 或 `K230_SCH`；low word 如下，均按 8-byte ASCII packed
+为非零 `u64`。任何 endpoint/resource/schema collision 使完整 catalog reject。
 
 | endpoint | facet | owner/kind | ResourceId | schema | 方向 |
 |---|---|---|---|---|---|
 | `WIFI_TLM/ENDPOINT` | desired | Host/State | 既有 | 既有 | Host→Edge |
 |  | actual | Edge/State | 既有 | 既有 | Edge→Host |
 |  | data | Edge/Stream | 既有 | 既有 | Edge→Host |
-| `K230_SCN/PRESENT` | desired | Host/State | `K230_SCN/PLAN_DES` | `K230_SCH/PLAN_V00:v1` | Host→Edge |
-|  | actual | Edge/State | `K230_SCN/PLAN_ACT` | `K230_SCH/PSTAT_00:v1` | Edge→Host |
-| `K230_SCN/SCENE` | desired | Host/State | `K230_SCN/SCN_DES` | `K230_SCH/SCENE_00:v1` | Host→Edge |
-|  | actual | Edge/State | `K230_SCN/SCN_ACT` | `K230_SCH/SSTAT_00:v1` | Edge→Host |
-|  | immutable | Host/Blob | `K230_SCN/MESH_BLB` | `K230_SCH/MESH_V00:v1` | Host→Edge |
-|  | data | Edge/Stream | `K230_SCN/RES_STR` | `K230_SCH/RRES_V00:v1` | Edge→Host |
+| `PRESENT_` | desired | Host/State | `PLAN_DES` | `PLAN_V00:v1` | Host→Edge |
+|  | actual | Edge/State | `PLAN_ACT` | `PSTAT_00:v1` | Edge→Host |
+| `SCENE___` | desired | Host/State | `SCN_DES\0` | `SCENE_00:v1` | Host→Edge |
+|  | actual | Edge/State | `SCN_ACT\0` | `SSTAT_00:v1` | Edge→Host |
+|  | immutable | Host/Blob | `MESH_BLB` | `MESH_V00:v1` | Host→Edge |
+|  | data | Edge/Stream | `RES_STR\0` | `RRES_V00:v1` | Edge→Host |
+
+Presentation/Scene capability schema low words are `PCAP_V00`/`SCAP_V00`，版本均为 1。C0 builder
+只构造上述 2 endpoints/6 routes；combined integration 必须再加入既有 Wi-Fi 1 endpoint/3 routes，
+并运行 identifier disjoint check。combined catalog canonical encoded size 为 920 bytes。
 
 两个新 endpoint 的 capability 都内联于 catalog；source v0 不增加第二份 capability State。
 Presentation capability 只允许一个 required `EDGE_NATIVE Projection` layer，引用 scene endpoint；
@@ -86,6 +91,47 @@ world prepare 前到达；Blob publication 本身也不激活 object。只有 `S
 Session 的 opaque Runtime payload 内加入 Blob carriage 和 owner/direction 校验。不得把新 frame
 追加到 v2；v2 literal bytes、六类 frame meaning 与 Core 均不变。combined remote catalog 在 R1
 前不得宣称可接受。
+
+## C0 canonical wire
+
+所有整数使用 big-endian，长度必须 exact，表中未分配字节必须为零。`float32` 要求 IEEE-754
+binary32；encoder/decoder 均拒绝 NaN、±Inf、负零和 subnormal。FOV 单位为 degree；quaternion
+顺序 `xyzw`、平方范数误差不超过 `2^-12`，canonical hemisphere 依 `w,z,y,x` 第一个非零分量为正。
+codec 不分配 heap，不以 `sizeof(C struct)` 作为 wire size。
+
+Capability 是 catalog inline literal：
+
+| payload | bytes | offsets / meaning |
+|---|---:|---|
+| `PCAP` | 32 | `0 magic:u32, 4 version:u16, 6 required_layers:u16=1, 8 width:u16=320, 10 height:u16=240, 12 color:u16=RGBA8888, 14 depth:u16=DEPTH32, 16 max_hz:u16=10, 18 reserved:2, 20 max_offline_lease_ms:u32=5000, 24 reserved:8` |
+| `SCAP` | 52 | `0 magic:u32, 4 version:u16, 6 flags:u16=0, 8 objects:u32=32, 12 unique_meshes:u32=8, 16 blob_max:u32=262144, 20 published_slots:u32=16, 24 staging:u32=1, 28 chunk:u32=4096, 32 resident_world:u32=2097152, 36 resident_total:u32=4194304, 40 thumb_w:u16=64, 42 thumb_h:u16=48, 44 thumb_format:u16=RGB565, 46 max_hz:u8=10, 47 result_slots:u8=4, 48 jobs:u8=2, 49 target_sets:u8=2, 50 reserved:2` |
+
+State/Blob/Stream Profile suffix：
+
+| suffix | bytes | fixed header / records |
+|---|---:|---|
+| `PLN0` PresentationPlan | 128 | `0 magic:u32, 4 version:u16, 6 flags:u16, 8 plan_generation:u64, 16 capability_generation:u64, 24 candidate_sha256:32, 56 scene_endpoint:16, 72 source:u8, 73 geometry:u8, 74 required:u8=1, 75 token_echo_present:u8, 76 target_w/h:u16×2, 80 color/depth:u16×2, 84 max_hz:u16, 86 reserved:2, 88 offline_lease_ms:u32, 92 reserved:4, 96 token_echo:32` |
+| `PST0` PresentationStatus | 160 | `0 magic:u32, 4 version:u16, 6 reserved:2, 8 capability_generation:u64, 16 candidate_generation:u64, 24 candidate_sha256:32, 56 active_generation:u64, 64 active_sha256:32, 96 candidate_state:u8, 97 active_state:u8, 98 reason:u16, 100 token_present:u8, 101 reserved:3, 104 token:32, 136 target_w/h:u16×2, 140 color/depth:u16×2, 144 scene_endpoint:16` |
+| `MSH0` Mesh | `64 + vertices + indices`, max 262144 | `0 magic:u32, 4 version:u16, 6 flags:u16, 8 vertex_count:u32, 12 index_count:u32, 16 vertex_stride:u32=12|16, 20 vertex_bytes:u32, 24 index_bytes:u32, 28 reserved:4, 32 bounds_min:f32×3, 44 bounds_max:f32×3, 56 reserved:8`; records are BE `xyz[f32]` plus optional `RGBA8`, then BE `u32` indices |
+| `SCN0` SceneDesired | `112 + 112*object_count`, max 3696 | `0 magic:u32, 4 version:u16, 6 flags:u16=0, 8 count:u32, 12 reserved:4, 16 camera:96`; each object is `ObjectId:16, ContentId:36, space:u8, flags:u8, reserved:2, space_epoch:u64, position:f32×3, quat:f32×4, scale:f32×3, reserved:8` |
+| `SST0` SceneStatus | 112 | `0 magic:u32, 4 version:u16, 6 reason:u16, 8 active_plan:u64, 16 world:u64, 24 objects:u32, 28 meshes:u32, 32 blobs:u32, 36 target_slots:u32, 40 blob_bytes:u64, 48 resident_bytes:u64, 56 target_bytes:u64, 64 jobs:u32, 68 result_depth:u32, 72 last_epoch:u64, 80 last_sequence:u64, 88 reserved:24` |
+| `RRS0` RenderResult | 6304 | `0 magic:u32, 4 version:u16, 6 code:u16=COMPLETE, 8 evidence:u32, 12 objects/meshes:u16×2, 16 applied_owner:u64, 24 applied_version:u64, 32 active_plan:u64, 40 world:u64, 48 source_clock_epoch:u64, 56 start_ns:u64, 64 end_ns:u64, 72 target_w/h:u16×2, 76 color/depth:u16×2, 80 logical_color/depth_row_bytes:u32×2=1280, 88 full_target_sha256:32, 120 thumb_w/h:u16×2, 124 thumb_format:u16=RGB565, 126 reserved:2, 128 thumb_row_bytes:u32=128, 132 thumb_bytes:u32=6144, 136 reserved:24, 160 thumbnail:6144` |
+
+Camera record 为 `space:u8, projection:u8, reserved:6, space_epoch:u64, clock_epoch:u64,
+monotonic_ns:u64, position:f32×3, quat:f32×4, vertical_fov:f32, near:f32, far:f32,
+viewport_xywh:u16×4, reserved:16`。同一 SceneDesired 的 camera/object 必须使用同一非零 WORLD
+epoch。`ContentId` record 为 `algorithm:u16,digest_size:u8,reserved:u8,SHA-256:32`。
+
+`RGB565` pixel 是 BE `u16`，bit 15..11/10..5/4..0 分别为 R/G/B。RenderResult 的 SHA-256 域
+是恰好 `320*240*4` 个可见、row-major RGBA8888 bytes，不含 padding/depth；两个 logical row
+bytes 描述 canonical layout，K230 DMA/physical stride 仍为 backend 私有。Stream dependency v0 必须
+为空，因此最大 Runtime envelope 是 `12 + 144 + 6304 = 6460` bytes；SceneDesired 最大 envelope
+为 3812 bytes。
+
+`candidate_sha256` 是 canonical 128-byte `PLN0` 的 SHA-256，计算时 digest 字段、
+`token_echo_present` 与 token bytes 全部清零；token echo 不改变 candidate identity。codec 只验证
+shape/非零，Composition coordinator 必须复算。`capability_generation` 必须等于承载相应 endpoint
+capability 的 Runtime `catalog_generation`。
 
 ## Host State 与 Edge retained world
 
@@ -116,8 +162,9 @@ transform snapshot 替换旧 pending version，Edge 不承诺渲染每个编辑�
   viewport 落在 capability；错误不能部分应用；
 - ContentId 不存在时 candidate 为 `WAITING_BLOB`，不是用 placeholder 静默成功；迟到 Blob 只唤醒
   仍为 current desired 的 candidate；
-- absence 从新 active world 删除 object；unreferenced mesh 可按本地 eviction policy 释放，但 cache
-  命中不恢复 desired、plan 或授权；
+- absence 从新 active world 删除 object；C0/C1 使用的 Core BlobStore 不提供 eviction，已发布但
+  未引用 mesh 在同一 store lifetime 内继续占 slot。第 17 个不同 ContentId 明确
+  `BLOB_CAPACITY`；cache 命中或 duplicate publish 都不恢复 desired、plan 或授权；
 - same ContentId/same bytes 幂等，same ContentId/different bytes 是 integrity conflict；Blob 全长与
   SHA-256 commit 前不可见。
 
@@ -180,6 +227,23 @@ stable reason code
 MESH_BYTES_CAPACITY / BUFFER_CAPACITY / INVALID_SCENE / RENDERER_FAILED` 必须可区分。新 desired 被
 拒绝时 actual 仍可精确指出旧 applied desired/world 正在 RUNNING。
 
+Scene Runtime actual 与 suffix 的最小合法组合如下；未列组合由 coordinator 拒绝，codec 本身不
+承担跨字段状态机：
+
+| phase | Runtime canonical actual | SceneStatus suffix |
+|---|---|---|
+| disabled | `APPLIED, effective=false, STOPPED, epoch=0, reason=DISABLED` | 可保留旧 world 统计，但不再产 result |
+| preparing | `PENDING, effective=false, STARTING, epoch=0, reason=APPLYING` | `WAITING_BLOB` 或明确 capacity/validation reason |
+| running | `APPLIED, PRESENT, effective=true, RUNNING, epoch>0, reason=NONE` | `READY` 且 plan/world 非零 |
+| reconfigure pending | `PENDING, effective=true, RUNNING, old epoch, reason=APPLYING` | 仍描述旧 applied world；candidate 不冒充 active |
+| rejected with old world | `REJECTED, effective=true, RUNNING, old epoch` | 明确失败 reason，旧 world/result 可继续 |
+| failed without usable world | `FAILED, effective=false, FAILED, epoch=0` | 明确 `INVALID_SCENE/RENDERER_FAILED/capacity` |
+
+Presentation candidate 顺序是 `PREPARING -> PREPARED(token) -> ACTIVATION_PENDING(same token) ->
+ACTIVE`。PREPARED/ACTIVATION_PENDING 都要求非零 token、`reason=NONE`；Composition 在同一 frame
+transaction 原子切换 active plan 和 READY_CANDIDATE world，随后才允许 Scene actual 进入 RUNNING。
+Presentation/Scene actual 是两条独立 Core State，但 coordinator 必须保证上述联合边界。
+
 Wi-Fi 与 scene 的 actual、production epoch/high-water/data gate 完全独立；二者可使用相同数值但
 identity 不同。disable scene 不停止 Wi-Fi，disable Wi-Fi 不改变 active world。
 
@@ -195,7 +259,7 @@ result code / evidence flags
 object_count + unique_mesh_count
 render start/end source monotonic time
 color/depth target extent and format
-full off-screen target checksum
+full off-screen target SHA-256
 thumbnail width=64 / height=48 / format=RGB565 / exact 6144 bytes
 ```
 
@@ -244,11 +308,10 @@ B_mesh_resident(world) = sum over unique meshes referenced by world(
 B_mesh_resident(active) + B_mesh_resident(candidate)
   <= B_mesh_resident_total_max
 
-stride_color = align(320 * 4, A_scanout)
-stride_depth = align(320 * 4, A_depth)
-B_targets = K_target * (
-    align(stride_color * 240, A_buffer)
-  + align(stride_depth * 240, A_buffer))
+logical_color_row_bytes = logical_depth_row_bytes = 320 * 4
+B_targets_private = K_target * (
+    align(private_color_stride * 240, A_buffer)
+  + align(private_depth_stride * 240, A_buffer))
 
 B_blob_arena = meiso_blob_store_memory_required(
     descriptor.max_payload = B_blob_max,
@@ -260,17 +323,22 @@ B_compositor_total = B_session_arena + B_runtime_arena
                    + B_plan_and_scene_state
                    + B_blob_arena
                    + B_mesh_resident_total_max
-                   + B_targets
+                   + B_targets_private
                    + J_render * B_job
                    + B_renderer_scratch
 ```
+
+v0 capability admission 要求 backend 的 private color/depth stride 也可取 1280，且两个 target set
+的已分配 bytes 不超过 1228800；仅 allocation 起始地址可以额外对齐。需要更大 row padding 的 backend
+必须拒绝本 Profile，而不是在 `SceneStatus.target_bytes` 中发布超出 capability 的值。
 
 C1/K1 启动前必须记录每一项 exact bytes、alignment、memory domain 与合计；任何 arena/CMA/heap
 申请失败都在启用 scene 前失败。不能先接受 desired 再依赖无界 malloc。`O_max`、`M_max`、
 `B_blob_max`、两个 resident-mesh budget 与 target layout 任一改变都要求新 capability generation；
 超限 desired/Blob 不改变旧 active world。一个已占满 8 个 mesh 的 active world 切换到 8 个完全
 不同 mesh 的 candidate 必须在上述 16 slots/4 MiB worst-case budget 内成功，不能把 Profile 内合法
-snapshot 因隐藏双代开销拒绝。
+snapshot 因隐藏双代开销拒绝；该切换后 store 已用满，继续引入新 ContentId 可合法返回
+`BLOB_CAPACITY`。后续若增加 eviction，必须另行冻结与 active/candidate/published visibility 的关系。
 
 ## TX fairness
 
@@ -286,6 +354,24 @@ snapshot 因隐藏双代开销拒绝。
 
 Host/Edge loopback 用 deterministic TX-busy injection 证明 slot bound；K230D mixed run 同时传一个
 最大 Blob、10 Hz thumbnail 与 1 Hz Wi-Fi sample，Wi-Fi 无 scheduler-induced silent starvation。
+
+## C0 executable evidence
+
+[`composition_scene.h`](composition_scene.h) 与 [`composition_scene.c`](composition_scene.c) 是 C0
+唯一 codec 实现；`meiso_composition_scene_test` 冻结：
+
+- exact Profile/endpoint/resource/schema IDs、32/52-byte capabilities、6 composition routes 和与 Wi-Fi
+  namespace disjoint；
+- Plan/PresentationStatus/Mesh/SceneDesired/SceneStatus/RenderResult literal bytes；每个 fixed codec 的
+  every-prefix truncation、trailing byte、reserved-byte mutation、capacity 与 no-partial-output；
+- independently calculated Plan SHA-256 preimage/digest vector、binary32/quat/camera/mesh bounds/index、
+  32-object/8-mesh/262144-byte Mesh/6304-byte result boundaries；
+- compile-time 920-byte combined catalog、3812-byte Scene State、6460-byte result Stream 与 8236-byte
+  Session frame envelope。
+
+该证据只证明 portable Host codec/wire oracle；尚未证明 Runtime v3 Blob carriage、Composition
+coordinator 的 digest/token/state-machine enforcement、Host frontend、K230D store/renderer 或 board
+interop。Runtime v2 仍必须拒绝本 Profile 的 IMMUTABLE route。
 
 ## Required sequence
 
@@ -329,5 +415,5 @@ Plan 可早于 Blob/scene 到达，但只能保持 preparing；它不能让 inco
 
 最小 success transcript 是：`cube publish → one object → object move → camera move → second
 object sharing same mesh → delete first → scene disable`。每一步 Host 收到新 applied SceneDesired
-version 和不同或按 oracle 预期相同的 result checksum/thumbnail；共享 mesh 不重复占 published Blob
+version 和不同或按 oracle 预期相同的 result SHA-256/thumbnail；共享 mesh 不重复占 published Blob
 slot。全过程同时保持 Wi-Fi Stream，且没有跨 endpoint gate、epoch 或 payload routing。
