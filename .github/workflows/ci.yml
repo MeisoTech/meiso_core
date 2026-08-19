@@ -101,6 +101,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Check Markdown links
+        run: python devtools/check_markdown_links.py
+
       - name: Test four-kind dashboard
         working-directory: devtools/web/four_kind_dashboard
         run: python -m unittest discover -v
