@@ -171,6 +171,18 @@ replacement、reconnect、backpressure、fair-contention、K230/renderer、性�
 fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding；GitHub Actions run
 `32316527393`四个job全部success。
 
+public commit `9daa7f9` 的R2b1沿用上述同一真实TCP Session/catalog/Plan/cube：所有desired/actual
+State都完成offer→replica commit→accept→publisher confirmed闭环并保持byte-exact。Scene从world 1/
+RenderResult sequence 1依次经过TRS world 2/sequence 3、camera world 3/sequence 4、第二个共享cube
+object world 4/sequence 5及删除首对象world 5/sequence 6；version 2 pending阶段仍可发布old-world
+sequence 2。Scene actual epoch `43..46`使old/new data gate严格在actual前后切换，Plan 1 ref/digest、
+Blob count/bytes/publication/transfer high-water全程不变。prefix-only Presentation desired v3先以drain
+未完成返回`WAITING_DRAIN`且coordinator/SceneStore原字节不变，drained后退役；Presentation与Scene
+actual精确进入`STOPPED`，RenderResult被拒为`ROUTE_NOT_ACTIVE`，Wi-Fi仍以epoch `77`发送sequence
+`2`。Debug与ASan+UBSan full CTest均25/25，analyzer 0 finding；Actions run `32317542841`四个job
+全部success。该证据只证明same-Session happy lifecycle，不证明catalog replacement、RST/reconnect、
+max-Blob、wrong Profile、backpressure、K230/renderer、性能或transport security。
+
 ## Blob route 与可见性
 
 Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的

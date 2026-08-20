@@ -365,11 +365,28 @@ fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding；GitHub 
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback happy path），不是
 K230、renderer、physical output、性能或安全证据。
 
-### R2b1 — Combined fault/recovery（待实现）
+### R2b1 — Same-Session lifecycle transcript（完成）
+
+public commit `9daa7f9` 沿用R2b0的同一个真实TCP Session、catalog、Plan 1及cube publication，完成：
+
+- world 1/RenderResult sequence 1；desired v2 pending时old-world exact sequence 2；TRS world 2/
+  sequence 3；camera world 3/sequence 4；第二个共享cube对象world 4/sequence 5；删除首对象world 5/
+  sequence 6；
+- 所有desired/actual State闭环且byte-exact；PlanRef/digest不变；actual epoch `43..46`分别验证actual
+  前new epoch拒绝与actual后old epoch拒绝，拒绝不消费sequence；
+- Blob count/bytes/publication/duplicate/transfer high-water及idle状态前后不变，没有Blob重传；
+- prefix-only Presentation desired v3先返回`WAITING_DRAIN`且Coordinator/SceneStore raw zero-diff；
+  drained后退役，Presentation与Scene发布exact `STOPPED` actual，SceneStatus为stable `NONE`；
+- RenderResult随后得到`ROUTE_NOT_ACTIVE`，Wi-Fi仍以epoch `77`发送sequence `2`。
+
+fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；GitHub Actions run
+`32317542841`四个job全部success。该证据只覆盖same-Session happy lifecycle。
+
+### R2b2 — Combined fault/recovery（待实现）
 
 - scene-only或wifi-only Profile对composite peer的exact `PROFILE_MISMATCH`；
-- catalog replacement、断线重建Session、旧route/epoch拒绝与两组desired重发；
-- backpressure、双方data同时ready时的fair-contention stress与bounded failure paths；
+- catalog replacement、真实RST/reconnect、旧route/epoch拒绝与两组desired重发；
+- max-Blob、backpressure、双方data同时ready时的fair-contention stress与bounded failure paths；
 - Host editor、K230/K1 target、renderer/present backend与physical output另行验证。
 
 ### H1 — Host editor/devtool

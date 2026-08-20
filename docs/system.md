@@ -158,7 +158,10 @@ MRT0 v3 并允许 Host→Edge Blob；R2a进一步完成exact 3/9/920 combined bu
 R2b0又在真实`127.0.0.1` AF_INET `SOCK_STREAM`上用双方nonblocking POSIX adapter、17-byte I/O与双方
 scheduler贯通Blob→Core publish→显式visibility、Scene/Plan→C2 ACTIVE及两条exact Stream route，形成
 loopback happy-path semantic/wire/transport evidence。它仍不覆盖wrong Profile、catalog replacement、
-reconnect、backpressure、fair-contention stress、Host editor或K230D renderer。
+reconnect、backpressure、fair-contention stress、Host editor或K230D renderer。R2b1又在同一真实TCP
+Session内保持Plan与cube publication不变，完成TRS、camera、共享mesh新增对象、删除对象、actual
+epoch cut、drained disable及独立Wi-Fi continuation；catalog replacement、RST/reconnect、max-Blob与
+target仍未覆盖。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

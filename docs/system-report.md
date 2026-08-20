@@ -331,10 +331,30 @@ Wi-Fi actual `77`、Scene actual `42`、Presentation actual `41`；`WIFI_TLM/DAT
 `177`/sequence `1`，`K230_SCN/RES_STR` Stream为epoch `417`/sequence `1`。
 
 fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding。GitHub Actions run
-`32316527393`已完成，四个job全部success。该证据严格标记为
-`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback happy path）；它没有
-覆盖wrong Profile、catalog replacement、reconnect、backpressure、fair-contention stress，也没有
-证明K230/K1 build/run、Hz/latency/jitter/throughput/performance、Host editor、renderer backend、
+`32316527393`已完成，四个job全部success。
+
+public commit `9daa7f9` 已push到`main`与`rain/core-session-v0`；它在同一真实TCP Session、catalog、
+Plan 1和已发布cube上继续完成R2b1 lifecycle。
+所有desired/actual State均通过offer、replica commit、accept与publisher confirmation闭环，并保持
+byte-exact。transcript依次固定：world 1/RenderResult sequence 1；Scene desired v2 pending期间old-world
+exact sequence 2；TRS world 2/sequence 3；camera world 3/sequence 4；第二个共享cube对象world 4/
+sequence 5；删除首对象后的world 5/sequence 6。Plan 1的PlanRef与digest始终不变；Scene actual
+production epoch `43..46`分别在actual提交前拒绝new epoch、提交后拒绝old epoch，且拒绝不消费
+Stream sequence。
+
+整个reconfigure链没有重传Blob：BlobStore count/bytes/publications/duplicates、Host/Edge transfer
+high-water及idle flags前后不变，publication仍只有一次。最后发送8-byte prefix-only Presentation
+desired v3；未drain时`WAITING_DRAIN`并验证Coordinator与SceneStore arena raw zero-diff，drained后
+原子退役。Presentation与Scene actual均byte-exact进入`STOPPED`，SceneStatus稳定为reason `NONE`、
+无active plan/world/object；随后RenderResult得到`ROUTE_NOT_ACTIVE`，而Wi-Fi仍以production epoch
+`77`发送sequence `2`。fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；GitHub
+Actions run `32317542841`四个job全部success。
+
+R2b0/R2b1证据严格标记为
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback same-Session happy
+lifecycle）；它没有覆盖wrong Profile、catalog replacement、RST/reconnect、max-Blob、backpressure、
+fair-contention stress，也没有证明K230/K1 build/run、Hz/latency/jitter/throughput/performance、Host
+editor、renderer backend、
 GPU/target/job/CMA、transport security、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
 Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。本轮也没有合并外部Host
 compositor、旧本地素材、vendor SDK或二进制。
@@ -404,9 +424,10 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition R2b1的wrong-Profile、catalog replacement、reconnect、backpressure与fair-contention
+- Composition R2b2的wrong-Profile、catalog replacement、RST/reconnect、max-Blob、backpressure与fair-contention
   fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
-  happy-path semantic/wire/transport evidence，R2a已有portable builder/fair scheduler evidence，C2
+  happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2a已有
+  portable builder/fair scheduler evidence，C2
   coordinator与R1 Runtime v3 Blob carriage也已有Host evidence，但没有target interoperability、
   offline lease执行或physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；

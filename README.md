@@ -89,7 +89,12 @@ happy-path loopback：真实`127.0.0.1` AF_INET `SOCK_STREAM`两端使用nonbloc
 Session贯通3 endpoint/9 route/920-byte catalog、双方R2a scheduler、cube Blob→Core publish→显式
 Scene visibility、Scene/Plan State→C2 `ACTIVE`、独立Wi-Fi/RenderResult Stream。它只支持loopback
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`；fresh Debug与ASan+UBSan CTest均
-25/25，clang analyzer为0 finding，GitHub Actions run `32316527393`四个job全部success。R2b1的negative/reconnect/
+25/25，clang analyzer为0 finding，GitHub Actions run `32316527393`四个job全部success。public commit
+`9daa7f9` 又在同一真实TCP Session中完成R2b1 lifecycle：保持PlanRef/digest与cube Blob publication
+不变，依次得到world/RenderResult sequence `1/1`、TRS `2/3`、camera `3/4`、共享cube的第二对象
+`4/5`、删除首对象`5/6`，并验证pending old result `1/2`、actual epoch `43..46`前后gate、drained
+prefix-only disable及Wi-Fi epoch `77`/sequence `2`继续。Debug与ASan+UBSan均25/25，analyzer 0；
+Actions run `32317542841`四个job全部success。R2b2的catalog/RST/reconnect/max-Blob/wrong-profile/
 backpressure、Host editor、K230D/renderer backend、GPU/target allocation、offline lease执行与physical
 presentation仍未验证。
 
