@@ -99,7 +99,8 @@ payload 内加入 Host-owned Blob carriage 与 owner/direction 校验。v3 支�
 route，但每个 handle 全局只有一个 transfer；`STREAM_SAMPLE` 仍只支持 Edge→Host。v2 literal bytes、
 六类 frame meaning、Core API/source 与 Session wire 均不变。R1 已证明 portable catalog/Blob
 carriage；R2a 已证明portable combined builder与独立fair scheduler；R2b0已证明真实AF_INET loopback
-happy path，R2b1又证明same-Session lifecycle，R2b2负责negative/recovery，target interoperability留给K1。
+happy path，R2b1证明same-Session lifecycle，R2b2证明same-Session catalog replacement，R2b3负责
+negative/recovery，target interoperability留给K1。
 
 ## C0 canonical wire
 
@@ -386,8 +387,8 @@ rebind，必须新建Session/Runtime/Scheduler。
 public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，clang analyzer对scheduler、
 builder、test为0 finding。该结果只证明portable/in-process调度与Profile builder；source queue的
 deadline/drop/gap policy仍由Profile integration负责。R2b0现已覆盖真实AF_INET loopback happy path，
-R2b1覆盖same-Session lifecycle；wrong Profile、catalog replacement、RST/reconnect、max-Blob、
-backpressure与fair-contention stress仍属R2b2，K1仍须
+R2b1覆盖same-Session lifecycle，R2b2覆盖same-Session catalog replacement；wrong Profile、
+RST/reconnect、max-Blob、backpressure与fair-contention stress仍属R2b3，K1仍须
 验证K230D，Hz/latency/jitter/throughput/performance也未测量。
 
 ## R2b0 AF_INET combined semantic evidence（完成）
@@ -431,6 +432,33 @@ fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；GitHub 
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback same-Session happy
 lifecycle），不证明catalog replacement、RST/reconnect、max-Blob、wrong Profile、backpressure、
 K230/K1、renderer/present、性能、security或physical output。
+
+## R2b2 same-Session catalog replacement evidence（完成）
+
+public commit `369ff4d` 沿用R2b1的真实TCP Session：
+
+- catalog g2 offer只建立staged/pending catalog，active g1、3/9 shape、双方scheduler phase/generation与
+  全部source boundary不变；accept后Host/Edge active catalog原子切到g2；
+- 双方scheduler为每个source exact-once报告`CATALOG_CHANGED`并进入`REBIND_REQUIRED`；重复step不重报，
+  stale g1 route不能bind，所有route-bound source重绑g2后才恢复READY；两端各一个stale g1 queued
+  work得到`SOURCE_INVALID`，Session outbound保持空；
+- SessionId、Session handle、fd、peer/incarnation、limits与`READY`全程不变；Runtime清除
+  Wi-Fi/Presentation/Scene actual与data gate，但保留production high-water `77/41/46`；
+- fresh capability-generation-2 coordinator推进SceneStore control scope并清world/candidate/visibility；
+  旧coordinator API、old token/world activation与old-world result ref均fail closed；
+- Core Blob cache继续包含cube，但Scene desired State v6先得到`MISSING_BLOB`；g2 Blob transfer经Core
+  返回`DUPLICATE`并显式`mark_visible`后才prepare；
+- 新State闭环的desired version为Wi-Fi/Scene/Plan `2/6/6`，actual version为Wi-Fi/Presentation/Scene
+  `2/3/7`；Plan/capability generation均为2，Plan desired v4建立candidate/new token，v5 old-token
+  echo mismatch保持candidate不变，v6 new-token echo激活world 6；actual production epoch为
+  `88/51/52`；旧production epoch `77/46`与旧Stream epoch `177/417`分别被对应gate拒绝；新的
+  Wi-Fi epoch `178`与RenderResult epoch `418`均从sequence 1无gap恢复。
+
+fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；Actions run `32318799466`
+四个job全部success。`369ff4d`已push到`main`与`rain/core-session-v0`。状态只到
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback same-Session catalog
+replacement），不证明RST/reconnect、max-Blob、wrong Profile、backpressure、K230/K1、renderer/
+present、性能、security或physical output。
 
 ## C0 executable evidence
 
@@ -549,7 +577,8 @@ CPU-visible heap，不是K230 RAM、GPU/CMA、renderer target或physical allocat
 
 R1状态为`COMPLETE / PORTABLE BLOB CARRIAGE SEMANTIC-WIRE VERIFIED`；该提交自身不证明fair
 scheduler。后续R2a已证明portable combined builder/scheduler，R2b0又证明loopback happy-path
-AF_INET combined transport，R2b1证明same-Session lifecycle；它们仍不证明R2b2 fault/recovery、
+AF_INET combined transport，R2b1证明same-Session lifecycle，R2b2证明same-Session catalog
+replacement；它们仍不证明R2b3 fault/recovery、
 Host editor、K230D build/run、
 renderer/backend、offline lease执行或physical output。
 

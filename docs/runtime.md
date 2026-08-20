@@ -183,6 +183,24 @@ actual精确进入`STOPPED`，RenderResult被拒为`ROUTE_NOT_ACTIVE`，Wi-Fi仍
 全部success。该证据只证明same-Session happy lifecycle，不证明catalog replacement、RST/reconnect、
 max-Blob、wrong Profile、backpressure、K230/renderer、性能或transport security。
 
+public commit `369ff4d` 的R2b2仍沿用同一真实TCP Session。catalog generation 2 offer只建立staged/
+pending catalog，active generation 1与scheduler source boundary不变；accept后Host/Edge Runtime原子切到
+generation 2，双方scheduler对每个source exact-once发出`CATALOG_CHANGED`并进入`REBIND_REQUIRED`。
+旧generation 1 queued work返回`SOURCE_INVALID`且Session outbound保持空；所有route-bound source只接受
+generation 2 rebind。SessionId、Session handle、fd、peer identity、negotiated limits与`READY`
+均保持。
+
+replacement清除三endpoint的actual/data gate但保留旧production high-water `77/41/46`。新的
+capability-generation-2 coordinator推进control scope，清SceneStore world/visibility并使旧coordinator/
+token/world失效；Core Blob cache仍命中，但Scene desired v6先得到`MISSING_BLOB`，g2 Blob transfer在
+Core返回`DUPLICATE`后再显式`mark_visible`。Wi-Fi/Plan/Scene desired version为`2/6/6`，Wi-Fi/
+Presentation/Scene actual version为`2/3/7`且production epoch为`88/51/52`；Plan generation 2使用
+新token。旧production epoch `77/46`在scheduler拒绝，旧Stream epoch `177/417`在新gate下由Stream
+拒绝；新`WIFI_TLM/DATA_STR` epoch `178`与`K230_SCN/RES_STR` epoch `418`均从sequence 1恢复。
+Debug与ASan+UBSan full CTest均25/25，analyzer 0 finding；Actions run `32318799466`四个job全部
+success。该证据只证明same-Session catalog replacement，不证明RST/reconnect、max-Blob、wrong
+Profile、backpressure、K230/renderer、性能或transport security。
+
 ## Blob route 与可见性
 
 Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的

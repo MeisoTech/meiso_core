@@ -350,9 +350,34 @@ desired v3；未drain时`WAITING_DRAIN`并验证Coordinator与SceneStore arena r
 `77`发送sequence `2`。fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；GitHub
 Actions run `32317542841`四个job全部success。
 
-R2b0/R2b1证据严格标记为
+public commit `369ff4d` 已push到`main`与`rain/core-session-v0`，并在同一真实TCP Session上完成R2b2。
+generation 2 catalog offer只建立staged/pending值：Host/Edge active仍为generation 1，3 endpoint/
+9 route及两端scheduler generation、phase、所有source boundary均不变。Host accept后两端active catalog
+原子切到generation 2；双方scheduler每个source只收到一次`CATALOG_CHANGED`并进入
+`REBIND_REQUIRED`，重复step不重复通知。所有route-bound source必须绑定g2 route，绑定g1被拒；
+两端各一个stale g1 queued work得到`SOURCE_INVALID`，Session outbound保持空，未写socket。
+
+整个replacement保持同一SessionId、Session handle、fd、local/remote peer identity、incarnation、
+negotiated limits与`READY`，没有close/failure。Runtime清除Wi-Fi/Presentation/Scene actual与data gate，
+但保留production epoch high-water `77/41/46`。fresh capability-generation-2 coordinator在同一Session
+下推进SceneStore control scope，清world/candidate/visibility；旧coordinator的observation/candidate/
+active/status/stats均不可再取，旧token/world activation及旧world result引用被拒。
+
+Core Blob cache仍保留cube，但不恢复新scope visibility，因此Scene desired State v6第一次prepare得到
+`MISSING_BLOB`。g2 Blob transfer完整走wire/Core bridge并返回Core `DUPLICATE`，随后显式
+`mark_visible`才允许prepare。新的State闭环使用Wi-Fi/Scene/Plan desired version `2/6/6`与Wi-Fi/
+Presentation/Scene actual version `2/3/7`；Plan generation/capability generation均为2，新prepared
+token与旧token不同：Plan desired v4建立candidate/new token，v5回显old token得到mismatch且candidate
+不变，v6回显new token激活world 6。新actual production epoch为`88/51/52`；旧production epoch `77/46`在scheduler
+侧拒绝，旧Stream epoch `177/417`在新production gate下到达后由Stream拒绝。新的exact
+`WIFI_TLM/DATA_STR` epoch `178`与`K230_SCN/RES_STR` epoch `418`均从sequence `1`无gap恢复。
+
+fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；GitHub Actions run
+`32318799466`四个job全部success。
+
+R2b0/R2b1/R2b2证据严格标记为
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback same-Session happy
-lifecycle）；它没有覆盖wrong Profile、catalog replacement、RST/reconnect、max-Blob、backpressure、
+lifecycle/catalog replacement）；它没有覆盖wrong Profile、RST/reconnect、max-Blob、backpressure、
 fair-contention stress，也没有证明K230/K1 build/run、Hz/latency/jitter/throughput/performance、Host
 editor、renderer backend、
 GPU/target/job/CMA、transport security、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
@@ -424,9 +449,10 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition R2b2的wrong-Profile、catalog replacement、RST/reconnect、max-Blob、backpressure与fair-contention
+- Composition R2b3的wrong-Profile、RST/reconnect、max-Blob、backpressure与fair-contention
   fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
-  happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2a已有
+  happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2b2已有
+  same-Session catalog replacement evidence，R2a已有
   portable builder/fair scheduler evidence，C2
   coordinator与R1 Runtime v3 Blob carriage也已有Host evidence，但没有target interoperability、
   offline lease执行或physical output；

@@ -382,10 +382,28 @@ public commit `9daa7f9` 沿用R2b0的同一个真实TCP Session、catalog、Plan
 fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；GitHub Actions run
 `32317542841`四个job全部success。该证据只覆盖same-Session happy lifecycle。
 
-### R2b2 — Combined fault/recovery（待实现）
+### R2b2 — Same-Session catalog replacement（完成）
+
+public commit `369ff4d` 在R2b1同一真实TCP Session内完成：
+
+- g2 offer只staged，active g1与scheduler boundary不变；accept后两端atomic active g2；
+- 双方scheduler每个source exact-once `CATALOG_CHANGED/REBIND_REQUIRED`，所有route source重绑g2；
+  stale g1 queued work为`SOURCE_INVALID`且无Session outbound/socket output；
+- SessionId、handle、fd、peer/incarnation、limits与`READY`不变；Runtime gate清除，production high-water
+  `77/41/46`保留；
+- fresh capability-generation-2 coordinator推进scope并清world/visibility，旧coordinator/token/world
+  fail closed；Core Blob cache保留，但Scene v6先`MISSING_BLOB`，g2 transfer获Core `DUPLICATE`后显式
+  `mark_visible`；
+- Plan generation 2使用新token，new actual epoch为Wi-Fi/Presentation/Scene `88/51/52`；旧production/
+  Stream epoch拒绝，新Wi-Fi epoch `178`与RenderResult epoch `418`均从sequence 1恢复。
+
+fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；Actions run `32318799466`
+四个job全部success。该证据只覆盖same-Session catalog replacement。
+
+### R2b3 — Combined fault/recovery（待实现）
 
 - scene-only或wifi-only Profile对composite peer的exact `PROFILE_MISMATCH`；
-- catalog replacement、真实RST/reconnect、旧route/epoch拒绝与两组desired重发；
+- 真实RST/reconnect、旧Session/route/epoch拒绝与两组desired重发；
 - max-Blob、backpressure、双方data同时ready时的fair-contention stress与bounded failure paths；
 - Host editor、K230/K1 target、renderer/present backend与physical output另行验证。
 

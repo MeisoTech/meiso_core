@@ -94,9 +94,14 @@ Scene visibility、Scene/Plan State→C2 `ACTIVE`、独立Wi-Fi/RenderResult Str
 不变，依次得到world/RenderResult sequence `1/1`、TRS `2/3`、camera `3/4`、共享cube的第二对象
 `4/5`、删除首对象`5/6`，并验证pending old result `1/2`、actual epoch `43..46`前后gate、drained
 prefix-only disable及Wi-Fi epoch `77`/sequence `2`继续。Debug与ASan+UBSan均25/25，analyzer 0；
-Actions run `32317542841`四个job全部success。R2b2的catalog/RST/reconnect/max-Blob/wrong-profile/
-backpressure、Host editor、K230D/renderer backend、GPU/target allocation、offline lease执行与physical
-presentation仍未验证。
+Actions run `32317542841`四个job全部success。public commit `369ff4d` 又完成R2b2：同一TCP Session
+内catalog g2 staged不改变active g1，accept后原子切换；双方scheduler全部route source重新绑定，
+旧g1 work无socket输出。Session identity/handle/fd/limits/READY保持，Runtime gate清除但high-water
+保留；capability generation 2重建coordinator scope/visibility/world，复用Core Blob cache时先得到
+`MISSING_BLOB`，经g2 transfer `DUPLICATE`后显式恢复visibility，再以Plan generation 2、新actual/
+Stream epoch恢复两条sequence 1。Debug与ASan+UBSan均25/25，analyzer 0；Actions run
+`32318799466`四个job全部success。R2b3的RST/reconnect/max-Blob/wrong-profile/backpressure、Host editor、
+K230D/renderer backend、GPU/target allocation、offline lease执行与physical presentation仍未验证。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
