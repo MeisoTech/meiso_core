@@ -43,7 +43,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   coordinator、R1 Runtime v3 Blob carriage 与 R2a portable fair scheduler/combined builder 已有 Host
   evidence；R2b0已有真实AF_INET loopback happy-path semantic/wire/transport evidence，R2b1完成
   same-Session scene lifecycle，R2b2完成same-Session atomic catalog replacement/rebind/visibility重建；
-  target backend/present及R2b3 fault/recovery仍未验证。
+  R2b3又完成explicit same-process RST/new-Session recovery slice；target backend/present、自动resume、
+  fresh Edge与其余negative matrix仍未验证。
 - [K230D Linux Edge 开发基线](k230d-linux-edge-development-baseline.md)：当前候选实现中
   大小核、Linux、NuttX、sensor、network 与 rendering 的责任分工；它不是互操作 Profile。
 
@@ -58,8 +59,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   scheduler 与 State/Blob RX obligation；R2b0 已用真实AF_INET loopback贯通双方scheduler、Blob/
   State/Stream与C2 active happy path，R2b1在同一Session中继续验证world reconfigure、旧/新epoch gate、
   Blob零重传、drained disable与Wi-Fi独立；R2b2又在Session不变时完成catalog g1→g2 atomic accept、
-  scheduler全route rebind、gate/visibility/world重建及新epoch恢复。Host editor、K230D renderer、
-  physical output及R2b3 combined fault/recovery仍未验证；
+  scheduler全route rebind、gate/visibility/world重建及新epoch恢复；R2b3再以真实RST使旧对象fail closed，
+  并在新AF_INET Session中显式重建desired/visibility/world/gate。Host editor、K230D renderer、physical
+  output、自动resume、fresh Edge及max-Blob/wrong-profile/backpressure仍未验证；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
 - [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与固定

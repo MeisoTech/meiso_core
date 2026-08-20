@@ -100,8 +100,18 @@ Actions run `32317542841`四个job全部success。public commit `369ff4d` 又完
 保留；capability generation 2重建coordinator scope/visibility/world，复用Core Blob cache时先得到
 `MISSING_BLOB`，经g2 transfer `DUPLICATE`后显式恢复visibility，再以Plan generation 2、新actual/
 Stream epoch恢复两条sequence 1。Debug与ASan+UBSan均25/25，analyzer 0；Actions run
-`32318799466`四个job全部success。R2b3的RST/reconnect/max-Blob/wrong-profile/backpressure、Host editor、
-K230D/renderer backend、GPU/target allocation、offline lease执行与physical presentation仍未验证。
+`32318799466`四个job全部success。public commits `9df5268`、`e4a726f`与`43ae3ce` 又完成R2b3的
+explicit same-process RST/reconnect slice：Runtime可显式refresh其永久绑定Session，READY exact匹配时
+byte-preserve；terminal首次原子清catalog、pending State/Blob与Edge scratch并返回`CORE_NOT_READY`，
+Blob transfer-id high-water保留，随后永久`STALE_SESSION`。Scheduler在poll/TX前自动refresh并exact-once
+通知terminal。真实g2 ACTIVE连接在一个未`COMMIT`的distinct Mesh transfer中由Edge发RST；RST使旧
+Session/Runtime/Scheduler/route/epoch fail closed，SceneStore旧world保持到新coordinator开始新control
+scope，随后旧coordinator/token/world失效。新AF_INET连接使用新SessionId与全新Session/Runtime/
+Scheduler arena，只复用同process Core cache与SceneStore；desired、visibility、world和gate均未自动继承，
+显式重发后以Core `DUPLICATE`+`mark_visible`、Plan generation 3、
+Wi-Fi/Presentation/Scene actual epoch `99/61/62`及Wi-Fi/RenderResult epoch `179/419` sequence 1恢复。Actions run
+`32321051775`四个job全部success。该结果不证明自动resume、fresh Edge process、max-Blob、wrong-profile、
+backpressure、K230D/renderer backend、性能、安全transport、offline lease执行或physical presentation。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

@@ -400,12 +400,27 @@ public commit `369ff4d` 在R2b1同一真实TCP Session内完成：
 fresh Debug与ASan+UBSan full CTest均25/25，clang analyzer 0 finding；Actions run `32318799466`
 四个job全部success。该证据只覆盖same-Session catalog replacement。
 
-### R2b3 — Combined fault/recovery（待实现）
+### R2b3 — Explicit RST/new-Session recovery（完成的 slice）
 
-- scene-only或wifi-only Profile对composite peer的exact `PROFILE_MISMATCH`；
-- 真实RST/reconnect、旧Session/route/epoch拒绝与两组desired重发；
-- max-Blob、backpressure、双方data同时ready时的fair-contention stress与bounded failure paths；
-- Host editor、K230/K1 target、renderer/present backend与physical output另行验证。
+public commits `9df5268`、`e4a726f`与`43ae3ce` 已push到`main`与`rain/core-session-v0`：
+
+- READY exact refresh保持Runtime byte-for-byte；terminal首次在scheduler poll/TX前原子清catalog、pending
+  State/Blob与Edge scratch并返回`CORE_NOT_READY`，保留Blob transfer-id high-water，后续`STALE_SESSION`；
+  identity/role/limits mismatch与verifier reentry均有独立fail-closed vector；terminal callback exact-once；
+- g2 ACTIVE后发送distinct Mesh `BEGIN/READY/CHUNK`但不`COMMIT`；Edge执行adapter abort、`SO_LINGER`
+  RST与close，Host read检测loss，两端Session均为`FAILED/TRANSPORT_LOST`；第二个Blob未进入Core，旧
+  Runtime/Scheduler/route/epoch不可复用，SceneStore旧active world仍保持；
+- 新AF_INET连接使用新SessionId和全新Session/Runtime/Scheduler/coordinator arenas；同process Core cache
+  与SceneStore保留；新coordinator开始新control scope后才清world/visibility并使旧coordinator/token/
+  world失效，desired、visibility、world及gate均不自动继承。显式提高State delivery generation、
+  重发cube并取得Core `DUPLICATE`、再次`mark_visible`后，以Plan generation 3/new token、Wi-Fi/
+  Presentation/Scene actual epoch `99/61/62`、Wi-Fi/RenderResult epoch `179/419` sequence 1恢复；
+- Linux CI首次发现scratch-tail padding测试假设；`43ae3ce`改用COMMIT Runtime-scratch borrow校准offset，
+  并在同配置新fixture重验范围，Runtime产品代码不变。Actions run `32321051775`四个job全部success。
+
+该slice是显式same-process reconnect，不是自动resume，也不证明fresh Edge process、scene-only/wifi-only
+wrong Profile、max-Blob、backpressure、fair-contention stress、K230/K1、renderer/present、性能、安全
+transport或physical output。
 
 ### H1 — Host editor/devtool
 

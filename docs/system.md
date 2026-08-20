@@ -163,7 +163,11 @@ Session内保持Plan与cube publication不变，完成TRS、camera、共享mesh�
 epoch cut、drained disable及独立Wi-Fi continuation；R2b1自身不覆盖catalog replacement、RST/reconnect、
 max-Blob与target。R2b2又在同一Session内完成catalog g1 staged→atomic g2 accept、全route scheduler
 rebind、Runtime gate reset/high-water preservation、capability-generation-2 coordinator scope/visibility/
-world重建及Blob cache duplicate revalidation；RST/reconnect、max-Blob与target仍未覆盖。
+world重建及Blob cache duplicate revalidation。R2b3又以真实RST使旧Session/Runtime/Scheduler/route/
+epoch fail closed；SceneStore旧world保持到不同SessionId/新arena连接上的新coordinator开始control scope，
+此时才清world/visibility并使旧coordinator/token/world失效。随后显式重发State、重建visibility/world/
+gate；同process Core cache duplicate可复用。该结果不是自动resume或fresh Edge，
+max-Blob、wrong Profile、backpressure与target仍未覆盖。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

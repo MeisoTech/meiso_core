@@ -201,6 +201,29 @@ Debug与ASan+UBSan full CTest均25/25，analyzer 0 finding；Actions run `323187
 success。该证据只证明same-Session catalog replacement，不证明RST/reconnect、max-Blob、wrong
 Profile、backpressure、K230/renderer、性能或transport security。
 
+public commits `9df5268`、`e4a726f`与`43ae3ce` 完成R2b3的explicit same-process RST/reconnect slice。
+`meiso_runtime_refresh_bound_session`在绑定Session仍为READY且SessionId、role、limits exact时返回`OK`
+并保持完整Runtime arena byte-for-byte；Session unavailable/unknown/non-READY时首次原子清两代catalog、
+pending State/Blob与Edge reassembly scratch，保留Blob transfer-id high-water并返回`CORE_NOT_READY`，
+以后返回`STALE_SESSION`。live identity/role/limits mismatch首次即`STALE_SESSION`；Blob verifier callback内
+refresh返回`CONFLICT`且Runtime arena零变化。Scheduler每次step在poll/TX前refresh；terminal先清Runtime，
+再对每个source exact-once报告`SESSION_TERMINAL`，不产生额外Session outbound。
+
+真实loopback transcript从g2 ACTIVE出发：一个distinct Mesh完成`BEGIN/READY/CHUNK`但不发`COMMIT`，
+Edge adapter以`SO_LINGER` RST/close中止，Host read检测transport loss；两端Session均为
+`FAILED/TRANSPORT_LOST`，旧Runtime/Scheduler/route/epoch永久失效，未完成Blob未进入Core。SceneStore
+旧active world在transport loss后仍保持；新连接使用不同AF_INET sockets、SessionId及Session/Runtime/
+Scheduler/coordinator arenas，新coordinator开始新control scope后才清world/visibility并使旧coordinator/
+token/world失效。同process保留Core Blob cache和SceneStore，但desired、visibility、world、actual/data
+gate均不自动恢复。
+显式提高State delivery generation并重发cube后，Core返回`DUPLICATE`，`mark_visible`后再以Plan
+generation 3/new token、Wi-Fi/Presentation/Scene actual epoch `99/61/62`、Wi-Fi/RenderResult epoch
+`179/419` sequence 1恢复。
+Linux CI首次暴露测试把scratch误认作arena tail的padding假设；`43ae3ce`改为从真实COMMIT Runtime-scratch
+borrow校准offset并在同配置fixture重验范围，产品代码未变。Actions run `32321051775`四个job全部success。
+该证据不证明自动resume、fresh Edge process、max-Blob、wrong Profile、backpressure、K230/renderer、
+性能或transport security。
+
 ## Blob route 与可见性
 
 Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的
