@@ -298,6 +298,19 @@ if(TARGET meiso_posix_tcp_adapter)
             meiso_composition_session_v2_profile
     )
     meiso_enable_warnings(meiso_composition_runtime_tcp_test)
+
+    add_executable(
+        meiso_composition_runtime_tcp_adversarial_test
+        tests/test_composition_runtime_tcp_adversarial.c
+    )
+    target_link_libraries(
+        meiso_composition_runtime_tcp_adversarial_test
+        PRIVATE
+            meiso_posix_tcp_adapter
+            meiso_runtime_scheduler
+            meiso_composition_session_v2_profile
+    )
+    meiso_enable_warnings(meiso_composition_runtime_tcp_adversarial_test)
 endif()
 
 if(APPLE AND TARGET meiso_posix_tcp_adapter)
@@ -418,6 +431,13 @@ if(TARGET meiso_composition_runtime_tcp_test)
     add_test(
         NAME meiso_composition_runtime_tcp_test
         COMMAND meiso_composition_runtime_tcp_test
+    )
+endif()
+
+if(TARGET meiso_composition_runtime_tcp_adversarial_test)
+    add_test(
+        NAME meiso_composition_runtime_tcp_adversarial_test
+        COMMAND meiso_composition_runtime_tcp_adversarial_test
     )
 endif()
 if(TARGET meiso_four_kind_lab_internal_test)
