@@ -381,6 +381,7 @@ static bool exercise_golden_encoding(RuntimePair *pair)
         GOLDEN_ACCEPT, sizeof(GOLDEN_ACCEPT), &event
     ));
 
+    memset(&actual, 0, sizeof(actual));
     CHECK(meiso_runtime_actual_state_encoded_size(&actual) == 0U);
     CHECK(meiso_runtime_desired_state_encode(
         &desired,
