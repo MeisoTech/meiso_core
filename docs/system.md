@@ -169,7 +169,13 @@ epoch fail closed；SceneStore旧world保持到不同SessionId/新arena连接上
 gate；同process Core cache duplicate可复用。R2b4再在该新Session上用64个4096-byte `CHUNK`传输exact
 262144-byte `MSH0`，证明无逐块ACK、262145-byte本地capacity拒绝、Edge反向Wi-Fi/RenderResult及
 Core publish→显式visibility→scene swap的资源边界。该结果不是自动resume或fresh Edge；wrong Profile、
-backpressure、SCAP 16-slot aggregate与target仍未覆盖。
+backpressure、SCAP 16-slot aggregate与target仍未覆盖。R2b5又在真实AF_INET上验证Composition v1/
+Wi-Fi Profile对Composition v2的handshake fail-closed，且没有SessionId、catalog或Runtime frame；
+两方向分别制造`WRITE_WOULD_BLOCK`后，scheduler `TX_BUSY`对完整scheduler/runtime/session/adapter
+arena、source与output原字节零推进，排空后已排队frame exact-once到达。direction-local saturated work
+分别固定为Host 5 slots（4 control + Blob）与Edge 6 slots（4 control + 同一data round的Wi-Fi/
+RenderResult）。两段依次执行，不证明simultaneous saturation、wall-clock/latency/throughput/
+performance、K230/renderer或安全transport。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

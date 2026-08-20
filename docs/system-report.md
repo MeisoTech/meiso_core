@@ -417,10 +417,22 @@ State/Stream、TCP kernel buffer、Host外部asset buffer或GPU/CMA；2-slot只�
 全部success。这里的当前HEAD数值与上文`a8a777a` R1 commit-snapshot arena数值属于不同版本/fixture，
 不得混合相加。
 
-R2b0--R2b4上述证据严格标记为
+public commit `6488fef` 已push到`main`与`rain/core-session-v0`，完成R2b5 adversarial TCP slice。
+真实AF_INET上，Composition v1或Wi-Fi Profile连接Composition v2均在handshake中
+`PROFILE_MISMATCH`并fail closed；没有SessionId、catalog或Runtime frame，匹配v2正例仍READY。
+Edge→Host RenderResult与Host→Edge Blob `CHUNK`分别制造真实`WRITE_WOULD_BLOCK`；下一次scheduler
+step返回`TX_BUSY`且Scheduler/Runtime/Session/POSIX-adapter arena、sources、output、poll/completion
+原字节零推进。排空后全部已排队frame按原payload/offset各接收一次，Blob显式ABORT且Core保持空。
+
+fairness evidence按方向分段：Host 4 control + Blob data精确使用5个successful slots；Edge 4 control +
+Wi-Fi/RenderResult精确使用6个slots，两条data在同一冻结round；每段对端scheduler slot计数不动。这不是
+simultaneous full-duplex saturation或wall-clock/performance证明。GitHub Actions run `32324328746`
+四个job全部success。
+
+R2b0--R2b5上述证据严格标记为
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback same-Session happy
 lifecycle/catalog replacement及explicit same-process reconnect）；它没有覆盖自动resume、fresh Edge、
-wrong Profile、backpressure、fair-contention stress或16-slot aggregate，也没有证明K230/K1 build/run、
+未覆盖的wrong-Profile/backpressure/fair-contention negative matrix或16-slot aggregate，也没有证明K230/K1 build/run、
 Hz/latency/jitter/throughput/performance、Host editor、renderer backend、
 GPU/target/job/CMA、transport security、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
 Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。本轮也没有合并外部Host
@@ -491,11 +503,12 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition的自动resume、fresh Edge、wrong-Profile、backpressure、SCAP 16-slot aggregate与fair-contention
-  fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
+- Composition的自动resume、fresh Edge、SCAP 16-slot aggregate与未覆盖的wrong-Profile/backpressure/
+  fair-contention fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
   happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2b2已有
   same-Session catalog replacement evidence，R2b3已有explicit same-process RST/new-Session evidence，R2b4已有
-  max-single-Blob/resource-boundary evidence，R2a已有
+  max-single-Blob/resource-boundary evidence，R2b5已有真实TCP wrong-Profile fail-closed、双向分段
+  backpressure与direction-local 5/6-slot evidence，R2a已有
   portable builder/fair scheduler evidence，C2
   coordinator与R1 Runtime v3 Blob carriage也已有Host evidence，但没有target interoperability、
   offline lease执行或physical output；

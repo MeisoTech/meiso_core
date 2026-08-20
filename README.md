@@ -116,9 +116,16 @@ boundary：一个exact 262144-byte canonical `MSH0`以64个4096-byte `CHUNK`完�
 `PAYLOAD_CAPACITY`拒绝且不产生wire/Runtime transfer/Core或Scene副作用。传输中点Edge反向发送Wi-Fi
 epoch `179`/sequence `2`及old-world RenderResult epoch `419`/sequence `2`，证明两个peer outbound
 scheduler独立；publish、显式visibility与scene swap后RenderResult sequence `3`引用新world。Actions run
-`32322475279`四个job全部success。该结果不证明自动resume、fresh Edge process、wrong-profile、
-backpressure、SCAP 16-slot aggregate、K230D/renderer backend、性能、安全transport、offline lease执行或
-physical presentation。
+`32322475279`四个job全部success。public commit `6488fef` 又完成R2b5 adversarial TCP slice：真实
+AF_INET上Composition v1与Wi-Fi Profile连接Composition v2均在handshake中fail closed，未建立
+SessionId、catalog或Runtime frame；Edge→Host RenderResult与Host→Edge Blob `CHUNK`分别把本方向
+nonblocking adapter推进到`WRITE_WOULD_BLOCK`，此后的scheduler `TX_BUSY`对Scheduler/Runtime/Session/
+adapter arena、source与output原字节零推进，排空后每个已排队frame只接收一次。direction-local
+fairness在两个独立阶段验证：Host的4个control后Blob data是第5个successful slot；Edge的4个control后
+Wi-Fi与RenderResult是同一冻结data round的第5/6个slot，另一方向scheduler计数不动。Actions run
+`32324328746`四个job全部success。该结果不表示两方向同时达到socket saturation，不给出wall-clock、
+latency、throughput或performance保证，也不证明自动resume、fresh Edge process、SCAP 16-slot
+aggregate、K230D/renderer backend、安全transport、offline lease执行或physical presentation。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

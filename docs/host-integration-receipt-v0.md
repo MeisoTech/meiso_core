@@ -2,10 +2,10 @@
 
 > 受众：Host Runtime / SDK 开发者。状态：当前可执行互操作基线；不是新的产品规范。
 > 产品语义以[文档入口](index.md)列出的五份规范为准。可复现实装基线为
-> [`a392850`](https://github.com/anantheparty/meiso_glass/commit/a392850)：包含既有 direct-IP
+> [`6488fef`](https://github.com/anantheparty/meiso_glass/commit/6488fef)：包含既有 direct-IP
 > Session/Runtime、R1 Blob carriage、R2a combined builder/fair scheduler，以及R2b0真实loopback
 > happy path、R2b1 same-Session lifecycle、R2b2 atomic catalog replacement与R2b3 explicit
-> same-process RST/new-Session recovery、R2b4 max-Blob/resource boundary增量。
+> same-process RST/new-Session recovery、R2b4 max-Blob/resource boundary及R2b5 adversarial TCP增量。
 
 ## 结论
 
@@ -102,7 +102,7 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 | Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：strict `MRT0` v2/v3 |
 | 首个 Profile | [Wi-Fi telemetry v0](../profiles/wifi-telemetry-v0/README.md) |
 | direct-IP 实装 | [Direct-IP Wi-Fi Runtime v0](wifi-runtime-direct-ip-v0.md) |
-| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob、R2a portable 3/9/920 builder/fair scheduler、R2b0真实AF_INET loopback happy path、R2b1 same-Session lifecycle、R2b2 atomic catalog replacement、R2b3 explicit same-process RST/new-Session recovery与R2b4 max-Blob/resource-boundary evidence；没有Host editor、target interoperability、自动resume或fresh Edge evidence |
+| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob、R2a portable 3/9/920 builder/fair scheduler、R2b0真实AF_INET loopback happy path、R2b1 same-Session lifecycle、R2b2 atomic catalog replacement、R2b3 explicit same-process RST/new-Session recovery、R2b4 max-Blob/resource-boundary与R2b5 adversarial TCP evidence；没有Host editor、target interoperability、自动resume或fresh Edge evidence |
 
 当前 Runtime source v0 承载 Host-owned desired State、Edge-owned actual State、Edge-owned data
 Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Action、MediaStream、
@@ -157,11 +157,18 @@ wire/transfer/Core/Scene副作用。第32块后Edge反向Wi-Fi epoch `179`/seque
 RenderResult epoch `419`/sequence `2`仍各自前进；publish、显式visibility及scene swap后RenderResult
 sequence `3`引用新world。Actions run `32322475279`四个job全部success。
 
-R2b0--R2b4结论严格为`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`
+public `6488fef` 又在真实AF_INET上完成R2b5：Composition v1或Wi-Fi Profile对Composition v2均在
+handshake fail closed且不进入SessionId/catalog/Runtime；Edge→Host RenderResult与Host→Edge Blob
+`CHUNK`分别触发真实`WRITE_WOULD_BLOCK`，随后的`TX_BUSY`对完整scheduler/runtime/session/adapter
+arena、source与output原字节零推进，排空后已排队frame各到达一次。方向独立fairness精确为Host
+4 control + Blob的5 slots、Edge 4 control + 同一data round的Wi-Fi/RenderResult共6 slots；两段依次
+执行，不表示同时socket saturation或时延/性能界。Actions run `32324328746`四个job全部success。
+
+R2b0--R2b5结论严格为`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`
 （loopback same-Session lifecycle/catalog replacement及explicit same-process reconnect）。这不证明稳定SDK、
-自动resume、fresh Edge、wrong Profile、backpressure、SCAP 16-slot aggregate、fair-contention stress、长稳/性能、MediaStream、Composition
+自动resume、fresh Edge、SCAP 16-slot aggregate、未覆盖的fair-contention/negative matrix、长稳/性能、MediaStream、Composition
 target、discovery或安全transport。R1只证明portable Blob
-semantic/wire与Core publish bridge；R2a只证明portable/in-process scheduler与builder；R2b0--R2b4也不证明
+semantic/wire与Core publish bridge；R2a只证明portable/in-process scheduler与builder；R2b0--R2b5也不证明
 K230D或renderer/physical output。
 当前 plain TCP 的 PeerId exact check 只能防误连，不能提供认证、机密性或完整性；产品连接必须
 另行绑定经审查的安全 transport。

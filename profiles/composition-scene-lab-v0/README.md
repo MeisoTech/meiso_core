@@ -100,8 +100,9 @@ route，但每个 handle 全局只有一个 transfer；`STREAM_SAMPLE` 仍只支
 六类 frame meaning、Core API/source 与 Session wire 均不变。R1 已证明 portable catalog/Blob
 carriage；R2a 已证明portable combined builder与独立fair scheduler；R2b0已证明真实AF_INET loopback
 happy path，R2b1证明same-Session lifecycle，R2b2证明same-Session catalog replacement，R2b3已证明
-explicit same-process RST/new-Session recovery，R2b4已证明max-single-Blob/resource boundary；其余
-negative matrix与target interoperability留待后续/K1。
+explicit same-process RST/new-Session recovery，R2b4已证明max-single-Blob/resource boundary，R2b5
+已证明wrong-Profile fail-closed及分方向backpressure/fairness slice；其余negative matrix与target
+interoperability留待后续/K1。
 
 ## C0 canonical wire
 
@@ -389,8 +390,9 @@ public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，
 builder、test为0 finding。该结果只证明portable/in-process调度与Profile builder；source queue的
 deadline/drop/gap policy仍由Profile integration负责。R2b0现已覆盖真实AF_INET loopback happy path，
 R2b1覆盖same-Session lifecycle，R2b2覆盖same-Session catalog replacement，R2b3覆盖explicit
-same-process RST/new-Session recovery，R2b4覆盖max-single-Blob/resource boundary；自动resume、fresh Edge、wrong Profile、backpressure与
-fair-contention stress仍未覆盖，K1仍须
+same-process RST/new-Session recovery，R2b4覆盖max-single-Blob/resource boundary，R2b5覆盖
+wrong-Profile fail-closed、分方向真实backpressure与5/6-slot fairness；自动resume、fresh Edge及未覆盖的
+negative/stress matrix仍待验证，K1仍须
 验证K230D，Hz/latency/jitter/throughput/performance也未测量。
 
 ## R2b0 AF_INET combined semantic evidence（完成）
@@ -518,6 +520,27 @@ Actions run `32322475279`四个job全部success。状态是
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback max-single-Blob/resource
 boundary）；不证明自动resume、fresh Edge、wrong Profile、backpressure、fair-contention stress、K230/K1、
 renderer/present、Hz/latency/jitter/throughput/performance、安全transport或physical output。
+
+## R2b5 adversarial TCP evidence（完成的 slice）
+
+public commit `6488fef` 已push到`main`与`rain/core-session-v0`：
+
+- Composition Profile v1和Wi-Fi Profile分别连接Composition Profile v2时，Edge在真实AF_INET
+  handshake中以`PROFILE_MISMATCH`失败；两端都没有SessionId，catalog/Runtime frame均未开始，failure
+  frame后Host也fail closed。匹配的Profile v2正例仍到达READY；
+- Edge→Host RenderResult与Host→Edge max-Blob `CHUNK`分别在nonblocking adapter上取得真实
+  `WRITE_WOULD_BLOCK`。Session保持READY/outbound pending时，下一次scheduler step精确返回`TX_BUSY`，
+  Scheduler/Runtime/Session/POSIX-adapter arena、sources、output及poll/completion原字节不变；
+- 接收端排空后，全部已排队RenderResult或Blob CHUNK按payload/offset各接收一次；Blob以显式ABORT
+  终结，Core BlobStore仍为空；
+- Host方向同时ready的4个control与Blob data在5个successful slots内完成，Blob是第5个；Edge方向
+  4个control及Wi-Fi/RenderResult在6个successful slots内完成，两条data属于同一冻结round。每段中
+  对端scheduler successful-slot计数不变。
+
+Actions run `32324328746`四个job全部success。上述两个backpressure/fairness方向在同一Session内依次
+验证，不是simultaneous socket saturation，不给出wall-clock、latency、jitter、throughput或performance
+界，也不证明无穷ready source、自动resume、fresh Edge、SCAP 16-slot aggregate、K230/K1、renderer/
+present、安全transport或physical output。
 
 ## C0 executable evidence
 

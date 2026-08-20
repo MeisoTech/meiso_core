@@ -240,6 +240,23 @@ RenderResult sequence `3`引用新world。
 success。该证据不证明自动resume、fresh Edge process、wrong Profile、backpressure、K230/renderer、
 16-slot aggregate、性能或transport security。
 
+public commit `6488fef` 完成R2b5 adversarial TCP slice。真实AF_INET连接分别以Composition Profile v1
+和Wi-Fi Profile对接Composition Profile v2；Edge在handshake中以`PROFILE_MISMATCH`失败，双方均未得到
+SessionId，未进入catalog/Runtime frame，随后各自fail closed。匹配的Composition Profile v2正例仍到达
+READY。
+
+同一测试分别制造Edge→Host RenderResult和Host→Edge max-Blob `CHUNK`的真实nonblocking
+`WRITE_WOULD_BLOCK`。Session保持READY且保有一个outbound frame时，下一次scheduler step返回
+`TX_BUSY`；完整Scheduler/Runtime/Session/POSIX-adapter arena、source、output以及poll/completion原字节
+不变。接收端恢复读取后，已排队RenderResult或Blob CHUNK按原payload/offset各接收一次，没有重发或
+重复；Blob随后以显式ABORT终结且Core BlobStore仍为空。
+
+direction-local fairness也只按本peer successful slot计数：Host本方向4个control后，等待的Blob CHUNK
+精确成为第5个slot；Edge本方向4个control后，等待的Wi-Fi和RenderResult精确成为第5、6个slot并属于
+同一冻结data round。每段中对端scheduler successful-slot计数不变。这两个方向是同一Session内依次
+验证，不是同时socket saturation，也不是wall-clock、latency、throughput或performance上界。Actions run
+`32324328746`四个job全部success。
+
 ## Blob route 与可见性
 
 Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的

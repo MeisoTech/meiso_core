@@ -443,6 +443,20 @@ R2b4仍只是loopback Host semantic/wire/transport evidence；不证明自动res
 backpressure、fair-contention stress、K230/K1、renderer/present、Hz/latency/throughput、安全transport或
 physical output。
 
+### R2b5 — Adversarial TCP Profile/backpressure/fairness（完成的 slice）
+
+public commit `6488fef` 在真实AF_INET上验证：Composition v1与Wi-Fi Profile连接Composition v2均在
+handshake中`PROFILE_MISMATCH`并fail closed，没有SessionId、catalog或Runtime frame；匹配v2正例仍
+READY。Edge→Host RenderResult与Host→Edge Blob `CHUNK`分别把nonblocking adapter推进到
+`WRITE_WOULD_BLOCK`，随后scheduler `TX_BUSY`对Scheduler/Runtime/Session/adapter arena、source、
+output和poll/completion原字节零推进；排空后已排队frame exact-once到达，Blob再显式ABORT且Core保持空。
+
+方向公平性按peer独立验证：Host的4个control后Blob data精确在第5个successful slot；Edge的4个
+control后Wi-Fi/RenderResult精确在第5/6个slot且属于同一冻结data round，每段对端scheduler slot计数
+不动。两方向是依次制造的饱和阶段，不证明simultaneous full-duplex saturation、wall-clock/latency/
+throughput/performance、无穷ready source、K230/K1、renderer/present或安全transport。Actions run
+`32324328746`四个job全部success。
+
 ### H1 — Host editor/devtool
 
 - Host tool 只通过 typed Profile API 创建/校验 mesh、发布 Blob、提交完整 SceneDesired、观察
