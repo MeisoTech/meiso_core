@@ -45,7 +45,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   same-Session scene lifecycle，R2b2完成same-Session atomic catalog replacement/rebind/visibility重建；
   R2b3又完成explicit same-process RST/new-Session recovery slice，R2b4完成真实TCP max-Blob与资源边界；
   R2b5完成真实TCP wrong-Profile fail-closed、双向分别制造的`WOULD_BLOCK/TX_BUSY`零推进与direction-local
-  5/6-slot fairness；target backend/present、自动resume、fresh Edge与其余negative matrix仍未验证。
+  5/6-slot fairness；K1a已有Host synthetic reference renderer和offline runner evidence，但K230D
+  target run/present、自动resume、fresh Edge与其余negative matrix仍未验证。
 - [K230D Linux Edge 开发基线](k230d-linux-edge-development-baseline.md)：当前候选实现中
   大小核、Linux、NuttX、sensor、network 与 rendering 的责任分工；它不是互操作 Profile。
 
@@ -64,12 +65,15 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   并在新AF_INET Session中显式重建desired/visibility/world/gate；R2b4又在该连接上验证exact
   262144-byte `MSH0`的64×4096无逐块ACK传输、262145-byte本地拒绝、反向Wi-Fi/RenderResult并行与
   resource ledger；R2b5又验证wrong-Profile握手fail-closed、两方向各自真实backpressure恢复及Host/Edge
-  successful-slot上界5/6。两方向socket saturation不是同时制造，且没有wall-clock或性能结论。Host
-  editor、K230D renderer、physical output、自动resume、fresh Edge与SCAP 16-slot aggregate仍未验证；
+  successful-slot上界5/6。两方向socket saturation不是同时制造，且没有wall-clock或性能结论。K1a
+  已验证Host上的bounded 320×240 synthetic renderer与`baseline_cube_once` offline receipt；它不执行
+  Runtime/Session/State/Stream、offline lease、K230D driver或physical output。official cross-build已为
+  `TARGET_BUILD_VERIFIED`，但ELF未执行，target runtime仍为`TARGET_NOT_RUN`。
+  Host editor、自动resume、fresh Edge与SCAP 16-slot aggregate仍未验证；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
-- [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与固定
-  four-kind integration fixture；两者 evidence 不互换；
+- [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge、固定four-kind fixture，
+  以及build-only Composition offscreen candidate；三者evidence不互换，后者尚未板上运行；
 - [Wi-Fi Runtime 面板](../devtools/web/wifi_runtime_dashboard/README.md)：启动正式 macOS Host 并
   脱敏投影 catalog、desired/actual、production gate 与 Stream；不实现 wire/control 或 SDK；
 - [Four-kind integration 面板](../devtools/web/four_kind_dashboard/README.md)：固定 lab fixture 的

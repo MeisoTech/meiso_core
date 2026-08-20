@@ -1,5 +1,52 @@
 # K230D Linux targets
 
+## Composition offscreen candidate（TARGET_BUILD_VERIFIED / TARGET_NOT_RUN）
+
+public commit `c3b4770` 的portable synthetic reference renderer已在Host得到
+`HOST_OFFSCREEN_REFERENCE_VERIFIED`；Actions run `32326481615`四个job全部success。public commit
+`b9ec6a3` 另提供offline runner与build-only K230D Linux candidate：
+
+```sh
+MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
+  targets/k230d-linux/build_composition_offscreen_runner.sh \
+  /tmp/meiso_composition_offscreen_runner-k230d
+```
+
+脚本只编译，不部署或运行；compiler path不进入仓库。official K230 SDK默认Linux toolchain为
+`Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0`；本次使用的449,883,716-byte archive SHA-256为
+`17decb02130b8d79a1eb8c2126e17749fbea603dae7d95f20cd4ab411f3f1a41`，compiler报告
+GCC 10.2.0 / Xuantie Toolchain V2.6.0 B-20220715。在linux/amd64 Ubuntu 22.04 container中调用上述
+tracked脚本，两次fresh build产物byte-exact：83,152 bytes，SHA-256
+`05accb66e621c0bef981e78312fae851a8f0cb8b233e1a9c89e4d648340972f8`。只读ELF receipt为ELF64
+little-endian RISC-V、RVC、double-float LP64D，interpreter为
+`/lib/ld-linux-riscv64v_xthead-lp64d.so.1`。因此build可标`TARGET_BUILD_VERIFIED`。
+
+该ELF没有被执行，也没有board identity或target NDJSON receipt；runtime状态仍严格为
+`TARGET_NOT_RUN`。target-macro source只定义neutral `OFFSCREEN_REFERENCE_VECTOR_PASSED`/
+`k230d_linux_candidate` build contract，不能输出或推导`TARGET_OFFSCREEN_REFERENCE_VERIFIED`，更不能
+声明K1 complete。
+
+native runner只执行`baseline_cube_once`，`full_lifecycle=false`：一个canonical triangle-list cube Blob、
+一个object/world、一个Plan和一次320×240 synthetic render。它不连接下节Wi-Fi target，不使用
+Session/Runtime/scheduler/State/Stream/TCP，也不执行offline lease；renderer不是geometry-correct rasterizer，
+结果没有CMA/driver/fence/scanout/physical或performance含义。external RenderResult Stream仍未接入。
+
+当前macOS arm64 receipt的五个显式caller allocation均alignment 8：
+
+| arena / domain | bytes |
+|---|---:|
+| BlobStore / `cpu_heap_core_blob` | 4,720,304 |
+| SceneStore / `cpu_heap_profile` | 31,656 |
+| Coordinator / `cpu_heap_profile` | 1,520 |
+| reference renderer / `cpu_heap_reference_targets` | 1,268,872 |
+| runner scratch / `cpu_heap_runner` | 14,720 |
+| **subtotal** | **6,037,072** |
+
+renderer项含两个target的1,228,800 bytes与最小metadata 40,072 bytes，均为CPU heap，不是GPU/CMA。
+subtotal不含`Runner` stack、libc/stdio、process/OS memory或任何未实例化的transport/Stream对象。
+checked allocator只证明runner wrapper在enable前5次成功allocation、enable后0次attempt并最终5次free，
+不证明全进程no-heap。Actions run `32327841849`四个job全部success；这是Host CI，不是target run。
+
 ## Wi-Fi Runtime Edge v0
 
 当前正式 Runtime target 是

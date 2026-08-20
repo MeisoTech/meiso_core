@@ -175,7 +175,13 @@ Wi-Fi Profile对Composition v2的handshake fail-closed，且没有SessionId、ca
 arena、source与output原字节零推进，排空后已排队frame exact-once到达。direction-local saturated work
 分别固定为Host 5 slots（4 control + Blob）与Edge 6 slots（4 control + 同一data round的Wi-Fi/
 RenderResult）。两段依次执行，不证明simultaneous saturation、wall-clock/latency/throughput/
-performance、K230/renderer或安全transport。
+performance、K230/renderer或安全transport。K1a的portable synthetic reference renderer随后在Host
+caller arena中固定两个320×240 color/depth target与两个job，提供source-commit-pinned off-screen
+golden；offline runner把BlobStore、SceneStore、Coordinator与renderer串成一次`baseline_cube_once`。
+这两项是`HOST_OFFSCREEN_REFERENCE_VERIFIED`，不是Runtime/Session/State/Stream路径，也没有执行
+offline lease、K230D backend、CMA、scanout或physical presentation。official K230 Linux toolchain已
+两次byte-exact构建candidate，故build为`TARGET_BUILD_VERIFIED`；ELF未执行，runtime仍为
+`TARGET_NOT_RUN`。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

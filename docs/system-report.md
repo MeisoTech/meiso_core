@@ -438,6 +438,42 @@ GPU/target/job/CMA、transport security、offline lease执行或physical output�
 Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。本轮也没有合并外部Host
 compositor、旧本地素材、vendor SDK或二进制。
 
+public commit `c3b4770` 完成K1a portable synthetic reference renderer，状态为
+`HOST_OFFSCREEN_REFERENCE_VERIFIED`；Actions run `32326481615`四个job全部success。renderer借用
+caller-owned BlobStore，在独立caller arena内固定两个job和两个完整320×240 color/depth target；当前
+macOS arm64最小arena为1,268,872 bytes/alignment 8，其中target为1,228,800 bytes、metadata为
+40,072 bytes。它验证control-scope reset、exact-world retire、queue/alias/capacity、inactive-target
+failure atomicity，以及source-commit-pinned color/depth/64×48 thumbnail golden；complete evidence flags
+exact为`0x3`。算法读取canonical triangle-list Mesh的完整bytes，但不是geometry-correct rasterizer，
+其pixel/depth算法不是Profile wire合同；对象也不拥有SceneStore/Coordinator/Stream/Session/Runtime、
+heap/thread/socket/driver/native handle或CMA。
+
+public commit `b9ec6a3` 又加入offline `composition_offscreen_runner`。Host native receipt以
+`scenario=baseline_cube_once`、`full_lifecycle=false`串起一个cube Blob、一个Scene world、一个Plan和
+一次render，标签为`HOST_OFFSCREEN_REFERENCE_VERIFIED`。当前macOS arm64五个显式caller allocation
+均alignment 8：BlobStore 4,720,304 bytes（`cpu_heap_core_blob`）、SceneStore 31,656
+（`cpu_heap_profile`）、Coordinator 1,520（`cpu_heap_profile`）、reference renderer 1,268,872
+（`cpu_heap_reference_targets`）、runner scratch 14,720（`cpu_heap_runner`），合计6,037,072 bytes。
+checked allocator只证明该runner scope在enable前成功分配5次、enable后零allocation attempt并最终free
+5次；合计不含`Runner` stack、libc/stdio、process/OS memory、Session/Runtime/scheduler/State/Stream/TCP、
+GPU/CMA。runner固定的`offline_lease_ms`只进入Plan验证，不执行Session-loss hold/expiry。
+
+cross脚本只用调用时提供的`MEISO_K230_LINUX_CC`构建neutral `k230d_linux_candidate`。official K230 SDK
+默认Linux toolchain `Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0` 的449,883,716-byte archive
+SHA-256为`17decb02130b8d79a1eb8c2126e17749fbea603dae7d95f20cd4ab411f3f1a41`；compiler报告
+GCC 10.2.0 / Xuantie Toolchain V2.6.0 B-20220715。在linux/amd64 Ubuntu 22.04 container中调用tracked
+script的两次fresh build byte-exact，产物均为83,152 bytes、SHA-256
+`05accb66e621c0bef981e78312fae851a8f0cb8b233e1a9c89e4d648340972f8`。只读inspection确认ELF64
+little-endian RISC-V、RVC、double-float LP64D与interpreter
+`/lib/ld-linux-riscv64v_xthead-lp64d.so.1`，因此build状态为`TARGET_BUILD_VERIFIED`。
+
+该ELF未执行，没有board identity或target NDJSON receipt，runtime状态仍为`TARGET_NOT_RUN`；neutral
+build contract不能输出或推导`TARGET_OFFSCREEN_REFERENCE_VERIFIED`，也不能声明K1 complete。Actions
+run `32327841849`四个job全部success；该CI仍是Host build/test，不提升target runtime标签。以上只证明
+Host offline baseline与official cross-build，不证明完整create/move/camera/delete/disable lifecycle、external
+RenderResult Stream、connected Wi-Fi、320×240以外分辨率、performance、K230 driver/physical output或
+offline lease执行。
+
 ## K230D lab evidence
 
 Resource semantic core 的 target build 状态为 `HOST_VERIFIED`，identity-gated candidate 在
@@ -504,14 +540,14 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
 - Composition的自动resume、fresh Edge、SCAP 16-slot aggregate与未覆盖的wrong-Profile/backpressure/
-  fair-contention fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
+  fair-contention fault/recovery，Host editor、target renderer/present backend与真实presentation endpoint；R2b0已有loopback
   happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2b2已有
   same-Session catalog replacement evidence，R2b3已有explicit same-process RST/new-Session evidence，R2b4已有
   max-single-Blob/resource-boundary evidence，R2b5已有真实TCP wrong-Profile fail-closed、双向分段
   backpressure与direction-local 5/6-slot evidence，R2a已有
-  portable builder/fair scheduler evidence，C2
-  coordinator与R1 Runtime v3 Blob carriage也已有Host evidence，但没有target interoperability、
-  offline lease执行或physical output；
+  portable builder/fair scheduler evidence，C2 coordinator与R1 Runtime v3 Blob carriage也已有Host
+  evidence；K1a已有Host synthetic reference renderer/offline baseline，但没有target interoperability、
+  connected Composition/Wi-Fi Stream、offline lease执行或physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。

@@ -127,6 +127,19 @@ Wi-Fi与RenderResult是同一冻结data round的第5/6个slot，另一方向sche
 latency、throughput或performance保证，也不证明自动resume、fresh Edge process、SCAP 16-slot
 aggregate、K230D/renderer backend、安全transport、offline lease执行或physical presentation。
 
+public commit `c3b4770` 已加入 caller-owned、bounded 的 portable synthetic reference renderer，
+状态为 `HOST_OFFSCREEN_REFERENCE_VERIFIED`。它固定320×240 RGBA8888与implementation-depth32、两个
+target set和两个job；当前macOS arm64最小arena为1,268,872 bytes/alignment 8，其中target
+1,228,800 bytes、metadata 40,072 bytes。source-commit-pinned输出只带exact `0x3`
+off-screen/thumbnail evidence，不是geometry-correct rasterizer、Profile oracle、Stream、driver、CMA、
+scanout或physical evidence；Actions run `32326481615`四个job全部success。public commit `b9ec6a3`
+又加入offline `baseline_cube_once` runner，在Host上串起BlobStore→SceneStore→Coordinator→renderer，
+并输出`HOST_OFFSCREEN_REFERENCE_VERIFIED` receipt。tracked cross脚本已用官方K230 SDK默认Xuantie
+Linux toolchain两次fresh构建出byte-exact的83,152-byte RISC-V ELF（SHA-256
+`05accb66e621c0bef981e78312fae851a8f0cb8b233e1a9c89e4d648340972f8`），因此target状态分层为
+`TARGET_BUILD_VERIFIED / TARGET_NOT_RUN`；neutral `k230d_linux_candidate`尚未执行，不能自证
+`TARGET_OFFSCREEN_REFERENCE_VERIFIED`或K1完成。
+
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 
 ```powershell

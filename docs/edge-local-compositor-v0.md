@@ -1,6 +1,6 @@
 # Edge local compositor v0 开发方案
 
-> 状态：`DESIGN / C0-C2 HOST FIXTURE COMPLETE / R1 PORTABLE BLOB CARRIAGE VERIFIED / TARGET NOT IMPLEMENTED`。这是
+> 状态：`DESIGN / C0-C2 HOST FIXTURE COMPLETE / R1 PORTABLE BLOB CARRIAGE VERIFIED / K1a HOST OFFSCREEN REFERENCE VERIFIED / TARGET BUILD VERIFIED / TARGET NOT RUN`。这是
 > Composition 的实现计划，不是新产品规范或target evidence；通用语义由
 > [Composition 契约](composition.md)拥有。
 
@@ -188,13 +188,15 @@ flush、fence、DRM commit、vblank 或物理像素。
 
 首发固定大核 Linux；K230D 整板仍是一个 Edge，NuttX 只可作为私有 sensor plane：
 
-- CPU reference/off-screen backend 先冻结像素/transaction golden；
+- K1a CPU reference/off-screen backend已在Host冻结source-pinned像素/transaction golden，K230D
+  official cross-build已验证但cross-run仍未执行；
 - VPU/V4L2 解码，NonAI2D 做必要的 NV12→RGB/resize，VGLite/RVV 做 warp/raster/blend；
 - dma-buf/CMA/cache/fence 由 local buffer adapter 管理，DRM/KMS adapter 负责 atomic present；
 - VGLite 当前 one-submitted-command-buffer 与全局 DMA/finish 风险要求单一 owner、固定容量队列
   和 watchdog/failure，不允许多 service 直接争用；
-- 当前 1920×1080 主要是 off-screen evidence，不能冒充 480×800 panel physical scanout；
-  candidate、fence、DRM accepted、vblank 与实际 display evidence 分开记录。
+- 当前reference backend只实现并验证Profile固定的320×240 off-screen target；1920×1080未实现/未
+  验证，任何480×800 panel或其他物理scanout也没有evidence。candidate、fence、DRM accepted、vblank
+  与实际display必须分开记录。
 
 初始 deployment 可用一个 Linux service 内的 Runtime I/O、Composition control、独占 renderer
 worker 与 present thread。只有 hang/isolation evidence 要求时才拆 renderer process。RT-Smart
@@ -248,7 +250,8 @@ IMMUTABLE route，故 C0 不证明 remote combined catalog。
 - scene store固定每 world `32 objects / 8 unique meshes`，借用 caller-owned 16-slot BlobStore，并以
   logical vertex+index bytes执行 active+candidate 4 MiB admission；result queue固定4 slots；
 - CPU fixture零拷贝借用 Blob bytes，streaming fake renderer 不持有 target/job，因此 truthfully报告
-  target/job `0/0`。独立 GPU resident、2 target sets与CMA/backend arena必须在K1实际预分配后另验。
+  target/job `0/0`。后续K1a reference renderer已另行预分配两个CPU target set；GPU resident、CMA与
+  target backend arena仍须在真实backend中另验。
 
 完成条件：Blob 未 commit 时 scene 不应用；完整 world 原子替换；结果引用精确 applied State
 owner/version；duplicate/stale/conflict/capacity/overflow vectors 全部通过；scene store自身不调用heap，
@@ -471,14 +474,33 @@ Blob/desired 或制造第二个 truth owner。
 
 ### K1 — K230D Linux off-screen target
 
-- 先用最小 CPU/reference backend，再替换经许可和 provenance 检查的 RVV/VGLite backend；
-- 固定 320×240 color/depth target、两个 target slot、mesh/GPU/CMA 上限；严格区分 Blob
-  publication、world prepare、render complete 和 thumbnail emitted；
+- K1a已完成最小CPU/reference backend的Host evidence；后续才替换经许可和provenance检查的
+  RVV/VGLite backend；
+- reference renderer固定320×240 color/depth target、两个target slot与两个job；其macOS caller arena
+  是CPU heap，不是GPU/CMA。严格区分Blob publication、world prepare、render complete和external
+  thumbnail Stream emitted；
 - 在当前 direct-IP carrier 上运行 composite Profile，捕获 object/camera 改动导致不同真实
   thumbnail/SHA-256，并保持 Wi-Fi Stream 连续。
 
 完成条件：exact target binary/source receipt、board-side capacity counters、至少 create→move→
 camera move→delete→disable 的 transcript；不得把 off-screen 结果标为 scanout/physical evidence。
+
+K1a Host证据：public commit `c3b4770` 的portable synthetic renderer使用caller-owned arena，无内部
+heap/thread/socket/driver/native handle；两target共1,228,800 bytes，当前macOS最小renderer arena
+1,268,872 bytes/alignment 8。两个job、control-scope reset、exact-world retire、inactive-target atomic
+commit与literal color/depth/thumbnail golden已验证，evidence flags exact为`0x3`；Actions run
+`32326481615`四个job全部success。它消费canonical triangle-list Mesh的完整bytes，但pixel/depth算法只是
+source-commit-pinned synthetic oracle，不证明geometry-correct rasterization或Profile wire output。
+
+public commit `b9ec6a3` 的offline runner只执行`baseline_cube_once`，不含完整lifecycle或external Stream。
+其当前macOS五arena依次为BlobStore 4,720,304、SceneStore 31,656、Coordinator 1,520、renderer
+1,268,872、scratch 14,720 bytes，均alignment 8且合计6,037,072 bytes；memory domains分别为Core Blob
+CPU heap、两项Profile CPU heap、reference-target CPU heap与runner CPU heap。该数值不含stack/libc/OS、
+Session/Runtime/scheduler/State/Stream/TCP或GPU/CMA。native标签为
+`HOST_OFFSCREEN_REFERENCE_VERIFIED`。官方Xuantie toolchain已两次fresh、byte-exact构建83,152-byte
+candidate ELF（SHA-256 `05accb66e621c0bef981e78312fae851a8f0cb8b233e1a9c89e4d648340972f8`），
+故build为`TARGET_BUILD_VERIFIED`；没有board identity或target NDJSON receipt，runtime仍为
+`TARGET_NOT_RUN`。`offline_lease_ms`只随Plan验证/保留，没有Session-loss执行。
 
 ### K2 — Physical present 与完整 media（后置）
 

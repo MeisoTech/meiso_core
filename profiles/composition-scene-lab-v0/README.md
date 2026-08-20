@@ -1,6 +1,6 @@
 # Composition scene lab v0
 
-> 状态：`C0 CODEC IMPLEMENTED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / R1 PORTABLE BLOB CARRIAGE VERIFIED / LOGICAL ADMISSION ONLY / NO BOARD INTEROP`。
+> 状态：`C0 CODEC IMPLEMENTED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / R1 PORTABLE BLOB CARRIAGE VERIFIED / K1a HOST OFFSCREEN REFERENCE VERIFIED / TARGET BUILD VERIFIED / TARGET NOT RUN`。
 > 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
@@ -195,8 +195,9 @@ EMPTY
 是同一 Composition transaction；plan 已 ACTIVE 时，后续 world swap 也只能发生在其控制的完整
 frame boundary。该边界之前新 desired 只能是 observed/pending，不能成为新 applied/RUNNING truth。
 Scene desired supersede 取消旧 candidate；其已 commit Blob 可以留在有界 cache，但 renderer
-handles/job/output 不可移入新 world。Session loss 按 PresentationPlan offline lease 处理；Edge
-restart 后 world、production epoch 和 local handles 全新。
+handles/job/output 不可移入新 world。产品集成最终须按PresentationPlan定义处理Session loss与offline
+lease；当前C2/K1a和offline runner没有Session-loss signal，不执行lease。Edge restart后world、
+production epoch和local handles全新。
 
 ## Mesh Blob v0
 
@@ -352,6 +353,36 @@ C1/K1 启动前必须记录每一项 exact bytes、alignment、memory domain 与
 snapshot 因隐藏双代开销拒绝；该切换后 store 已用满，继续引入新 ContentId 可合法返回
 `BLOB_CAPACITY`。后续若增加 eviction，必须另行冻结与 active/candidate/published visibility 的关系。
 
+## K1a Host synthetic renderer 与 offline runner evidence
+
+public commit `c3b4770` 加入portable `composition_reference_renderer`。它借用caller-owned BlobStore，
+自身caller arena固定两个job及两个完整320×240 RGBA8888/implementation-depth32 target set；当前macOS
+arm64最小arena 1,268,872 bytes/alignment 8，其中target 1,228,800 bytes、metadata 40,072 bytes。
+control-scope改变会清queue/targets/latest result，`retire_world`精确清退同scope旧world；render只写
+inactive target，失败保留旧complete与head。complete views借用arena，evidence flags恒为exact `0x3`。
+
+该backend读取每个已验证canonical triangle-list Mesh的全部bytes和完整SceneDesired，但并不按三角形
+几何光栅化；color/depth/64×48 thumbnail只是source-commit-pinned synthetic oracle，pixel算法不是Profile
+wire合同。它不拥有SceneStore/Coordinator/Stream/Session/Runtime、heap/thread/socket/driver/native handle
+或CMA；RenderResult进入external Stream仍由后续integration负责。Actions run `32326481615`四个job全部
+success，证据标签为`HOST_OFFSCREEN_REFERENCE_VERIFIED`。
+
+public commit `b9ec6a3` 的offline runner执行一次`baseline_cube_once`：一个cube Blob、一个object/world、
+一个Plan和一次render；receipt显式`full_lifecycle=false`。当前macOS五个caller allocation依次为
+BlobStore 4,720,304（`cpu_heap_core_blob`）、SceneStore 31,656（`cpu_heap_profile`）、Coordinator
+1,520（`cpu_heap_profile`）、renderer 1,268,872（`cpu_heap_reference_targets`）、runner scratch
+14,720 bytes（`cpu_heap_runner`），均alignment 8，合计6,037,072 bytes。checked allocator的零后续
+allocation只限定runner wrapper scope；数值不含stack/libc/OS、Session/Runtime/scheduler/State/Stream/TCP、
+GPU/CMA。
+
+native runner可标`HOST_OFFSCREEN_REFERENCE_VERIFIED`。tracked cross脚本已在linux/amd64 Ubuntu 22.04
+container中用官方K230 SDK默认Xuantie toolchain两次fresh、byte-exact构建neutral
+`k230d_linux_candidate`，故标`TARGET_BUILD_VERIFIED`。83,152-byte ELF的SHA-256为
+`05accb66e621c0bef981e78312fae851a8f0cb8b233e1a9c89e4d648340972f8`；它尚未执行，没有board
+identity或target NDJSON receipt，必须同时标`TARGET_NOT_RUN`，不能自证
+`TARGET_OFFSCREEN_REFERENCE_VERIFIED`。runner不连接Wi-Fi，不执行offline lease，也不覆盖
+move/camera/delete/disable、320×240以外分辨率、performance或physical output。
+
 ## R2a TX fairness 与 combined builder evidence（完成）
 
 public commit `5d92ff6` 在 Runtime--SDK 层增加 caller-owned `meiso_runtime_scheduler`，绑定本地 peer
@@ -392,8 +423,8 @@ deadline/drop/gap policy仍由Profile integration负责。R2b0现已覆盖真实
 R2b1覆盖same-Session lifecycle，R2b2覆盖same-Session catalog replacement，R2b3覆盖explicit
 same-process RST/new-Session recovery，R2b4覆盖max-single-Blob/resource boundary，R2b5覆盖
 wrong-Profile fail-closed、分方向真实backpressure与5/6-slot fairness；自动resume、fresh Edge及未覆盖的
-negative/stress matrix仍待验证，K1仍须
-验证K230D，Hz/latency/jitter/throughput/performance也未测量。
+negative/stress matrix仍待验证；K1a已有Host synthetic renderer，但K1 target仍须验证K230D，
+Hz/latency/jitter/throughput/performance也未测量。
 
 ## R2b0 AF_INET combined semantic evidence（完成）
 
