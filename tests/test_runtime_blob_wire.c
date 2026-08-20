@@ -2652,6 +2652,46 @@ static bool test_result_requires_explicit_scene_visibility(void)
     return true;
 }
 
+static bool calibrate_edge_blob_scratch_offset(size_t *out_offset)
+{
+    RuntimePair calibration;
+    MeisoRuntimeBlobTransferRef transfer = {0};
+    MeisoRuntimeEvent commit_event = {0};
+    MeisoRuntimeV3Config config;
+    size_t runtime_size;
+    size_t offset;
+    uintptr_t arena_start;
+    uintptr_t payload_start;
+
+    CHECK(out_offset != NULL && receive_small_blob_to_commit(
+        &calibration, &transfer, &commit_event
+    ));
+    CHECK(commit_event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          commit_event.blob_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+          commit_event.blob_payload.size == sizeof(BLOB_BYTES) &&
+          memcmp(
+              commit_event.blob_payload.data,
+              BLOB_BYTES,
+              sizeof(BLOB_BYTES)
+          ) == 0);
+    config = runtime_config(calibration.edge_session);
+    runtime_size = meiso_runtime_v3_memory_required(&config);
+    arena_start = (uintptr_t)(const void *)
+        calibration.edge_runtime_arena.bytes;
+    payload_start = (uintptr_t)(const void *)
+        commit_event.blob_payload.data;
+    CHECK(runtime_size != 0U &&
+          runtime_size <= sizeof(calibration.edge_runtime_arena.bytes) &&
+          runtime_size <= UINTPTR_MAX - arena_start &&
+          payload_start >= arena_start &&
+          payload_start <= arena_start + runtime_size);
+    offset = (size_t)(payload_start - arena_start);
+    CHECK(offset <= runtime_size &&
+          config.max_blob_transfer_bytes <= runtime_size - offset);
+    *out_offset = offset;
+    return true;
+}
+
 static bool test_v3_state_stream_and_blob_coexist(void)
 {
     RuntimePair pair;
@@ -2674,11 +2714,18 @@ static bool test_v3_state_stream_and_blob_coexist(void)
     MeisoRuntimeV3Config edge_config;
     size_t edge_runtime_size;
     size_t index;
+    size_t scratch_offset;
     uint8_t *scratch;
     uint8_t desired_bytes[16];
     uint8_t actual_bytes[128];
     static const uint8_t sample_bytes[] = {0x31U, 0x32U, 0x33U};
 
+    /*
+     * CHUNK exposes a Session message borrow, not the reassembly address.
+     * Calibrate the opaque scratch offset from COMMIT's Runtime-scratch borrow
+     * in an independent fixture with the exact same Edge role/config/ABI.
+     */
+    CHECK(calibrate_edge_blob_scratch_offset(&scratch_offset));
     CHECK(init_pair(&pair));
     blob_catalog(&endpoint, &routes[0]);
     routes[1] = (MeisoRuntimeRouteDescriptor){
@@ -2868,6 +2915,19 @@ static bool test_v3_state_stream_and_blob_coexist(void)
     CHECK(meiso_runtime_receive(
         pair.edge_runtime, &message, &event
     ) == MEISO_RUNTIME_OK);
+    CHECK(event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          event.blob_operation == MEISO_RUNTIME_BLOB_CHUNK &&
+          event.blob_payload.size == sizeof(BLOB_BYTES) &&
+          memcmp(
+              event.blob_payload.data, BLOB_BYTES, sizeof(BLOB_BYTES)
+          ) == 0);
+    edge_config = runtime_config(pair.edge_session);
+    edge_runtime_size = meiso_runtime_v3_memory_required(&edge_config);
+    CHECK(edge_runtime_size != 0U &&
+          edge_runtime_size <= sizeof(pair.edge_runtime_arena.bytes) &&
+          scratch_offset <= edge_runtime_size &&
+          edge_config.max_blob_transfer_bytes <=
+              edge_runtime_size - scratch_offset);
 
     CHECK(meiso_runtime_desired_state_encode(
         &desired,
@@ -2898,11 +2958,7 @@ static bool test_v3_state_stream_and_blob_coexist(void)
         pair.edge_runtime, &edge_transfer, MEISO_RUNTIME_BLOB_CHUNK
     ) == MEISO_RUNTIME_CONFLICT);
 
-    edge_config = runtime_config(pair.edge_session);
-    edge_runtime_size = meiso_runtime_v3_memory_required(&edge_config);
-    CHECK(edge_runtime_size > edge_config.max_blob_transfer_bytes);
-    scratch = pair.edge_runtime_arena.bytes + edge_runtime_size -
-        edge_config.max_blob_transfer_bytes;
+    scratch = pair.edge_runtime_arena.bytes + scratch_offset;
     CHECK(memcmp(scratch, BLOB_BYTES, sizeof(BLOB_BYTES)) == 0);
     meiso_session_transport_lost(pair.edge_session);
     CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
