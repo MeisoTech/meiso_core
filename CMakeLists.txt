@@ -80,6 +80,7 @@ add_library(
     profiles/composition-scene-lab-v0/composition_scene.c
     profiles/composition-scene-lab-v0/scene_store.c
     profiles/composition-scene-lab-v0/composition_coordinator.c
+    profiles/composition-scene-lab-v0/composition_reference_renderer.c
 )
 target_include_directories(
     meiso_composition_scene_profile
@@ -249,6 +250,16 @@ target_link_libraries(
 meiso_enable_warnings(meiso_composition_scene_resource_test)
 
 add_executable(
+    meiso_composition_reference_renderer_test
+    tests/test_composition_reference_renderer.c
+)
+target_link_libraries(
+    meiso_composition_reference_renderer_test
+    PRIVATE meiso_composition_scene_profile
+)
+meiso_enable_warnings(meiso_composition_reference_renderer_test)
+
+add_executable(
     meiso_composition_coordinator_test
     tests/test_composition_coordinator.c
 )
@@ -409,6 +420,10 @@ add_test(
 add_test(
     NAME meiso_composition_scene_resource_test
     COMMAND meiso_composition_scene_resource_test
+)
+add_test(
+    NAME meiso_composition_reference_renderer_test
+    COMMAND meiso_composition_reference_renderer_test
 )
 add_test(
     NAME meiso_composition_coordinator_test
