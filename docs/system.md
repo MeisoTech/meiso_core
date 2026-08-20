@@ -155,7 +155,10 @@ route、SDK/Virtual Edge、discovery/reconnect与security adapter仍未完成。
 `composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
 Blob carriage。Profile v1 保留 MRT0 v2，明确拒绝 Blob/IMMUTABLE route；Profile v2 显式选择
 MRT0 v3 并允许 Host→Edge Blob；R2a进一步完成exact 3/9/920 combined builder与portable scheduler。
-该结果仍没有AF_INET combined event loop、Host editor或K230D renderer evidence。
+R2b0又在真实`127.0.0.1` AF_INET `SOCK_STREAM`上用双方nonblocking POSIX adapter、17-byte I/O与双方
+scheduler贯通Blob→Core publish→显式visibility、Scene/Plan→C2 ACTIVE及两条exact Stream route，形成
+loopback happy-path semantic/wire/transport evidence。它仍不覆盖wrong Profile、catalog replacement、
+reconnect、backpressure、fair-contention stress、Host editor或K230D renderer。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

@@ -98,8 +98,8 @@ Runtime v2 继续拒绝 `IMMUTABLE/Blob` route；R1 的 strict MRT0 v3 handle �
 payload 内加入 Host-owned Blob carriage 与 owner/direction 校验。v3 支持同 catalog 多条 Blob
 route，但每个 handle 全局只有一个 transfer；`STREAM_SAMPLE` 仍只支持 Edge→Host。v2 literal bytes、
 六类 frame meaning、Core API/source 与 Session wire 均不变。R1 已证明 portable catalog/Blob
-carriage；R2a 已证明 portable combined builder 与独立 fair scheduler，AF_INET combined event loop
-留给 R2b，target interoperability 留给 K1。
+carriage；R2a 已证明portable combined builder与独立fair scheduler；R2b0已证明真实AF_INET loopback
+happy path，R2b1仍负责negative/recovery，target interoperability留给K1。
 
 ## C0 canonical wire
 
@@ -385,8 +385,28 @@ rebind，必须新建Session/Runtime/Scheduler。
 
 public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，clang analyzer对scheduler、
 builder、test为0 finding。该结果只证明portable/in-process调度与Profile builder；source queue的
-deadline/drop/gap policy仍由Profile integration负责。R2b仍须验证AF_INET combined event loop，K1仍须
+deadline/drop/gap policy仍由Profile integration负责。R2b0现已覆盖真实AF_INET loopback happy path；
+wrong Profile、catalog replacement、reconnect、backpressure与fair-contention stress仍属R2b1，K1仍须
 验证K230D，Hz/latency/jitter/throughput/performance也未测量。
+
+## R2b0 AF_INET combined semantic evidence（完成）
+
+public commit `7e53bc9` 使用真实`127.0.0.1` AF_INET `SOCK_STREAM`；Host和Edge各自以nonblocking
+POSIX adapter驱动自己的R2a scheduler。每次transport I/O限制为17 bytes，双方Runtime frame均实际
+跨越多次`WRITE`/`READ_PROGRESS`。同一个Profile v2/MRT0 v3 Session接受exact 3 endpoint、9 route、
+920-byte catalog，并完成以下happy-path transcript：
+
+- cube Mesh Blob经Runtime reassembly与generic Core publish bridge提交，再显式`mark_visible`；
+- Scene desired与PresentationPlan State经C2 prepare/token/activate进入`ACTIVE`；
+- Wi-Fi、Scene、Presentation actual分别使用production epoch `77`、`42`、`41`；
+- `WIFI_TLM/DATA_STR`在exact route上产生epoch `177`/sequence `1`，`K230_SCN/RES_STR`在exact
+  route上产生epoch `417`/sequence `1`。
+
+fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding；GitHub Actions run
+`32316527393`四个job全部success。状态仅为
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback happy path）。该证据
+不证明wrong Profile、catalog replacement、reconnect、backpressure、fair-contention stress、K230/K1、
+renderer/present、Hz/latency/performance、transport security或physical output。
 
 ## C0 executable evidence
 
@@ -504,8 +524,9 @@ macOS arm64 exact arenas均alignment 8：Host Runtime 14,904 bytes；Edge Runtim
 CPU-visible heap，不是K230 RAM、GPU/CMA、renderer target或physical allocation。
 
 R1状态为`COMPLETE / PORTABLE BLOB CARRIAGE SEMANTIC-WIRE VERIFIED`；该提交自身不证明fair
-scheduler。后续R2a已证明portable combined builder/scheduler，但不证明R2b AF_INET combined event
-loop、Host editor、K230D build/run、renderer/backend、offline lease执行或physical output。
+scheduler。后续R2a已证明portable combined builder/scheduler，R2b0又证明loopback happy-path
+AF_INET combined transport；它们仍不证明R2b1 fault/recovery、Host editor、K230D build/run、
+renderer/backend、offline lease执行或physical output。
 
 ## Required sequence
 

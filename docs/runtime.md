@@ -161,6 +161,16 @@ Runtime snapshot为`publish_pending && !result_pending`时要求Core publication
 `REBIND_REQUIRED`；Session terminal则永久进入`SESSION_TERMINAL`并exact-once通知sources，旧对象不能
 rebind，必须创建新Session/Runtime/Scheduler。
 
+public commit `7e53bc9` 的R2b0把该Composition Profile v2组合接入真实`127.0.0.1` AF_INET
+`SOCK_STREAM`：Host/Edge各自使用nonblocking POSIX adapter与R2a scheduler，I/O step固定17 bytes，
+双方Runtime frame均观察到多次`WRITE_PROGRESS`和`READ_PROGRESS`。同一MRT0 v3 Session接受exact
+3 endpoint/9 route/920-byte catalog，随后传递cube Blob、Wi-Fi/Scene/Presentation State与两条
+Stream；没有新增wire、Core或direct Runtime API。该结果是loopback happy-path
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`，不证明wrong Profile、catalog
+replacement、reconnect、backpressure、fair-contention、K230/renderer、性能或transport security。
+fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding；GitHub Actions run
+`32316527393`四个job全部success。
+
 ## Blob route 与可见性
 
 Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的

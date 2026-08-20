@@ -83,8 +83,15 @@ outbound）执行control RR、最多4帧control burst与冻结的data round，�
 Edge两条data route各 `<=6`；该slot不表示socket write、peer receive或时延。R2a还验证State/Blob RX
 obligation：State `OFFER`须commit；Blob仅在`COMMIT`后`publish_pending && !result_pending`时须publish，
 length/SHA precheck失败直接产生terminal `RESULT`。`TX_BUSY`时Scheduler/Runtime/Session三个arena原字节
-不变；它没有修改Core、Session wire或direct Runtime API。R2b 的AF_INET combined event loop、Host editor、K230D/renderer backend、
-GPU/target allocation、offline lease 执行与 physical presentation 仍未实现。
+不变；它没有修改Core、Session wire或direct Runtime API。public commit `7e53bc9` 又完成R2b0
+happy-path loopback：真实`127.0.0.1` AF_INET `SOCK_STREAM`两端使用nonblocking POSIX adapter与
+17-byte I/O step，双方Runtime frame均实测multi `WRITE/READ_PROGRESS`；同一Profile v2/MRT0 v3
+Session贯通3 endpoint/9 route/920-byte catalog、双方R2a scheduler、cube Blob→Core publish→显式
+Scene visibility、Scene/Plan State→C2 `ACTIVE`、独立Wi-Fi/RenderResult Stream。它只支持loopback
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`；fresh Debug与ASan+UBSan CTest均
+25/25，clang analyzer为0 finding，GitHub Actions run `32316527393`四个job全部success。R2b1的negative/reconnect/
+backpressure、Host editor、K230D/renderer backend、GPU/target allocation、offline lease执行与physical
+presentation仍未验证。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

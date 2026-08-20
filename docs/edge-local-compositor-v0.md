@@ -347,17 +347,30 @@ public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，
 scheduler/builder/test为0 finding。该证据是portable/in-process语义门，不证明AF_INET combined
 transport、K230/K1、Hz/latency/performance或renderer/physical output。
 
-### R2b — Combined Session/catalog AF_INET loopback（待实现）
+### R2b0 — Combined Session/catalog AF_INET happy path（完成）
 
-- Host/Edge 使用一个 composite ProfileRef 在真实 `AF_INET` connected stream 上完成一次 Session
-  handshake；Edge 原子 offer 三个 endpoint/九条 route 的 catalog；
-- 同一 event loop 内完成 Mesh Blob→SceneDesired、PresentationPlan prepare/activate→SceneStatus
-  RUNNING→RenderResult，同时 Wi-Fi endpoint 继续 desired/actual/sample；
-- 分别启停、重配两 endpoint，证明 production epoch、gate、State version 和 Stream epoch 不交叉；
-- catalog replacement 后两组 desired 都必须重发；旧 route 和旧 epoch 全部拒绝。
+public commit `7e53bc9` 在真实`127.0.0.1` AF_INET `SOCK_STREAM`上连接Host与Edge；两端均使用
+nonblocking POSIX adapter，并把每次I/O限制为17 bytes，使双方Runtime frame实际经历多次`WRITE`/
+`READ_PROGRESS`。一个Profile v2/MRT0 v3 Session使用exact 3 endpoint、9 route、920-byte catalog与
+双方R2a scheduler，贯通：
 
-完成条件：scene-only 或 wifi-only Profile 对 composite peer 得到 exact `PROFILE_MISMATCH`；真实
-AF_INET mixed run证明portable scheduler集成后Blob/result不饿死Wi-Fi，Wi-Fi也不阻断scene control。
+- cube Mesh Blob → Runtime scratch → Core BlobStore publish → 显式SceneStore `mark_visible`；
+- Scene/Plan State → C2 `ACTIVE`；
+- Wi-Fi actual production epoch `77`、Scene `42`、Presentation `41`；
+- exact `WIFI_TLM/DATA_STR` route上的epoch `177`/sequence `1`，以及exact `K230_SCN/RES_STR`
+  route上的epoch `417`/sequence `1`。
+
+fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding；GitHub Actions run
+`32316527393`四个job全部success。结论严格为
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback happy path），不是
+K230、renderer、physical output、性能或安全证据。
+
+### R2b1 — Combined fault/recovery（待实现）
+
+- scene-only或wifi-only Profile对composite peer的exact `PROFILE_MISMATCH`；
+- catalog replacement、断线重建Session、旧route/epoch拒绝与两组desired重发；
+- backpressure、双方data同时ready时的fair-contention stress与bounded failure paths；
+- Host editor、K230/K1 target、renderer/present backend与physical output另行验证。
 
 ### H1 — Host editor/devtool
 

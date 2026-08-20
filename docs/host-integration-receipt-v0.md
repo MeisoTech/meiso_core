@@ -2,8 +2,9 @@
 
 > 受众：Host Runtime / SDK 开发者。状态：当前可执行互操作基线；不是新的产品规范。
 > 产品语义以[文档入口](index.md)列出的五份规范为准。可复现实装基线为
-> [`5d92ff6`](https://github.com/anantheparty/meiso_glass/commit/5d92ff6)：包含既有 direct-IP
-> Session/Runtime 路径，以及 R1 Blob carriage、R2a combined builder/fair scheduler 的后续增量。
+> [`7e53bc9`](https://github.com/anantheparty/meiso_glass/commit/7e53bc9)：包含既有 direct-IP
+> Session/Runtime、R1 Blob carriage、R2a combined builder/fair scheduler，以及R2b0真实loopback
+> happy-path增量。
 
 ## 结论
 
@@ -21,6 +22,8 @@ numeric IPv4/TCP connected fd（locator）
   -> Edge actual Core State
   -> actual RUNNING 后 Edge Core Stream
   -> exact Composition Profile v2/MRT0 v3 下：Host Blob -> Edge Core BlobStore publication
+  -> explicit Scene visibility -> Scene/Plan State -> C2 ACTIVE
+  -> exact Wi-Fi / RenderResult Stream routes
 ```
 
 没有 subscription。Host 不需要数据时发布 `desired.enabled=false`，Edge 停止生产并通过
@@ -98,7 +101,7 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 | Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：strict `MRT0` v2/v3 |
 | 首个 Profile | [Wi-Fi telemetry v0](../profiles/wifi-telemetry-v0/README.md) |
 | direct-IP 实装 | [Direct-IP Wi-Fi Runtime v0](wifi-runtime-direct-ip-v0.md) |
-| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob 与 R2a portable 3/9/920 builder/fair scheduler evidence，但没有 AF_INET combined event loop、Host editor 或 target interoperability |
+| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob、R2a portable 3/9/920 builder/fair scheduler与R2b0真实AF_INET loopback happy-path evidence；没有Host editor、target interoperability或combined fault/recovery evidence |
 
 当前 Runtime source v0 承载 Host-owned desired State、Edge-owned actual State、Edge-owned data
 Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Action、MediaStream、
@@ -112,9 +115,18 @@ K230D Linux Edge 与 macOS Host 已在真实 Wi-Fi direct-IP 上完成同一 Ses
 重配置、停止、再次启动和 normal close；还验证了 100 ms 下 64 个连续 sample，以及显式进程
 重启后的完整重协商。准确 artifact、参数和 failure 边界见[系统进展](system-report.md)。
 
-这不证明稳定SDK、自动重连、长稳/性能、MediaStream、Composition AF_INET combined event loop/target、
-discovery或安全transport。R1只证明portable Blob semantic/wire与Core publish bridge；R2a只证明
-portable/in-process scheduler与builder，两者均不证明K230D。
+另一个独立的R2b0 Host test在真实`127.0.0.1` AF_INET `SOCK_STREAM`上使用双方nonblocking POSIX
+adapter、17-byte I/O step与双方R2a scheduler，贯通Profile v2/MRT0 v3 exact 3/9/920 catalog、cube
+Blob→Core publication→显式visibility、Scene/Plan→C2 `ACTIVE`，以及exact `WIFI_TLM/DATA_STR`与
+`K230_SCN/RES_STR` route。production epoch为Wi-Fi `77`、Scene `42`、Presentation `41`；Stream分别为
+epoch `177`/sequence `1`与epoch `417`/sequence `1`。fresh Debug与ASan+UBSan CTest均25/25，
+clang analyzer为0 finding；GitHub Actions run `32316527393`四个job全部success。
+
+R2b0结论严格为`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback happy
+path）。这不证明稳定SDK、自动重连、wrong Profile、catalog replacement、backpressure、fair-contention
+stress、长稳/性能、MediaStream、Composition target、discovery或安全transport。R1只证明portable Blob
+semantic/wire与Core publish bridge；R2a只证明portable/in-process scheduler与builder；R2b0也不证明
+K230D或renderer/physical output。
 当前 plain TCP 的 PeerId exact check 只能防误连，不能提供认证、机密性或完整性；产品连接必须
 另行绑定经审查的安全 transport。
 

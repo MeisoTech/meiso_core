@@ -322,9 +322,20 @@ R2a vector 还验证 `TX_BUSY` 对完整 Scheduler/Runtime/Session arena、sourc
 Session/Runtime/Scheduler。public commit `5d92ff6` 的 fresh Debug CTest 为 24/24，strict C11/C++17 通过，clang analyzer 对
 scheduler/builder/test 为 0 finding。Core/Session/direct Runtime/Profile v1 wire/API tracked diff 为零。
 
-R2a 只证明 portable/in-process scheduler 与 combined Profile v2 builder；没有证明 AF_INET combined
-event loop、K230/K1 build/run、Hz/latency/jitter/throughput/performance、Host editor、renderer backend、
-GPU/target/job/CMA、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
+public commit `7e53bc9` 又完成R2b0的真实loopback happy path：Host与Edge各用nonblocking POSIX
+adapter连接`127.0.0.1`上的`AF_INET/SOCK_STREAM`，每次transport I/O限制为17 bytes，因此双方
+Runtime frame均实际跨越多次`WRITE`/`READ_PROGRESS`。同一Profile v2/MRT0 v3 Session使用exact
+3 endpoint、9 route、920-byte catalog与双方R2a scheduler；cube Mesh Blob经Runtime接收、Core
+publish及显式`mark_visible`后，Scene/Plan State驱动C2进入`ACTIVE`。实际观测的production epoch为
+Wi-Fi actual `77`、Scene actual `42`、Presentation actual `41`；`WIFI_TLM/DATA_STR` Stream为epoch
+`177`/sequence `1`，`K230_SCN/RES_STR` Stream为epoch `417`/sequence `1`。
+
+fresh Debug与ASan+UBSan CTest均为25/25，clang analyzer为0 finding。GitHub Actions run
+`32316527393`已完成，四个job全部success。该证据严格标记为
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback happy path）；它没有
+覆盖wrong Profile、catalog replacement、reconnect、backpressure、fair-contention stress，也没有
+证明K230/K1 build/run、Hz/latency/jitter/throughput/performance、Host editor、renderer backend、
+GPU/target/job/CMA、transport security、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
 Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。本轮也没有合并外部Host
 compositor、旧本地素材、vendor SDK或二进制。
 
@@ -393,10 +404,11 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition R2b AF_INET combined Session/event loop、Host editor、renderer/present backend与真实
-  presentation endpoint；R2a 已有 portable combined builder/fair scheduler evidence，C2 coordinator
-  与 R1 Runtime v3 Blob carriage 也已有 Host evidence，但没有 target interoperability、offline lease
-  执行或 physical output；
+- Composition R2b1的wrong-Profile、catalog replacement、reconnect、backpressure与fair-contention
+  fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
+  happy-path semantic/wire/transport evidence，R2a已有portable builder/fair scheduler evidence，C2
+  coordinator与R1 Runtime v3 Blob carriage也已有Host evidence，但没有target interoperability、
+  offline lease执行或physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。
