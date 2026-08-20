@@ -150,11 +150,12 @@ Core Stream data route；source v0 / wire v2 的三套 Host test 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。所选 `wifi-telemetry-v0` slice 另有 K230D Linux
 probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 Profile/platform evidence，
 不是portable Runtime的通用能力。通用hotplug、Action/MediaStream、Edge→Host/并行/resumable Blob
-route、fair scheduler、SDK/Virtual Edge、discovery/reconnect与security adapter仍未完成。
+route、SDK/Virtual Edge、discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
+专用的caller-owned fair scheduler；它是Runtime--SDK对象，不是Core/wire或通用产品QoS。
 `composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
 Blob carriage。Profile v1 保留 MRT0 v2，明确拒绝 Blob/IMMUTABLE route；Profile v2 显式选择
-MRT0 v3 并允许 Host→Edge Blob。该结果仍没有 combined scheduler、Host editor 或 K230D renderer
-evidence。
+MRT0 v3 并允许 Host→Edge Blob；R2a进一步完成exact 3/9/920 combined builder与portable scheduler。
+该结果仍没有AF_INET combined event loop、Host editor或K230D renderer evidence。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

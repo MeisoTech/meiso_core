@@ -124,11 +124,12 @@ scene 分别拥有 desired/actual、production epoch 与 data gate。v0 catalog 
 使整份 catalog binding 失效，Host 必须重新接受 catalog 并分别重发两组 desired；这不允许实现
 把两个 endpoint 的 gate 或 actual 合并。
 
-当前每个peer Session handle各有一个outbound TX slot；R1 Runtime不包含scheduler。R2必须分别
-公平调度两个方向：Host outbound是Host control+Blob chunk，Edge outbound是Edge control+Wi-Fi
-sample+scene result。每方向control帧只允许有限优先burst，每个ready route每轮至多提交一帧，
-Host Blob chunk不能连续占满Host TX；full-duplex不能合并成全局slot序列。每条route必须在本方向
-声明的slot bound内获得提交机会，过载以gap/drop/capacity暴露，不能静默饿死Wi-Fi或result。
+每个peer Session handle各有一个outbound TX slot；R1 direct Runtime不包含scheduler，R2a 已用独立
+Runtime--SDK scheduler 分别调度两个方向：Host outbound是Host control+Blob chunk，Edge outbound是
+Edge control+Wi-Fi sample+scene result。每方向control burst最多4个成功slot，冻结data round后每个
+ready route至多一次发送机会；Host Blob chunk不能连续占满Host TX，full-duplex不能合并成全局slot
+序列。确定性上界为Host单data route `<=5`、Edge两条data route各 `<=6` 个本方向成功slot；过载仍须
+以gap/drop/capacity暴露，不能静默饿死Wi-Fi或result。
 
 ## Plan 生命周期
 
@@ -311,31 +312,52 @@ nonce全局fresh；均不提升本阶段evidence等级。
 - Edge Runtime完整scratch先核对length/SHA-256，再由generic bridge在同一Core verification snapshot
   上执行SHA+Profile verifier与BlobStore atomic publish；publication后仍须显式SceneStore visibility；
 - Session/catalog discontinuity清Runtime transfer/scratch，published Core cache可保留；新Session/
-  control scope不复活desired/world/visibility。catalog-only replacement的外部visibility策略留给R2
-  Profile integration，Runtime不持有它，R1未验证；Core/Session wire无改动。
+  control scope不复活desired/world/visibility。catalog-only replacement的外部visibility策略留给后续
+  Profile/SceneStore integration，Runtime不持有它，R1未验证；Core/Session wire无改动。
 
 独立literal、truncation/reserved、0/4096/4097/262144、offset、phase/result、TX_BUSY、alias/reentry、
 multi-route、Core staging ownership/cleanup、duplicate/visibility与State/Stream coexist vectors通过；fresh
 Debug、strict、ASan+UBSan均CTest 23/23，clang analyzer 0 finding。macOS arm64 Host/Edge Runtime
 arena为14,904/277,048 bytes、alignment 8，Edge值含262,144-byte scratch。
 
-R1明确不实现fair scheduler；control burst、round-robin与direction-local no-starvation proof移至R2。
+R1提交自身不实现fair scheduler；control burst、round-robin与direction-local no-starvation由下节
+R2a的独立Runtime--SDK对象证明。
 
-### R2 — Combined Session/catalog loopback
+### R2a — Portable combined builder 与 fair TX scheduler（完成）
 
-- 在Runtime--SDK层加入有界fair scheduler。Host与Edge按各自outbound方向独立计successful slot，
-  不能把full-duplex合为全局序列：Host调度Host control/Blob chunk，Edge调度Edge control/Wi-Fi/
-  RenderResult。每方向control burst最多4个slot，ready route round-robin，Host Blob每轮至多一个
-  chunk，local `TX_BUSY`不消耗本方向round；
-- Host/Edge 使用一个 composite ProfileRef 完成一次 Session handshake；Edge 原子 offer 三个
-  endpoint/九条 route 的 catalog；
+public commit `5d92ff6` 提供 exact Profile v2 combined builder 与 caller-owned scheduler；后者绑定一个
+本地 peer 的 exact Runtime/Session pair，是该 pair 唯一 TX owner，不修改 Core、Session wire 或
+direct Runtime API。
+
+- builder 无部分输出地选择 `8236/8192/12`，按 Wi-Fi/Presentation/Scene 顺序建立3 endpoint、9 route
+  与 canonical 920-byte catalog；
+- control source持久RR且burst最多4个成功slot；data round冻结本轮ready membership，每个source至多
+  一次发送机会，Host Blob每轮至多一个chunk；`data_probe_due`使nonbusy control reject后优先探测data；
+- Host与Edge独立计本方向successful slot；Host单Blob route等待 `<=5`，Edge Wi-Fi/RenderResult同时
+  ready时各等待 `<=6`；local `TX_BUSY`不推进Scheduler、Runtime、Session、source或本方向round；
+- successful slot只表示direct Runtime send返回`OK`且frame已排入Session outbound，不表示socket write、
+  peer receive、application commit或时延上界；
+- State `OFFER`要求commit；Blob仅在接收`COMMIT`后Runtime snapshot为
+  `publish_pending && !result_pending`时要求Core publication。length/SHA precheck失败直接产生terminal
+  `RESULT`，没有publish obligation；
+- active catalog generation变化清binding/round并进入`REBIND_REQUIRED`；Session terminal永久进入
+  `SESSION_TERMINAL`并exact-once通知sources，旧对象不能rebind，必须新建Session/Runtime/Scheduler。
+
+public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，clang analyzer对
+scheduler/builder/test为0 finding。该证据是portable/in-process语义门，不证明AF_INET combined
+transport、K230/K1、Hz/latency/performance或renderer/physical output。
+
+### R2b — Combined Session/catalog AF_INET loopback（待实现）
+
+- Host/Edge 使用一个 composite ProfileRef 在真实 `AF_INET` connected stream 上完成一次 Session
+  handshake；Edge 原子 offer 三个 endpoint/九条 route 的 catalog；
 - 同一 event loop 内完成 Mesh Blob→SceneDesired、PresentationPlan prepare/activate→SceneStatus
   RUNNING→RenderResult，同时 Wi-Fi endpoint 继续 desired/actual/sample；
 - 分别启停、重配两 endpoint，证明 production epoch、gate、State version 和 Stream epoch 不交叉；
 - catalog replacement 后两组 desired 都必须重发；旧 route 和旧 epoch 全部拒绝。
 
-完成条件：scene-only 或 wifi-only Profile 对 composite peer 得到 exact `PROFILE_MISMATCH`；混合
-负载 scheduler vector 证明 Blob/result 不饿死 Wi-Fi，Wi-Fi 流量也不阻断 scene control。
+完成条件：scene-only 或 wifi-only Profile 对 composite peer 得到 exact `PROFILE_MISMATCH`；真实
+AF_INET mixed run证明portable scheduler集成后Blob/result不饿死Wi-Fi，Wi-Fi也不阻断scene control。
 
 ### H1 — Host editor/devtool
 

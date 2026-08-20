@@ -95,7 +95,7 @@ v3 另以 `MeisoRuntimeV3Config.max_blob_transfer_bytes` 限制单个 Blob trans
 Profile visibility 或 GPU resident budget。任一 accepted catalog replacement 或 Session
 discontinuity 都取消 Runtime transfer 并清 Edge scratch，已由 Core 发布的 Blob cache 不因此删除。
 新 Session/control scope 必须重新建立 SceneStore/SDK visibility；仅 catalog replacement 时外部
-visibility 是否重建由 Profile/R2 integration 定义，Runtime 不持有它，R1 也未验证该策略。
+visibility 是否重建由后续 Profile/SceneStore integration 定义，Runtime 不持有它，R1 也未验证该策略。
 
 ## State payload 与 production gate
 
@@ -315,14 +315,17 @@ composition Profile v2 配置下，Host Runtime arena 为 14,904 bytes，Edge Ru
 277,048 bytes（含 262,144-byte reassembly scratch），均 alignment 8。这是 caller-owned Host
 process CPU-visible heap evidence，不是跨 ABI 常量或 K230 memory budget。
 
-这些结果只支持当前 portable Host semantic/wire evidence，不证明 transport、并发、fuzz、性能、
-断线恢复、scheduler fairness 或 target 行为。Source v0 明确尚未实现：
+这些结果只支持 direct Runtime 的 portable Host semantic/wire evidence，不证明 transport、并发、
+fuzz、性能、断线恢复或 target 行为。public commit `5d92ff6` 另实现 caller-owned
+`meiso_runtime_scheduler`；它在 Runtime--SDK 集成层绑定 exact Runtime/Session pair，不修改本页的
+Core、wire 或 direct Runtime API。Source v0 本身明确不内建：
 
 - Action 与 MediaStream Runtime carriage；capability State/Blob route；Edge→Host Blob 或并行/resumable
   Blob transfer；
 - 产品 endpoint direction/QoS/permission schema、typed dispatcher、catalog fragmentation 或
   duplicate response cache；
-- control/data/Blob 的 fair scheduler、`4 + N_ready_routes` wait bound 或 no-starvation proof；
+- control/data/Blob scheduler；R2a 的独立 scheduler 才为 Composition Profile v2 证明
+  `4 + N_ready_routes` successful-slot wait bound 与 no-starvation；
 - Profile-specific admission、private config/probe/hotplug adapter、Host orchestration、SDK /
   Virtual Edge；
 - direct-IP bootstrap、socket connect/listen、认证/加密、安全 transport；

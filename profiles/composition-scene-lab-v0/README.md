@@ -98,7 +98,8 @@ Runtime v2 继续拒绝 `IMMUTABLE/Blob` route；R1 的 strict MRT0 v3 handle �
 payload 内加入 Host-owned Blob carriage 与 owner/direction 校验。v3 支持同 catalog 多条 Blob
 route，但每个 handle 全局只有一个 transfer；`STREAM_SAMPLE` 仍只支持 Edge→Host。v2 literal bytes、
 六类 frame meaning、Core API/source 与 Session wire 均不变。R1 已证明 portable catalog/Blob
-carriage；combined Wi-Fi+scene event loop、scheduler 与 target interoperability 留给 R2/K1。
+carriage；R2a 已证明 portable combined builder 与独立 fair scheduler，AF_INET combined event loop
+留给 R2b，target interoperability 留给 K1。
 
 ## C0 canonical wire
 
@@ -348,10 +349,15 @@ C1/K1 启动前必须记录每一项 exact bytes、alignment、memory domain 与
 snapshot 因隐藏双代开销拒绝；该切换后 store 已用满，继续引入新 ContentId 可合法返回
 `BLOB_CAPACITY`。后续若增加 eviction，必须另行冻结与 active/candidate/published visibility 的关系。
 
-## R2 TX fairness contract（尚未实现）
+## R2a TX fairness 与 combined builder evidence（完成）
 
-Runtime R1 只提供各发送调用的有界 `TX_BUSY`/retry truth，不实现 route scheduler。R2 target
-integration 必须在 Runtime--SDK 层满足以下 lab scheduler contract：
+public commit `5d92ff6` 在 Runtime--SDK 层增加 caller-owned `meiso_runtime_scheduler`，绑定本地 peer
+的 exact Runtime/Session pair 并成为该 pair 唯一 TX owner；它不修改 Core、Session wire 或 direct
+Runtime API。Composition Profile v2 builder 以 no-partial-output 语义选择 exact Session limits
+`8236/8192/12`，按 Wi-Fi/Presentation/Scene 顺序生成 3 endpoint、9 route 与 canonical 920-byte
+catalog。Profile v1 与 MRT0 v2 不变。
+
+R2a scheduler 已实现并冻结以下 lab contract：
 
 - Host与Edge各自只调度本peer的outbound队列，并分别计successful TX slot；不得把full-duplex两个
   方向合成一个全局slot序列。Host序列包含Host control与Blob chunk，Edge序列包含Edge control、
@@ -363,11 +369,24 @@ integration 必须在 Runtime--SDK 层满足以下 lab scheduler contract：
 - `WIFI_TLM/DATA_STR` 与 `K230_SCN/RES_STR` 都 ready 时，任一路由等待不超过
   `4 + N_edge_ready_routes` 个Edge outbound成功TX slot；Host ready Blob route对应使用
   `4 + N_host_ready_routes` 个Host outbound成功TX slot；
-- local TX busy不消耗该peer的round/sequence；deadline到期的result依Stream policy丢弃并报告gap；Blob
-  不允许用无限 retry queue 延长等待。
+- local TX busy不消耗该peer的round/sequence。
 
-Host/Edge loopback分别对两个outbound方向用deterministic TX-busy injection证明slot bound；K230D mixed run同时传一个
-最大 Blob、10 Hz thumbnail 与 1 Hz Wi-Fi sample，Wi-Fi 无 scheduler-induced silent starvation。
+确定性vector证明Host单Blob data route等待 `<=4+1=5` 个Host成功slot；Edge Wi-Fi与RenderResult同时
+ready时各等待 `<=4+2=6` 个Edge成功slot。`data_probe_due`使nonbusy control reject后下一step先探测
+data；successful slot只表示direct Runtime send返回`OK`且frame已排入Session outbound，不表示socket
+write、peer receive、application commit或时延上界。`TX_BUSY`对完整Scheduler/Runtime/Session arena、
+source、output与pending frame原字节零推进。
+
+State `OFFER`形成commit obligation；Blob仅在接收`COMMIT`后Runtime snapshot为
+`publish_pending && !result_pending`时形成Core publish obligation。length/SHA precheck失败直接产生
+terminal `RESULT`且没有publish obligation。active catalog generation替换清binding/round并进入
+`REBIND_REQUIRED`；Session terminal永久进入`SESSION_TERMINAL`并exact-once通知sources，旧对象不能
+rebind，必须新建Session/Runtime/Scheduler。
+
+public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，clang analyzer对scheduler、
+builder、test为0 finding。该结果只证明portable/in-process调度与Profile builder；source queue的
+deadline/drop/gap policy仍由Profile integration负责。R2b仍须验证AF_INET combined event loop，K1仍须
+验证K230D，Hz/latency/jitter/throughput/performance也未测量。
 
 ## C0 executable evidence
 
@@ -464,7 +483,8 @@ R1固定4096-byte chunk、zero Blob、非final chunk exact 4096、short-final；
 CHUNK无逐块ACK，COMMIT/ABORT等待terminal RESULT。Runtime生成Session-scoped nonzero transfer ID；
 多个合法Blob route共享一个全局slot。Session或catalog discontinuity清Runtime transfer与Edge scratch，
 但不删除已发布Core Blob cache；新Session/control scope仍须显式建立SceneStore visibility。仅catalog
-replacement时外部visibility是否重建由R2 Profile integration定义，Runtime不持有它，R1未验证。
+replacement时外部visibility是否重建由后续Profile/SceneStore integration定义，Runtime不持有它，
+R1未验证。
 
 COMMIT先在Runtime scratch上检查total与SHA-256，再由generic synchronous bridge执行Core BlobStore
 stage/copy/`commit_verified`。Runtime SHA与Mesh Profile verifier在同一个immutable Core verification
@@ -483,8 +503,9 @@ macOS arm64 exact arenas均alignment 8：Host Runtime 14,904 bytes；Edge Runtim
 再加入两端Runtime，则为5,086,920 bytes，仍不含两端Session。两种口径都只表示Host test process
 CPU-visible heap，不是K230 RAM、GPU/CMA、renderer target或physical allocation。
 
-R1状态为`COMPLETE / PORTABLE BLOB CARRIAGE SEMANTIC-WIRE VERIFIED`；不证明fair scheduler、R2
-combined Session、Host editor、K230D build/run、renderer/backend、offline lease执行或physical output。
+R1状态为`COMPLETE / PORTABLE BLOB CARRIAGE SEMANTIC-WIRE VERIFIED`；该提交自身不证明fair
+scheduler。后续R2a已证明portable combined builder/scheduler，但不证明R2b AF_INET combined event
+loop、Host editor、K230D build/run、renderer/backend、offline lease执行或physical output。
 
 ## Required sequence
 

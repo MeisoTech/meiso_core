@@ -75,9 +75,16 @@ SceneStore 与 C2 portable coordinator 已完成；commit `a8a777a` 又完成 R1
 该 Profile 的 v1 ProfileRef 继续选择 MRT0 v2，v2 ProfileRef 才显式选择 MRT0 v3；现有 Wi-Fi
 Profile 及 v2 golden 不受影响。R1 已验证 Blob wire/FSM、Session/catalog discontinuity 时清 Runtime
 transfer/scratch，以及 Core BlobStore publication 与 SceneStore visibility 的分层；catalog-only
-replacement 的外部 visibility 策略留给 R2 Profile integration。R1 尚未实现 combined Session
-scheduler、Host editor、K230D/renderer backend、GPU/target allocation、offline lease 执行或 physical
-presentation；Core 与 Session wire 不变。
+replacement 的外部 visibility 策略留给后续 Profile/SceneStore integration。R1提交自身不包含scheduler；public
+commit `5d92ff6` 已在独立 Runtime--SDK 层完成 R2a portable combined builder/scheduler evidence：
+Profile v2 builder 无部分输出地固定 3 endpoint、9 route 与 920-byte catalog；
+Host、Edge 分别按本 peer outbound successful slot（direct Runtime send返回`OK`且frame已排入Session
+outbound）执行control RR、最多4帧control burst与冻结的data round，确定性上界分别为Host `<=5`、
+Edge两条data route各 `<=6`；该slot不表示socket write、peer receive或时延。R2a还验证State/Blob RX
+obligation：State `OFFER`须commit；Blob仅在`COMMIT`后`publish_pending && !result_pending`时须publish，
+length/SHA precheck失败直接产生terminal `RESULT`。`TX_BUSY`时Scheduler/Runtime/Session三个arena原字节
+不变；它没有修改Core、Session wire或direct Runtime API。R2b 的AF_INET combined event loop、Host editor、K230D/renderer backend、
+GPU/target allocation、offline lease 执行与 physical presentation 仍未实现。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

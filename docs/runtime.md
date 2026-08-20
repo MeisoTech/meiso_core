@@ -136,6 +136,31 @@ Host desired 的本地提交、Core delivery acceptance、Edge observed、adapte
 也不能把静默丢弃伪装成“未订阅”。MediaStream 可以使用专业化数据面，但仍共享相同 endpoint、
 desired/actual、production epoch、Session 与 failure 语义。
 
+### Runtime--SDK outbound scheduler
+
+Core、Session wire 与 direct Runtime API 不拥有 route scheduling。集成层可以为本地 peer 的 exact
+Runtime/Session pair 建立一个 caller-owned scheduler，并成为该 pair 唯一 TX owner；Host 与 Edge 的
+outbound slot、counter 和 round 必须彼此独立，full-duplex 不能合成全局序列。`TX_BUSY` 不算成功
+slot，不能推进 scheduler、Runtime、Session 或 source；收到需要 State commit 或 Blob publication 的
+Runtime event 时，scheduler 必须先完成对应 RX obligation，不能继续发送掩盖未决交付。这里的
+successful slot 只表示 direct Runtime send 返回`OK`且frame已经排入Session outbound；不表示socket
+write、peer receive、application commit或任何时间/延迟保证。
+
+public commit `5d92ff6` 的 `meiso_runtime_scheduler` 是 Composition scene Profile v2 的一个 portable
+实现：control source 持久 RR，最多连续 4 个成功 control slot；data round 冻结本轮 ready membership，
+每个成员至多一次发送机会，`data_probe_due` 使 nonbusy control reject 后下一 step 先探测 data。
+Profile v2 builder 无部分输出地固定 selected limits `8236/8192/12`、3 endpoint、9 route 与 canonical
+920-byte catalog。确定性 vector 得到 Host 单 Blob data route 等待 `<=4+1=5` 个 Host outbound 成功
+slot；Edge 的 Wi-Fi 与 RenderResult 同时 ready 时，每条 route 等待 `<=4+2=6` 个 Edge outbound成功
+slot。这是该 Profile 的 in-process semantic evidence，不是通用 QoS、AF_INET combined transport、
+K230/K1 target、Hz/latency/throughput 或性能保证。
+
+RX obligation 只在 exact 条件成立时建立：State `OFFER`要求对应 commit；Blob只在接收`COMMIT`后
+Runtime snapshot为`publish_pending && !result_pending`时要求Core publication。Blob length/SHA precheck
+失败会直接形成terminal `RESULT`，没有publish obligation。active catalog generation变化进入
+`REBIND_REQUIRED`；Session terminal则永久进入`SESSION_TERMINAL`并exact-once通知sources，旧对象不能
+rebind，必须创建新Session/Runtime/Scheduler。
+
 ## Blob route 与可见性
 
 Blob route 只传递有限、immutable、带 ContentId 的完整内容；它不是连续数据、State snapshot 的

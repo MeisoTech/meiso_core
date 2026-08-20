@@ -101,13 +101,15 @@ v3 vectors覆盖五类独立literal frame、0/4096/4097/262144 bytes、gap/overl
 READY/late READY、async terminal RESULT、TX_BUSY/alias/reentry、multi-route global slot、Core external
 staging ownership/forced cleanup、duplicate后visibility，以及State/Stream/Blob共存。fresh Debug、strict、
 ASan+UBSan均CTest 23/23，clang analyzer对Runtime/composition/test为0 finding。这支持portable Runtime
-`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`；不证明transport、fair scheduler或target。
-精确边界见[Runtime negotiation core v0](runtime-core-v0.md)。
+`IMPLEMENTED / HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`；该R1 evidence不证明transport、fair
+scheduler或target，后续R2a scheduler evidence见本报告Composition段。精确边界见
+[Runtime negotiation core v0](runtime-core-v0.md)。
 
 Portable Runtime仍未实现Action、MediaStream、Edge→Host/并行/resumable Blob、产品endpoint
-direction/QoS/permission schema、typed dispatcher、fair scheduler与Host orchestration/SDK。下述Wi-Fi
-slice在Core外组合一个具体Profile、config/probe adapter与direct-IP target；它不把这些平台选择
-提升为portable Core能力。
+direction/QoS/permission schema、typed dispatcher与Host orchestration/SDK。R2a 已在 direct Runtime
+之外增加 Composition Profile v2 专用的 caller-owned fair scheduler；它不是 Core、wire 或通用产品
+QoS。下述Wi-Fi slice在Core外组合一个具体Profile、config/probe adapter与direct-IP target；它不把
+这些平台选择提升为portable Core能力。
 
 当前 POSIX platform layer 另实现 connected-stream adapter：借用 caller-owned、already-
 connected、nonblocking `SOCK_STREAM` fd 和 Session；RX/TX 各由 `max_frame_bytes` 限制，
@@ -294,8 +296,8 @@ BlobStore、SceneStore、Coordinator、Scene desired、Presentation desired/actu
 public commit `a8a777a`完成R1 portable Blob carriage。Composition Profile v1保持MRT0 v2并拒绝
 IMMUTABLE route；Profile v2显式选择strict MRT0 v3。多个Host-owned Blob route共享一个全局transfer；
 Session/catalog discontinuity清Runtime transfer与Edge scratch，已发布Core cache可保留。新Session/
-control scope必须重建visibility；catalog-only replacement的外部visibility策略由Profile/R2 integration
-定义，Runtime不持有它，R1未验证该策略。
+control scope必须重建visibility；catalog-only replacement的外部visibility策略由后续Profile/SceneStore
+integration定义，Runtime不持有它，R1未验证该策略。
 Runtime→Core publish bridge、owner/direction、phase/result、boundary与failure atomicity均有确定性vector。
 
 macOS arm64下Host Runtime为14,904 bytes，Edge Runtime为277,048 bytes（含262,144-byte scratch），
@@ -303,10 +305,28 @@ alignment均为8。BlobStore、SceneStore、Coordinator与两端Runtime五项合
 Session/State/Stream；若以C2完整fixture 4,794,968 bytes再加两端Runtime，则为5,086,920 bytes，仍
 不含两端Session。两者都是Host process CPU-visible heap口径，不是K230/GPU/CMA allocation。
 
-R1没有实现fair scheduler、combined event loop、Host editor、K230D build/run、renderer backend、
+public commit `5d92ff6` 完成 R2a portable combined builder 与 TX scheduler。Profile v2 builder 在失败时
+保持所有输出不变，并固定 selected Session limits `8236/8192/12`、3 endpoint、9 route 与 canonical
+920-byte catalog。每个 peer 的 caller-owned scheduler 独立拥有本地 Runtime/Session TX：control source
+持久 RR，最多连续 4 个成功 control slot；data round 冻结成员，每个 ready source 本轮至多一帧；
+`data_probe_due` 防止 nonbusy Runtime-rejected control head 持续饿死 data。Host 单 Blob data route 的确定性等待上界
+为 `<=5` 个 Host outbound 成功 slot；Edge 的 Wi-Fi/RenderResult 两条 data route 同时 ready 时各为
+`<=6` 个 Edge outbound 成功 slot。successful slot只表示direct Runtime send返回`OK`且frame已经排入
+Session outbound，不表示socket write、peer receive、application commit或时延上界。
+
+R2a vector 还验证 `TX_BUSY` 对完整 Scheduler/Runtime/Session arena、source、output 与 pending frame
+原字节零推进；State `OFFER`必须commit；Blob仅在接收`COMMIT`后Runtime snapshot为
+`publish_pending && !result_pending`时必须经Core BlobStore publish wrapper完成，length/SHA precheck
+失败直接产生terminal `RESULT`且没有publish obligation。active catalog generation变化清binding/round
+并进入`REBIND_REQUIRED`；Session terminal永久进入`SESSION_TERMINAL`并exact-once通知sources，必须新建
+Session/Runtime/Scheduler。public commit `5d92ff6` 的 fresh Debug CTest 为 24/24，strict C11/C++17 通过，clang analyzer 对
+scheduler/builder/test 为 0 finding。Core/Session/direct Runtime/Profile v1 wire/API tracked diff 为零。
+
+R2a 只证明 portable/in-process scheduler 与 combined Profile v2 builder；没有证明 AF_INET combined
+event loop、K230/K1 build/run、Hz/latency/jitter/throughput/performance、Host editor、renderer backend、
 GPU/target/job/CMA、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
-Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。Core source/API与Session
-wire无Composition改动；本轮也没有合并外部Host compositor、旧本地素材、vendor SDK或二进制。
+Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。本轮也没有合并外部Host
+compositor、旧本地素材、vendor SDK或二进制。
 
 ## K230D lab evidence
 
@@ -373,10 +393,10 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition R2 combined Session/fair scheduler、Host editor、renderer/present backend与真实
-  presentation endpoint；portable coordinator已有C2 Host semantic evidence，Runtime v3 Blob carriage
-  已有R1 Host semantic/wire evidence，但没有combined/target interoperability、offline lease执行或
-  physical output；
+- Composition R2b AF_INET combined Session/event loop、Host editor、renderer/present backend与真实
+  presentation endpoint；R2a 已有 portable combined builder/fair scheduler evidence，C2 coordinator
+  与 R1 Runtime v3 Blob carriage 也已有 Host evidence，但没有 target interoperability、offline lease
+  执行或 physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
 - K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
   fault/soak/thermal evidence。

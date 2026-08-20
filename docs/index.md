@@ -25,7 +25,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [Runtime negotiation core v0](runtime-core-v0.md)：当前 portable State/Stream-driven catalog、
   bounded endpoint identity history、exact State commit、production gate，以及严格 MRT0 v2/v3；
   v3 增加 Host→Edge Blob carriage 与通用 Core BlobStore publish bridge。它是 Host
-  implementation evidence，不是产品规范、fair scheduler 或 target evidence；
+  implementation evidence，不是产品规范或 target evidence。R2a 另以独立 Runtime--SDK
+  scheduler 提供 per-peer outbound fairness；该对象不进入 Core、wire 或 direct Runtime API；
 - [Wi-Fi telemetry Profile v0](../profiles/wifi-telemetry-v0/README.md)：首个版本化 endpoint
   Profile；固定 capability、Host desired、Edge actual 与匿名 Stream sample schema；
 - [Direct-IP Wi-Fi Runtime v0 实装规则书](wifi-runtime-direct-ip-v0.md)：该 Profile 在 macOS
@@ -39,8 +40,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   接入顺序、Host handle 生命周期、协议入口与证据边界；不是 SDK API。
 - [Edge local compositor v0 开发方案](edge-local-compositor-v0.md)：Runtime--SDK 层的
   Composition coordinator、renderer/present seam、选择性迁移与验收；Core 不变。C2 portable
-  coordinator 与 R1 Runtime v3 Blob carriage 已有 Host semantic/wire evidence，R2 scheduler、target
-  backend/present 尚未实现。
+  coordinator、R1 Runtime v3 Blob carriage 与 R2a portable fair scheduler/combined builder 已有 Host
+  evidence；R2b AF_INET combined integration、target backend/present 尚未实现。
 - [K230D Linux Edge 开发基线](k230d-linux-edge-development-baseline.md)：当前候选实现中
   大小核、Linux、NuttX、sensor、network 与 rendering 的责任分工；它不是互操作 Profile。
 
@@ -51,8 +52,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   wire vectors；C1 已用真实 Blob/State/Stream primitive 验证 bounded world store、atomic activation
   与 deterministic result；C2 已验证 portable coordinator 的 desired shape、generation/digest/token、
   Session scope、supersede/disable transaction；R1 已验证 MRT0 v3 Host→Edge Blob wire/FSM、Core
-  publication bridge 与 discontinuity。combined scheduler、Host editor、K230D renderer 和 physical
-  output 尚未实现；
+  publication bridge 与 discontinuity；R2a 已验证 exact 3/9/920 Profile v2 builder、per-peer fair TX
+  scheduler 与 State/Blob RX obligation。AF_INET combined event loop、Host editor、K230D renderer 和
+  physical output 尚未实现；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
 - [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge 入口与固定

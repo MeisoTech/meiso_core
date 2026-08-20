@@ -2,7 +2,8 @@
 
 > 受众：Host Runtime / SDK 开发者。状态：当前可执行互操作基线；不是新的产品规范。
 > 产品语义以[文档入口](index.md)列出的五份规范为准。可复现实装基线为
-> [`e958acad8aaa3858a6e43f5f75d14492e0bec826`](https://github.com/anantheparty/meiso_glass/commit/e958acad8aaa3858a6e43f5f75d14492e0bec826)。
+> [`5d92ff6`](https://github.com/anantheparty/meiso_glass/commit/5d92ff6)：包含既有 direct-IP
+> Session/Runtime 路径，以及 R1 Blob carriage、R2a combined builder/fair scheduler 的后续增量。
 
 ## 结论
 
@@ -97,12 +98,13 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 | Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：strict `MRT0` v2/v3 |
 | 首个 Profile | [Wi-Fi telemetry v0](../profiles/wifi-telemetry-v0/README.md) |
 | direct-IP 实装 | [Direct-IP Wi-Fi Runtime v0](wifi-runtime-direct-ip-v0.md) |
-| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2 与 R1 exact Profile/codec/coordinator/Runtime v3 Blob evidence，但没有 combined scheduler、Host editor 或 target interoperability |
+| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob 与 R2a portable 3/9/920 builder/fair scheduler evidence，但没有 AF_INET combined event loop、Host editor 或 target interoperability |
 
 当前 Runtime source v0 承载 Host-owned desired State、Edge-owned actual State、Edge-owned data
 Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Action、MediaStream、
-Edge→Host/并行/resumable Blob、fair scheduler、typed dispatcher与稳定Host SDK/Virtual Edge尚未
-实现；缺失能力必须明确`unsupported`，不能用私有消息旁路。
+Edge→Host/并行/resumable Blob、typed dispatcher与稳定Host SDK/Virtual Edge尚未实现；R2a scheduler
+是Composition Profile v2的独立Runtime--SDK对象，不是通用Host SDK。缺失能力必须明确`unsupported`，
+不能用私有消息旁路。
 
 ## 已验证与禁止外推
 
@@ -110,8 +112,9 @@ K230D Linux Edge 与 macOS Host 已在真实 Wi-Fi direct-IP 上完成同一 Ses
 重配置、停止、再次启动和 normal close；还验证了 100 ms 下 64 个连续 sample，以及显式进程
 重启后的完整重协商。准确 artifact、参数和 failure 边界见[系统进展](system-report.md)。
 
-这不证明稳定SDK、自动重连、长稳/性能、MediaStream、Composition combined scheduler/target、
-discovery或安全transport。R1只证明portable Blob semantic/wire与Core publish bridge，不证明K230D。
+这不证明稳定SDK、自动重连、长稳/性能、MediaStream、Composition AF_INET combined event loop/target、
+discovery或安全transport。R1只证明portable Blob semantic/wire与Core publish bridge；R2a只证明
+portable/in-process scheduler与builder，两者均不证明K230D。
 当前 plain TCP 的 PeerId exact check 只能防误连，不能提供认证、机密性或完整性；产品连接必须
 另行绑定经审查的安全 transport。
 
