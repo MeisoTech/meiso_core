@@ -39,11 +39,12 @@ enum {
     TEST_ADAPTER_ARENA_BYTES = 32768,
     TEST_RUNTIME_ARENA_BYTES = 400000,
     TEST_SCHEDULER_ARENA_BYTES = 16384,
+    TEST_SCENE_STORE_SNAPSHOT_BYTES = 40000,
     TEST_IO_BYTES_PER_STEP = 17,
     TEST_POLL_SLICE_MS = 20,
     TEST_DEADLINE_MS = 5000,
-    TEST_HOST_SOURCE_COUNT = 9,
-    TEST_EDGE_SOURCE_COUNT = 9
+    TEST_HOST_SOURCE_COUNT = 10,
+    TEST_EDGE_SOURCE_COUNT = 10
 };
 
 enum {
@@ -67,7 +68,8 @@ enum {
     HOST_SCENE_ACTUAL_ACCEPT = 5,
     HOST_BLOB_BEGIN = 6,
     HOST_BLOB_CHUNK = 7,
-    HOST_BLOB_COMMIT = 8
+    HOST_BLOB_COMMIT = 8,
+    HOST_CATALOG_ACCEPT = 9
 };
 
 enum {
@@ -79,7 +81,8 @@ enum {
     EDGE_SCENE_ACTUAL = 5,
     EDGE_BLOB_RESULT = 6,
     EDGE_WIFI_STREAM = 7,
-    EDGE_RENDER_STREAM = 8
+    EDGE_RENDER_STREAM = 8,
+    EDGE_CATALOG_OFFER = 9
 };
 
 typedef union {
@@ -109,6 +112,9 @@ typedef struct {
     uint64_t polls;
     uint64_t completions;
     uint64_t boundaries;
+    MeisoRuntimeSchedulerCompletion last_completion;
+    MeisoRuntimeSchedulerBoundary last_boundary;
+    uint64_t last_boundary_generation;
 } TxSource;
 
 typedef struct {
@@ -658,6 +664,7 @@ static void source_complete(
         return;
     }
     source->completions++;
+    source->last_completion = *completion;
     source->poll_status = MEISO_RUNTIME_SCHEDULER_POLL_EMPTY;
     source->work.ticket++;
 }
@@ -671,9 +678,10 @@ static void source_boundary(
     TxSource *source = (TxSource *)context;
 
     (void)boundary;
-    (void)generation;
     if (source != NULL) {
         source->boundaries++;
+        source->last_boundary = boundary;
+        source->last_boundary_generation = generation;
     }
 }
 
@@ -693,14 +701,15 @@ static bool initialize_runtime(Peer *peer)
     return true;
 }
 
-static MeisoRuntimeRouteKey route_key(
+static MeisoRuntimeRouteKey route_key_at_generation(
     const TcpFixture *fixture,
-    size_t index
+    size_t index,
+    uint64_t catalog_generation
 )
 {
     const MeisoRuntimeRouteDescriptor *route = &fixture->routes[index];
     const MeisoRuntimeRouteKey key = {
-        fixture->catalog_generation,
+        catalog_generation,
         route->endpoint_id,
         route->endpoint_incarnation,
         route->resource.id,
@@ -708,6 +717,16 @@ static MeisoRuntimeRouteKey route_key(
     };
 
     return key;
+}
+
+static MeisoRuntimeRouteKey route_key(
+    const TcpFixture *fixture,
+    size_t index
+)
+{
+    return route_key_at_generation(
+        fixture, index, fixture->catalog_generation
+    );
 }
 
 static bool route_key_equal(
@@ -761,13 +780,85 @@ static void initialize_source_route(
     }
 }
 
+static bool source_route_index(
+    bool host,
+    size_t source_index,
+    size_t *out_route_index
+)
+{
+    static const uint8_t host_routes[9] = {
+        ROUTE_WIFI_DESIRED,
+        ROUTE_PRESENTATION_DESIRED,
+        ROUTE_SCENE_DESIRED,
+        ROUTE_WIFI_ACTUAL,
+        ROUTE_PRESENTATION_ACTUAL,
+        ROUTE_SCENE_ACTUAL,
+        ROUTE_MESH_BLOB,
+        ROUTE_MESH_BLOB,
+        ROUTE_MESH_BLOB
+    };
+    static const uint8_t edge_routes[9] = {
+        ROUTE_WIFI_DESIRED,
+        ROUTE_PRESENTATION_DESIRED,
+        ROUTE_SCENE_DESIRED,
+        ROUTE_WIFI_ACTUAL,
+        ROUTE_PRESENTATION_ACTUAL,
+        ROUTE_SCENE_ACTUAL,
+        ROUTE_MESH_BLOB,
+        ROUTE_WIFI_DATA,
+        ROUTE_RENDER_RESULT
+    };
+
+    if (out_route_index == NULL || source_index >= 9U) {
+        return false;
+    }
+    *out_route_index = host ? host_routes[source_index] :
+        edge_routes[source_index];
+    return true;
+}
+
+static bool set_source_work_route(
+    TxSource *source,
+    MeisoRuntimeRouteKey route
+)
+{
+    if (source == NULL) {
+        return false;
+    }
+    switch (source->work.kind) {
+    case MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER:
+        source->work.value.state_offer.route = route;
+        return true;
+    case MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT:
+        source->work.value.state_accept.route = route;
+        return true;
+    case MEISO_RUNTIME_SCHEDULER_WORK_STREAM_SAMPLE:
+        source->work.value.stream_sample.route = route;
+        return true;
+    case MEISO_RUNTIME_SCHEDULER_WORK_BLOB_BEGIN:
+        source->work.value.blob_begin.route = route;
+        return true;
+    case MEISO_RUNTIME_SCHEDULER_WORK_BLOB_CHUNK:
+        source->work.value.blob_chunk.transfer.route = route;
+        return true;
+    case MEISO_RUNTIME_SCHEDULER_WORK_BLOB_COMMIT:
+        source->work.value.blob_commit.transfer.route = route;
+        return true;
+    case MEISO_RUNTIME_SCHEDULER_WORK_BLOB_RESULT:
+        source->work.value.blob_result.transfer.route = route;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool register_peer_sources(
     TcpFixture *fixture,
     Peer *peer,
     bool host
 )
 {
-    const uint16_t max_control = host ? 8U : 7U;
+    const uint16_t max_control = host ? 9U : 8U;
     const uint16_t max_data = host ? 1U : 2U;
     const MeisoRuntimeSchedulerConfig scheduler_config = {
         peer->runtime, peer->session, max_control, max_data
@@ -819,8 +910,10 @@ static bool register_peer_sources(
             route = work->value.blob_chunk.transfer.route;
         } else if (work->kind == MEISO_RUNTIME_SCHEDULER_WORK_BLOB_COMMIT) {
             route = work->value.blob_commit.transfer.route;
-        } else {
+        } else if (work->kind == MEISO_RUNTIME_SCHEDULER_WORK_BLOB_RESULT) {
             route = work->value.blob_result.transfer.route;
+        } else {
+            continue;
         }
         CHECK(meiso_runtime_scheduler_bind_source_route(
             peer->scheduler, peer->sources[index].id, route
@@ -884,6 +977,11 @@ static bool initialize_sources(TcpFixture *fixture)
         MEISO_RUNTIME_SCHEDULER_WORK_BLOB_COMMIT,
         route_key(fixture, ROUTE_MESH_BLOB)
     );
+    initialize_source_route(
+        &fixture->host_sources[HOST_CATALOG_ACCEPT],
+        MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_ACCEPT,
+        (MeisoRuntimeRouteKey){0}
+    );
 
     initialize_source_route(
         &fixture->edge_sources[EDGE_WIFI_DESIRED_ACCEPT],
@@ -929,6 +1027,11 @@ static bool initialize_sources(TcpFixture *fixture)
         &fixture->edge_sources[EDGE_RENDER_STREAM],
         MEISO_RUNTIME_SCHEDULER_WORK_STREAM_SAMPLE,
         route_key(fixture, ROUTE_RENDER_RESULT)
+    );
+    initialize_source_route(
+        &fixture->edge_sources[EDGE_CATALOG_OFFER],
+        MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER,
+        (MeisoRuntimeRouteKey){0}
     );
     CHECK(register_peer_sources(fixture, &fixture->host, true));
     CHECK(register_peer_sources(fixture, &fixture->edge, false));
@@ -1000,6 +1103,273 @@ static bool activate_catalog(TcpFixture *fixture)
           host_snapshot.active_route_count == 9U &&
           edge_snapshot.active_endpoint_count == 3U &&
           edge_snapshot.active_route_count == 9U);
+    return true;
+}
+
+static bool same_ready_session_identity(
+    const MeisoSessionSnapshot *before,
+    const MeisoSessionSnapshot *after
+)
+{
+    return before != NULL && after != NULL &&
+        before->state == MEISO_SESSION_STATE_READY &&
+        after->state == MEISO_SESSION_STATE_READY &&
+        before->failure == MEISO_SESSION_FAILURE_NONE &&
+        after->failure == MEISO_SESSION_FAILURE_NONE &&
+        before->local_role == after->local_role &&
+        meiso_peer_id_equal(before->local_peer_id, after->local_peer_id) &&
+        before->local_incarnation == after->local_incarnation &&
+        meiso_peer_id_equal(before->remote_peer_id, after->remote_peer_id) &&
+        before->remote_incarnation == after->remote_incarnation &&
+        meiso_session_id_equal(before->session_id, after->session_id) &&
+        before->session_id_known && after->session_id_known &&
+        before->remote_identity_known && after->remote_identity_known &&
+        before->negotiated_limits.max_frame_bytes ==
+            after->negotiated_limits.max_frame_bytes &&
+        before->negotiated_limits.max_runtime_payload_bytes ==
+            after->negotiated_limits.max_runtime_payload_bytes &&
+        before->negotiated_limits.max_registry_entries ==
+            after->negotiated_limits.max_registry_entries &&
+        !before->outbound_pending && !after->outbound_pending &&
+        !before->local_close_reason_known &&
+        !after->local_close_reason_known &&
+        !before->peer_close_reason_known &&
+        !after->peer_close_reason_known;
+}
+
+static bool rebind_peer_after_catalog(
+    TcpFixture *fixture,
+    Peer *peer,
+    bool host,
+    uint64_t old_generation,
+    uint64_t new_generation
+)
+{
+    MeisoRuntimeSchedulerStepResult step;
+    MeisoRuntimeSchedulerSnapshot snapshot;
+    uint64_t boundaries_before[TEST_HOST_SOURCE_COUNT];
+    size_t index;
+
+    CHECK(peer->source_count <= TEST_HOST_SOURCE_COUNT);
+    for (index = 0U; index < peer->source_count; ++index) {
+        boundaries_before[index] = peer->sources[index].boundaries;
+    }
+    memset(&step, 0xa5, sizeof(step));
+    CHECK(meiso_runtime_scheduler_step(peer->scheduler, &step) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_REBIND_REQUIRED);
+    for (index = 0U; index < peer->source_count; ++index) {
+        CHECK(peer->sources[index].boundaries ==
+                  boundaries_before[index] + 1U &&
+              peer->sources[index].last_boundary ==
+                  MEISO_RUNTIME_SCHEDULER_BOUNDARY_CATALOG_CHANGED &&
+              peer->sources[index].last_boundary_generation ==
+                  new_generation);
+    }
+    memset(&step, 0xa5, sizeof(step));
+    CHECK(meiso_runtime_scheduler_step(peer->scheduler, &step) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_REBIND_REQUIRED);
+    for (index = 0U; index < peer->source_count; ++index) {
+        CHECK(peer->sources[index].boundaries ==
+              boundaries_before[index] + 1U);
+    }
+    CHECK(meiso_runtime_scheduler_finish_rebind(peer->scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_REBIND_REQUIRED);
+    for (index = 0U; index < peer->source_count; ++index) {
+        size_t route_index;
+        MeisoRuntimeRouteKey old_route;
+        MeisoRuntimeRouteKey new_route;
+
+        if (!source_route_index(host, index, &route_index)) {
+            continue;
+        }
+        old_route = route_key_at_generation(
+            fixture, route_index, old_generation
+        );
+        new_route = route_key_at_generation(
+            fixture, route_index, new_generation
+        );
+        CHECK(meiso_runtime_scheduler_bind_source_route(
+            peer->scheduler, peer->sources[index].id, old_route
+        ) == MEISO_RUNTIME_SCHEDULER_INVALID_STATE);
+        CHECK(set_source_work_route(&peer->sources[index], new_route));
+        CHECK(meiso_runtime_scheduler_bind_source_route(
+            peer->scheduler, peer->sources[index].id, new_route
+        ) == MEISO_RUNTIME_SCHEDULER_OK);
+    }
+    CHECK(meiso_runtime_scheduler_finish_rebind(peer->scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_OK);
+    CHECK(meiso_runtime_scheduler_snapshot(peer->scheduler, &snapshot) &&
+          snapshot.phase == MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
+          snapshot.catalog_generation == new_generation);
+    return true;
+}
+
+static bool reject_stale_queued_route(
+    TcpFixture *fixture,
+    Peer *peer,
+    TxSource *source,
+    size_t route_index,
+    uint64_t old_generation
+)
+{
+    MeisoRuntimeSchedulerStepResult step;
+    MeisoSessionSnapshot before;
+    MeisoSessionSnapshot after;
+    const uint64_t completions_before = source->completions;
+    const MeisoRuntimeRouteKey active_route = route_key(fixture, route_index);
+
+    CHECK(meiso_session_snapshot(peer->session, &before) &&
+          !before.outbound_pending);
+    CHECK(set_source_work_route(
+        source,
+        route_key_at_generation(fixture, route_index, old_generation)
+    ));
+    source->poll_status = MEISO_RUNTIME_SCHEDULER_POLL_READY;
+    memset(&step, 0xa5, sizeof(step));
+    CHECK(meiso_runtime_scheduler_step(peer->scheduler, &step) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_SOURCE_INVALID);
+    CHECK(source->completions == completions_before + 1U &&
+          source->poll_status == MEISO_RUNTIME_SCHEDULER_POLL_EMPTY &&
+          source->last_completion.source_id == source->id &&
+          source->last_completion.kind == source->work.kind &&
+          source->last_completion.code ==
+              MEISO_RUNTIME_SCHEDULER_COMPLETION_REJECTED &&
+          source->last_completion.runtime_status ==
+              MEISO_RUNTIME_INVALID_ARGUMENT &&
+          meiso_session_snapshot(peer->session, &after) &&
+          !after.outbound_pending);
+    CHECK(set_source_work_route(source, active_route));
+    return true;
+}
+
+static bool replace_catalog_generation(
+    TcpFixture *fixture,
+    uint64_t new_generation
+)
+{
+    TxSource *offer = &fixture->edge_sources[EDGE_CATALOG_OFFER];
+    TxSource *accept = &fixture->host_sources[HOST_CATALOG_ACCEPT];
+    MeisoRuntimeEvent event;
+    MeisoRuntimeSnapshot host_runtime;
+    MeisoRuntimeSnapshot edge_runtime;
+    MeisoRuntimeSchedulerSnapshot host_scheduler;
+    MeisoRuntimeSchedulerSnapshot edge_scheduler;
+    MeisoSessionSnapshot host_before;
+    MeisoSessionSnapshot edge_before;
+    MeisoSessionSnapshot host_after;
+    MeisoSessionSnapshot edge_after;
+    MeisoSession *const host_session = fixture->host.session;
+    MeisoSession *const edge_session = fixture->edge.session;
+    const int host_fd = fixture->host.fd;
+    const int edge_fd = fixture->edge.fd;
+    const uint64_t old_generation = fixture->catalog_generation;
+    uint64_t host_boundaries_before[TEST_HOST_SOURCE_COUNT];
+    uint64_t edge_boundaries_before[TEST_EDGE_SOURCE_COUNT];
+    size_t index;
+
+    CHECK(new_generation > old_generation &&
+          meiso_session_snapshot(fixture->host.session, &host_before) &&
+          meiso_session_snapshot(fixture->edge.session, &edge_before));
+    for (index = 0U; index < fixture->host.source_count; ++index) {
+        host_boundaries_before[index] =
+            fixture->host.sources[index].boundaries;
+    }
+    for (index = 0U; index < fixture->edge.source_count; ++index) {
+        edge_boundaries_before[index] =
+            fixture->edge.sources[index].boundaries;
+    }
+    offer->work.value.catalog_offer.generation = new_generation;
+    offer->work.value.catalog_offer.endpoints = fixture->endpoints;
+    offer->work.value.catalog_offer.endpoint_count =
+        MEISO_COMPOSITION_SESSION_V2_ENDPOINT_COUNT;
+    offer->work.value.catalog_offer.routes = fixture->routes;
+    offer->work.value.catalog_offer.route_count =
+        MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT;
+    CHECK(dispatch_source(
+        &fixture->edge, &fixture->host, offer, NULL, &event
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED &&
+          event.catalog_generation == new_generation);
+    CHECK(meiso_runtime_snapshot(fixture->host.runtime, &host_runtime) &&
+          meiso_runtime_snapshot(fixture->edge.runtime, &edge_runtime) &&
+          host_runtime.active_catalog_generation == old_generation &&
+          edge_runtime.active_catalog_generation == old_generation &&
+          host_runtime.active_endpoint_count == 3U &&
+          edge_runtime.active_endpoint_count == 3U &&
+          host_runtime.active_route_count == 9U &&
+          edge_runtime.active_route_count == 9U &&
+          host_runtime.staged_catalog_present &&
+          edge_runtime.staged_catalog_present &&
+          host_runtime.staged_catalog_generation == new_generation &&
+          edge_runtime.staged_catalog_generation == new_generation &&
+          host_runtime.staged_endpoint_count == 3U &&
+          edge_runtime.staged_endpoint_count == 3U &&
+          host_runtime.staged_route_count == 9U &&
+          edge_runtime.staged_route_count == 9U &&
+          host_runtime.catalog_decision_pending &&
+          edge_runtime.catalog_decision_pending &&
+          host_runtime.pending_catalog_generation == new_generation &&
+          edge_runtime.pending_catalog_generation == new_generation &&
+          meiso_runtime_scheduler_snapshot(
+              fixture->host.scheduler, &host_scheduler
+          ) && meiso_runtime_scheduler_snapshot(
+              fixture->edge.scheduler, &edge_scheduler
+          ) && host_scheduler.phase ==
+              MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
+          edge_scheduler.phase == MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
+          host_scheduler.catalog_generation == old_generation &&
+          edge_scheduler.catalog_generation == old_generation);
+    for (index = 0U; index < fixture->host.source_count; ++index) {
+        CHECK(fixture->host.sources[index].boundaries ==
+              host_boundaries_before[index]);
+    }
+    for (index = 0U; index < fixture->edge.source_count; ++index) {
+        CHECK(fixture->edge.sources[index].boundaries ==
+              edge_boundaries_before[index]);
+    }
+    CHECK(dispatch_source(
+        &fixture->host, &fixture->edge, accept, NULL, &event
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED &&
+          event.catalog_generation == new_generation);
+    fixture->catalog_generation = new_generation;
+    CHECK(meiso_runtime_snapshot(fixture->host.runtime, &host_runtime) &&
+          meiso_runtime_snapshot(fixture->edge.runtime, &edge_runtime) &&
+          host_runtime.active_catalog_present &&
+          edge_runtime.active_catalog_present &&
+          host_runtime.active_catalog_generation == new_generation &&
+          edge_runtime.active_catalog_generation == new_generation &&
+          host_runtime.active_endpoint_count == 3U &&
+          edge_runtime.active_endpoint_count == 3U &&
+          host_runtime.active_route_count == 9U &&
+          edge_runtime.active_route_count == 9U);
+    CHECK(rebind_peer_after_catalog(
+        fixture, &fixture->host, true, old_generation, new_generation
+    ));
+    CHECK(rebind_peer_after_catalog(
+        fixture, &fixture->edge, false, old_generation, new_generation
+    ));
+    CHECK(reject_stale_queued_route(
+        fixture,
+        &fixture->host,
+        &fixture->host_sources[HOST_WIFI_DESIRED],
+        ROUTE_WIFI_DESIRED,
+        old_generation
+    ));
+    CHECK(reject_stale_queued_route(
+        fixture,
+        &fixture->edge,
+        &fixture->edge_sources[EDGE_WIFI_ACTUAL],
+        ROUTE_WIFI_ACTUAL,
+        old_generation
+    ));
+    CHECK(meiso_session_snapshot(fixture->host.session, &host_after) &&
+          meiso_session_snapshot(fixture->edge.session, &edge_after) &&
+          same_ready_session_identity(&host_before, &host_after) &&
+          same_ready_session_identity(&edge_before, &edge_after) &&
+          fixture->host.session == host_session &&
+          fixture->edge.session == edge_session &&
+          fixture->host.fd == host_fd && fixture->edge.fd == edge_fd);
     return true;
 }
 
@@ -1417,6 +1787,112 @@ static bool publish_cube_over_scheduler(
     return true;
 }
 
+static bool republish_cube_duplicate_over_scheduler(
+    SemanticFixture *fixture,
+    MeisoByteView cube,
+    const MeisoContentId *content_id
+)
+{
+    TxSource *begin = &fixture->tcp.host_sources[HOST_BLOB_BEGIN];
+    TxSource *chunk = &fixture->tcp.host_sources[HOST_BLOB_CHUNK];
+    TxSource *commit = &fixture->tcp.host_sources[HOST_BLOB_COMMIT];
+    TxSource *result = &fixture->tcp.edge_sources[EDGE_BLOB_RESULT];
+    MeisoRuntimeSchedulerStepResult begin_step;
+    MeisoRuntimeEvent edge_event;
+    MeisoRuntimeEvent host_event;
+    MeisoRuntimeBlobTransferRef transfer;
+    MeisoRuntimeBlobPublishReport report;
+    MeisoBlobStats before;
+    MeisoBlobStats after;
+
+    CHECK(content_id != NULL && cube.data != NULL && cube.size != 0U &&
+          meiso_blob_store_stats(fixture->blob_store, &before) &&
+          meiso_blob_store_count(fixture->blob_store) == 1U);
+    begin->work.value.blob_begin.content_id = *content_id;
+    begin->work.value.blob_begin.total_size = cube.size;
+    CHECK(dispatch_source(
+        &fixture->tcp.host, &fixture->tcp.edge, begin,
+        &begin_step, &edge_event
+    ));
+    CHECK(begin_step.completion.generated_blob_transfer_present &&
+          edge_event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          edge_event.blob_operation == MEISO_RUNTIME_BLOB_BEGIN &&
+          route_key_equal(
+              edge_event.route,
+              route_key(&fixture->tcp, ROUTE_MESH_BLOB)
+          ));
+    transfer = begin_step.completion.generated_blob_transfer;
+    CHECK(transfer.transfer_id == 2U &&
+          edge_event.blob_transfer.transfer_id == transfer.transfer_id &&
+          edge_event.blob_transfer.total_size == cube.size);
+
+    result->work.value.blob_result.transfer = edge_event.blob_transfer;
+    result->work.value.blob_result.operation = MEISO_RUNTIME_BLOB_BEGIN;
+    CHECK(dispatch_source(
+        &fixture->tcp.edge, &fixture->tcp.host, result, NULL, &host_event
+    ));
+    CHECK(host_event.type == MEISO_RUNTIME_EVENT_BLOB_RESULT &&
+          host_event.blob_operation == MEISO_RUNTIME_BLOB_BEGIN &&
+          host_event.blob_result == MEISO_RUNTIME_BLOB_RESULT_READY &&
+          host_event.blob_next_offset == 0U);
+
+    chunk->work.value.blob_chunk.transfer = transfer;
+    chunk->work.value.blob_chunk.offset = 0U;
+    chunk->work.value.blob_chunk.payload = cube;
+    CHECK(dispatch_source(
+        &fixture->tcp.host, &fixture->tcp.edge, chunk, NULL, &edge_event
+    ));
+    CHECK(edge_event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          edge_event.blob_operation == MEISO_RUNTIME_BLOB_CHUNK &&
+          edge_event.blob_offset == 0U &&
+          edge_event.blob_payload.size == cube.size &&
+          memcmp(edge_event.blob_payload.data, cube.data, cube.size) == 0);
+
+    commit->work.value.blob_commit.transfer = transfer;
+    CHECK(dispatch_source(
+        &fixture->tcp.host, &fixture->tcp.edge, commit, NULL, &edge_event
+    ));
+    CHECK(edge_event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          edge_event.blob_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+          edge_event.blob_payload.size == cube.size &&
+          memcmp(edge_event.blob_payload.data, cube.data, cube.size) == 0);
+    transfer = edge_event.blob_transfer;
+    CHECK(meiso_runtime_scheduler_publish_blob_receive(
+        fixture->tcp.edge.scheduler,
+        &transfer,
+        fixture->blob_store,
+        meiso_composition_scene_mesh_blob_verify,
+        NULL,
+        &report
+    ) == MEISO_RUNTIME_OK);
+    CHECK(report.stage_attempted && report.commit_attempted &&
+          !report.forced_abort_attempted &&
+          report.stage_status == MEISO_BLOB_STAGE_STARTED &&
+          report.commit_status == MEISO_BLOB_COMMIT_DUPLICATE &&
+          report.result == MEISO_RUNTIME_BLOB_RESULT_DUPLICATE &&
+          meiso_blob_store_count(fixture->blob_store) == 1U &&
+          meiso_blob_store_stats(fixture->blob_store, &after) &&
+          after.publications == before.publications &&
+          after.duplicates == before.duplicates + 1U);
+    CHECK(meiso_composition_scene_store_mark_blob_visible(
+        fixture->scene_store,
+        HOST_OWNER.incarnation,
+        content_id,
+        cube.size
+    ) == MEISO_COMPOSITION_SCENE_BLOB_VISIBLE);
+
+    result->work.value.blob_result.transfer = transfer;
+    result->work.value.blob_result.operation = MEISO_RUNTIME_BLOB_COMMIT;
+    CHECK(dispatch_source(
+        &fixture->tcp.edge, &fixture->tcp.host, result, NULL, &host_event
+    ));
+    CHECK(host_event.type == MEISO_RUNTIME_EVENT_BLOB_RESULT &&
+          host_event.blob_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+          host_event.blob_result == MEISO_RUNTIME_BLOB_RESULT_DUPLICATE &&
+          host_event.blob_next_offset == cube.size);
+    return true;
+}
+
 static MeisoTimePoint composition_time(uint64_t monotonic_ns)
 {
     return (MeisoTimePoint){77U, monotonic_ns};
@@ -1555,14 +2031,17 @@ static MeisoCompositionSceneDesired scene_value(MeisoContentId mesh_id)
     return value;
 }
 
-static MeisoCompositionScenePresentationPlan plan_value(void)
+static MeisoCompositionScenePresentationPlan plan_value_at_generation(
+    uint64_t plan_generation,
+    uint64_t capability_generation
+)
 {
     MeisoCompositionScenePresentationPlan plan;
     uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
 
     memset(&plan, 0, sizeof(plan));
-    plan.plan_generation = 1U;
-    plan.capability_generation = 1U;
+    plan.plan_generation = plan_generation;
+    plan.capability_generation = capability_generation;
     plan.scene_binding = *meiso_composition_scene_scene_endpoint();
     plan.source = MEISO_COMPOSITION_SCENE_LAYER_SOURCE_EDGE_NATIVE;
     plan.geometry = MEISO_COMPOSITION_SCENE_GEOMETRY_PROJECTION;
@@ -1578,6 +2057,11 @@ static MeisoCompositionScenePresentationPlan plan_value(void)
         memcpy(plan.candidate_digest, digest, sizeof(digest));
     }
     return plan;
+}
+
+static MeisoCompositionScenePresentationPlan plan_value(void)
+{
+    return plan_value_at_generation(1U, 1U);
 }
 
 static bool deliver_wifi_desired(SemanticFixture *fixture)
@@ -1620,6 +2104,102 @@ static bool deliver_wifi_desired(SemanticFixture *fixture)
     ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
     CHECK(decoded_parameters.selected_fields == parameters.selected_fields &&
           decoded_parameters.sample_period_ms == parameters.sample_period_ms);
+    return true;
+}
+
+static bool deliver_wifi_desired_version(
+    SemanticFixture *fixture,
+    uint64_t version
+)
+{
+    const MeisoWifiTelemetryDesiredParameters parameters = {
+        MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+            MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM,
+        500U
+    };
+    uint8_t suffix[MEISO_WIFI_TELEMETRY_DESIRED_PARAMETERS_WIRE_SIZE];
+    MeisoStateView current;
+    MeisoRuntimeDesiredState decoded_runtime;
+    MeisoWifiTelemetryDesiredParameters decoded_parameters;
+    size_t suffix_size = 0U;
+
+    CHECK(meiso_wifi_telemetry_desired_parameters_encode(
+        &parameters,
+        (MeisoMutableBuffer){suffix, sizeof(suffix)},
+        &suffix_size
+    ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
+    CHECK(publish_desired_state(
+        &fixture->wifi_desired, version,
+        (MeisoByteView){suffix, suffix_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->wifi_desired,
+        true,
+        HOST_WIFI_DESIRED,
+        EDGE_WIFI_DESIRED_ACCEPT,
+        &current
+    ));
+    CHECK(current.version == version &&
+          meiso_owner_scope_equal(current.owner, HOST_OWNER) &&
+          meiso_runtime_desired_state_decode(
+              current.payload, &decoded_runtime
+          ) && decoded_runtime.enabled &&
+          meiso_wifi_telemetry_desired_parameters_decode(
+              decoded_runtime.profile, &decoded_parameters
+          ) == MEISO_WIFI_TELEMETRY_CODEC_OK &&
+          decoded_parameters.selected_fields == parameters.selected_fields &&
+          decoded_parameters.sample_period_ms == parameters.sample_period_ms);
+    return true;
+}
+
+static bool deliver_scene_state_without_prepare(
+    SemanticFixture *fixture,
+    uint64_t version,
+    const MeisoCompositionSceneDesired *scene,
+    MeisoCompositionSceneDesired *out_decoded
+)
+{
+    uint8_t suffix[MEISO_COMPOSITION_SCENE_SCENE_MAX_WIRE_SIZE];
+    uint8_t canonical_suffix[MEISO_COMPOSITION_SCENE_SCENE_MAX_WIRE_SIZE];
+    MeisoStateView current;
+    MeisoRuntimeDesiredState decoded_runtime;
+    size_t suffix_size = 0U;
+    size_t canonical_size = 0U;
+
+    CHECK(out_decoded != NULL);
+    CHECK(meiso_composition_scene_desired_encode(
+        scene,
+        (MeisoMutableBuffer){suffix, sizeof(suffix)},
+        &suffix_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(publish_desired_state(
+        &fixture->scene_desired, version,
+        (MeisoByteView){suffix, suffix_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->scene_desired,
+        true,
+        HOST_SCENE_DESIRED,
+        EDGE_SCENE_DESIRED_ACCEPT,
+        &current
+    ));
+    CHECK(current.version == version &&
+          meiso_owner_scope_equal(current.owner, HOST_OWNER) &&
+          meiso_runtime_desired_state_decode(
+              current.payload, &decoded_runtime
+          ) && decoded_runtime.enabled);
+    CHECK(meiso_composition_scene_desired_decode(
+        decoded_runtime.profile, out_decoded
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(meiso_composition_scene_desired_encode(
+        out_decoded,
+        (MeisoMutableBuffer){canonical_suffix, sizeof(canonical_suffix)},
+        &canonical_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(canonical_size == suffix_size &&
+          memcmp(canonical_suffix, suffix, suffix_size) == 0);
     return true;
 }
 
@@ -1689,7 +2269,8 @@ static bool deliver_scene_snapshot(
 
 static bool activate_plan_over_state(
     SemanticFixture *fixture,
-    MeisoCompositionSceneWorldRef *out_world
+    MeisoCompositionSceneWorldRef *out_world,
+    uint8_t out_token[MEISO_SHA256_DIGEST_SIZE]
 )
 {
     MeisoCompositionScenePresentationPlan plan = plan_value();
@@ -1749,6 +2330,9 @@ static bool activate_plan_over_state(
           candidate.candidate_state ==
               MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED);
     memcpy(token, candidate.prepared_token, sizeof(token));
+    if (out_token != NULL) {
+        memcpy(out_token, token, sizeof(token));
+    }
     plan.prepared_token_echo_present = true;
     memcpy(plan.prepared_token_echo, token, sizeof(token));
     CHECK(meiso_composition_scene_presentation_plan_encode(
@@ -2793,6 +3377,916 @@ static bool disable_scene_lifecycle(
     return true;
 }
 
+static bool assert_catalog_replacement_closed_gates(
+    SemanticFixture *fixture
+)
+{
+    MeisoRuntimeProductionSnapshot host_wifi;
+    MeisoRuntimeProductionSnapshot edge_wifi;
+    MeisoRuntimeProductionSnapshot host_presentation;
+    MeisoRuntimeProductionSnapshot edge_presentation;
+    MeisoRuntimeProductionSnapshot host_scene;
+    MeisoRuntimeProductionSnapshot edge_scene;
+
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.host.runtime,
+        *meiso_wifi_telemetry_endpoint(),
+        &host_wifi
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.edge.runtime,
+        *meiso_wifi_telemetry_endpoint(),
+        &edge_wifi
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.host.runtime,
+        *meiso_composition_scene_presentation_endpoint(),
+        &host_presentation
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.edge.runtime,
+        *meiso_composition_scene_presentation_endpoint(),
+        &edge_presentation
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.host.runtime,
+        *meiso_composition_scene_scene_endpoint(),
+        &host_scene
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.edge.runtime,
+        *meiso_composition_scene_scene_endpoint(),
+        &edge_scene
+    ) == MEISO_RUNTIME_OK);
+    CHECK(!host_wifi.actual_present && !edge_wifi.actual_present &&
+          !host_wifi.data_active && !edge_wifi.data_active &&
+          !host_presentation.actual_present &&
+          !edge_presentation.actual_present &&
+          !host_presentation.data_active &&
+          !edge_presentation.data_active &&
+          !host_scene.actual_present && !edge_scene.actual_present &&
+          !host_scene.data_active && !edge_scene.data_active &&
+          host_wifi.production_epoch_high_water == 77U &&
+          edge_wifi.production_epoch_high_water == 77U &&
+          host_presentation.production_epoch_high_water == 41U &&
+          edge_presentation.production_epoch_high_water == 41U &&
+          host_scene.production_epoch_high_water == 46U &&
+          edge_scene.production_epoch_high_water == 46U);
+    return true;
+}
+
+static bool start_catalog_generation_two_coordinator(
+    SemanticFixture *fixture,
+    const MeisoContentId *cube_id,
+    const MeisoCompositionSceneWorldRef *old_world,
+    const uint8_t old_token[MEISO_SHA256_DIGEST_SIZE]
+)
+{
+    MeisoCompositionCoordinator *old_coordinator = fixture->coordinator;
+    void *old_arena = fixture->coordinator_arena;
+    void *new_arena = NULL;
+    MeisoCompositionCoordinator *new_coordinator = NULL;
+    MeisoCompositionCoordinatorConfig config;
+    MeisoCompositionSceneControlScope scope_before;
+    MeisoCompositionSceneControlScope scope_after;
+    MeisoCompositionCoordinatorObservation observation;
+    MeisoCompositionCoordinatorPlanView plan_view;
+    MeisoCompositionCoordinatorStats stats;
+    MeisoCompositionScenePresentationStatus status;
+    MeisoCompositionSceneWorldView world_view;
+    MeisoCompositionSceneWorldRef output_world;
+    MeisoRuntimeDesiredState disabled = {false, {NULL, 0U}};
+    MeisoBlobView cached;
+    MeisoSessionSnapshot session;
+    const size_t required = meiso_composition_coordinator_memory_required();
+
+    CHECK(cube_id != NULL && old_world != NULL && old_token != NULL &&
+          meiso_composition_scene_store_control_scope(
+              fixture->scene_store, &scope_before
+          ) && scope_before.desired_owner_incarnation ==
+              HOST_OWNER.incarnation &&
+          meiso_blob_store_count(fixture->blob_store) == 1U &&
+          meiso_blob_store_lookup(
+              fixture->blob_store, cube_id, &cached
+          ) && cached.content.size != 0U &&
+          meiso_session_snapshot(fixture->tcp.edge.session, &session) &&
+          session.state == MEISO_SESSION_STATE_READY &&
+          session.session_id_known);
+    memset(&config, 0, sizeof(config));
+    config.scene_store = fixture->scene_store;
+    config.session_id = session.session_id;
+    config.edge_incarnation = EDGE_OWNER.incarnation;
+    config.capability_generation = 2U;
+    config.edge_clock_epoch = 77U;
+    CHECK(allocate_arena(&new_arena, required));
+    CHECK(meiso_composition_coordinator_init(
+        new_arena, required, &config, &new_coordinator
+    ) == MEISO_COMPOSITION_COORDINATOR_INIT_OK);
+    CHECK(meiso_composition_coordinator_begin_owner(
+        new_coordinator, HOST_OWNER.incarnation
+    ) == MEISO_COMPOSITION_COORDINATOR_OWNER_STARTED);
+    CHECK(meiso_composition_scene_store_control_scope(
+        fixture->scene_store, &scope_after
+    ) && scope_after.desired_owner_incarnation ==
+              scope_before.desired_owner_incarnation &&
+          scope_after.control_scope_generation ==
+              scope_before.control_scope_generation + 1U);
+    CHECK(!meiso_composition_coordinator_observation(
+              old_coordinator, &observation
+          ) &&
+          !meiso_composition_coordinator_candidate(
+              old_coordinator, &plan_view
+          ) &&
+          !meiso_composition_coordinator_active(
+              old_coordinator, &plan_view
+          ) &&
+          !meiso_composition_coordinator_status(old_coordinator, &status) &&
+          !meiso_composition_coordinator_stats(old_coordinator, &stats));
+    output_world = *old_world;
+    CHECK(meiso_composition_coordinator_activate_frame_boundary(
+        old_coordinator,
+        old_token,
+        composition_time(300U),
+        &output_world
+    ) == MEISO_COMPOSITION_COORDINATOR_ACTIVATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&output_world, old_world, sizeof(output_world)) == 0);
+    CHECK(meiso_composition_coordinator_observe_desired(
+        old_coordinator,
+        HOST_OWNER.incarnation,
+        7U,
+        &disabled,
+        composition_time(300U)
+    ) == MEISO_COMPOSITION_COORDINATOR_OBSERVE_INVALID_ARGUMENT);
+    CHECK(!meiso_composition_scene_store_active(
+              fixture->scene_store, &world_view
+          ) &&
+          !meiso_composition_scene_store_candidate(
+              fixture->scene_store, &world_view
+          ) &&
+          meiso_blob_store_count(fixture->blob_store) == 1U &&
+          meiso_blob_store_lookup(
+              fixture->blob_store, cube_id, &cached
+          ));
+
+    fixture->coordinator_arena = new_arena;
+    fixture->coordinator = new_coordinator;
+    free(old_arena);
+    return true;
+}
+
+static bool activate_catalog_generation_two_plan(
+    SemanticFixture *fixture,
+    const MeisoCompositionSceneWorldRef *old_world,
+    const uint8_t old_token[MEISO_SHA256_DIGEST_SIZE],
+    MeisoCompositionSceneWorldRef *out_world,
+    uint8_t out_token[MEISO_SHA256_DIGEST_SIZE]
+)
+{
+    MeisoCompositionScenePresentationPlan plan =
+        plan_value_at_generation(2U, 2U);
+    MeisoCompositionScenePresentationPlan candidate_plan_before;
+    MeisoCompositionCoordinatorPlanView candidate_before;
+    MeisoCompositionCoordinatorPlanView candidate_after;
+    MeisoCompositionCoordinatorPlanView active;
+    MeisoCompositionCoordinatorPlanRef expected;
+    MeisoRuntimeDesiredState decoded;
+    MeisoStateView current;
+    MeisoCompositionSceneWorldRef untouched;
+    uint8_t suffix[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE];
+    uint8_t nonce[MEISO_SHA256_DIGEST_SIZE];
+    uint8_t store_before[TEST_SCENE_STORE_SNAPSHOT_BYTES];
+    const size_t store_bytes =
+        meiso_composition_scene_store_memory_required();
+    size_t suffix_size = 0U;
+
+    CHECK(old_world != NULL && old_token != NULL && out_world != NULL &&
+          out_token != NULL && plan.plan_generation == 2U &&
+          plan.capability_generation == 2U);
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+        &plan,
+        (MeisoMutableBuffer){suffix, sizeof(suffix)},
+        &suffix_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(publish_desired_state(
+        &fixture->plan_desired, 4U,
+        (MeisoByteView){suffix, suffix_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->plan_desired,
+        true,
+        HOST_PLAN_DESIRED,
+        EDGE_PLAN_DESIRED_ACCEPT,
+        &current
+    ));
+    CHECK(current.version == 4U &&
+          meiso_runtime_desired_state_decode(current.payload, &decoded) &&
+          meiso_composition_coordinator_observe_desired(
+              fixture->coordinator,
+              current.owner.incarnation,
+              current.version,
+              &decoded,
+              composition_time(310U)
+          ) == MEISO_COMPOSITION_COORDINATOR_OBSERVE_PREPARING &&
+          meiso_composition_coordinator_candidate(
+              fixture->coordinator, &candidate_before
+          ));
+    expected = candidate_before.ref;
+    fill_nonce(nonce, 0x71U);
+    CHECK(meiso_composition_coordinator_report_prepare_outcome(
+        fixture->coordinator,
+        &expected,
+        MEISO_COMPOSITION_COORDINATOR_BACKEND_READY,
+        composition_time(320U),
+        nonce
+    ) == MEISO_COMPOSITION_COORDINATOR_REPORT_PREPARED);
+    CHECK(meiso_composition_coordinator_candidate(
+        fixture->coordinator, &candidate_before
+    ) && candidate_before.prepared_token_present &&
+          candidate_before.candidate_state ==
+              MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED &&
+          candidate_before.plan != NULL);
+    candidate_plan_before = *candidate_before.plan;
+    memcpy(
+        out_token,
+        candidate_before.prepared_token,
+        MEISO_SHA256_DIGEST_SIZE
+    );
+    CHECK(memcmp(
+        out_token, old_token, MEISO_SHA256_DIGEST_SIZE
+    ) != 0);
+
+    plan.prepared_token_echo_present = true;
+    memcpy(
+        plan.prepared_token_echo, old_token, MEISO_SHA256_DIGEST_SIZE
+    );
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+        &plan,
+        (MeisoMutableBuffer){suffix, sizeof(suffix)},
+        &suffix_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(publish_desired_state(
+        &fixture->plan_desired, 5U,
+        (MeisoByteView){suffix, suffix_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->plan_desired,
+        true,
+        HOST_PLAN_DESIRED,
+        EDGE_PLAN_DESIRED_ACCEPT,
+        &current
+    ));
+    CHECK(meiso_runtime_desired_state_decode(current.payload, &decoded) &&
+          meiso_composition_coordinator_observe_desired(
+              fixture->coordinator,
+              current.owner.incarnation,
+              current.version,
+              &decoded,
+              composition_time(330U)
+          ) == MEISO_COMPOSITION_COORDINATOR_OBSERVE_TOKEN_MISMATCH &&
+          meiso_composition_coordinator_candidate(
+              fixture->coordinator, &candidate_after
+          ));
+    CHECK(memcmp(
+              &candidate_before.ref,
+              &candidate_after.ref,
+              sizeof(candidate_before.ref)
+          ) == 0 &&
+          candidate_before.candidate_state == candidate_after.candidate_state &&
+          candidate_before.active_state == candidate_after.active_state &&
+          candidate_before.prepared_token_present ==
+              candidate_after.prepared_token_present &&
+          memcmp(
+              candidate_before.prepared_token,
+              candidate_after.prepared_token,
+              MEISO_SHA256_DIGEST_SIZE
+          ) == 0 &&
+          memcmp(
+              &candidate_before.first_observed_at,
+              &candidate_after.first_observed_at,
+              sizeof(candidate_before.first_observed_at)
+          ) == 0 &&
+          memcmp(
+              &candidate_before.prepared_at,
+              &candidate_after.prepared_at,
+              sizeof(candidate_before.prepared_at)
+          ) == 0 &&
+          candidate_after.plan != NULL &&
+          memcmp(
+              &candidate_plan_before,
+              candidate_after.plan,
+              sizeof(candidate_plan_before)
+          ) == 0);
+
+    memcpy(
+        plan.prepared_token_echo, out_token, MEISO_SHA256_DIGEST_SIZE
+    );
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+        &plan,
+        (MeisoMutableBuffer){suffix, sizeof(suffix)},
+        &suffix_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(publish_desired_state(
+        &fixture->plan_desired, 6U,
+        (MeisoByteView){suffix, suffix_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->plan_desired,
+        true,
+        HOST_PLAN_DESIRED,
+        EDGE_PLAN_DESIRED_ACCEPT,
+        &current
+    ));
+    CHECK(meiso_runtime_desired_state_decode(current.payload, &decoded) &&
+          meiso_composition_coordinator_observe_desired(
+              fixture->coordinator,
+              current.owner.incarnation,
+              current.version,
+              &decoded,
+              composition_time(340U)
+          ) == MEISO_COMPOSITION_COORDINATOR_OBSERVE_ACTIVATION_PENDING);
+    untouched = *old_world;
+    CHECK(meiso_composition_coordinator_activate_frame_boundary(
+        fixture->coordinator,
+        old_token,
+        composition_time(350U),
+        &untouched
+    ) == MEISO_COMPOSITION_COORDINATOR_ACTIVATE_TOKEN_MISMATCH &&
+          memcmp(&untouched, old_world, sizeof(untouched)) == 0);
+    CHECK(meiso_composition_coordinator_activate_frame_boundary(
+        fixture->coordinator,
+        out_token,
+        composition_time(360U),
+        out_world
+    ) == MEISO_COMPOSITION_COORDINATOR_ACTIVATE_ACTIVATED);
+    CHECK(out_world->desired_owner_incarnation == HOST_OWNER.incarnation &&
+          out_world->desired_state_version == 6U &&
+          out_world->plan_generation == 2U &&
+          out_world->world_generation == old_world->world_generation + 1U &&
+          meiso_composition_coordinator_active(
+              fixture->coordinator, &active
+          ) && active.ref.desired_state_version == 6U &&
+          active.ref.plan_generation == 2U &&
+          active.active_state == MEISO_COMPOSITION_SCENE_ACTIVE_ACTIVE);
+
+    CHECK(store_bytes <= sizeof(store_before));
+    memcpy(store_before, fixture->scene_store_arena, store_bytes);
+    CHECK(!meiso_composition_scene_store_record_result_published(
+        fixture->scene_store, old_world, 417U, 7U
+    ));
+    CHECK(memcmp(
+        store_before, fixture->scene_store_arena, store_bytes
+    ) == 0);
+    return true;
+}
+
+static bool deliver_catalog_generation_two_actuals(
+    SemanticFixture *fixture,
+    size_t cube_size,
+    const MeisoCompositionSceneWorldRef *world
+)
+{
+    const MeisoWifiTelemetryEffectiveParameters wifi_parameters = {
+        MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+            MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM,
+        500U
+    };
+    const MeisoCompositionSceneResourceUsage usage = {
+        1U, cube_size, 0U, 0U, 0U, 0U
+    };
+    uint8_t wifi_suffix[
+        MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE
+    ];
+    uint8_t presentation_suffix[
+        MEISO_COMPOSITION_SCENE_PRESENTATION_STATUS_WIRE_SIZE
+    ];
+    uint8_t scene_suffix[MEISO_COMPOSITION_SCENE_STATUS_WIRE_SIZE];
+    MeisoCompositionScenePresentationStatus presentation_status;
+    MeisoCompositionSceneStatus scene_status;
+    MeisoRuntimeActualState decoded;
+    MeisoStateView current;
+    MeisoRuntimeProductionSnapshot host_wifi;
+    MeisoRuntimeProductionSnapshot edge_wifi;
+    MeisoRuntimeProductionSnapshot host_scene;
+    MeisoRuntimeProductionSnapshot edge_scene;
+    MeisoRuntimeProductionSnapshot host_presentation;
+    MeisoRuntimeProductionSnapshot edge_presentation;
+    size_t wifi_size = 0U;
+    size_t presentation_size = 0U;
+    size_t scene_size = 0U;
+
+    CHECK(world != NULL);
+    CHECK(meiso_wifi_telemetry_effective_parameters_encode(
+        &wifi_parameters,
+        (MeisoMutableBuffer){wifi_suffix, sizeof(wifi_suffix)},
+        &wifi_size
+    ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
+    CHECK(publish_actual_state(
+        &fixture->wifi_actual,
+        2U,
+        2U,
+        88U,
+        (MeisoByteView){wifi_suffix, wifi_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->wifi_actual,
+        false,
+        EDGE_WIFI_ACTUAL,
+        HOST_WIFI_ACTUAL_ACCEPT,
+        &current
+    ));
+    CHECK(current.version == 2U &&
+          meiso_runtime_actual_state_decode(current.payload, &decoded) &&
+          decoded.applied_desired.version == 2U &&
+          decoded.production_epoch == 88U);
+
+    CHECK(meiso_composition_coordinator_status(
+        fixture->coordinator, &presentation_status
+    ) && presentation_status.capability_generation == 2U &&
+          presentation_status.active_state ==
+              MEISO_COMPOSITION_SCENE_ACTIVE_ACTIVE &&
+          presentation_status.active_plan_generation == 2U);
+    CHECK(meiso_composition_scene_presentation_status_encode(
+        &presentation_status,
+        (MeisoMutableBuffer){
+            presentation_suffix, sizeof(presentation_suffix)
+        },
+        &presentation_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(publish_actual_state(
+        &fixture->presentation_actual,
+        3U,
+        6U,
+        51U,
+        (MeisoByteView){presentation_suffix, presentation_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->presentation_actual,
+        false,
+        EDGE_PRESENTATION_ACTUAL,
+        HOST_PRESENTATION_ACTUAL_ACCEPT,
+        &current
+    ));
+    CHECK(current.version == 3U &&
+          meiso_runtime_actual_state_decode(current.payload, &decoded) &&
+          decoded.applied_desired.version == 6U &&
+          decoded.production_epoch == 51U);
+
+    CHECK(meiso_composition_scene_store_status(
+        fixture->scene_store, &usage, &scene_status
+    ) && scene_status.reason == MEISO_COMPOSITION_SCENE_REASON_READY &&
+          scene_status.active_plan_generation == 2U &&
+          scene_status.world_generation == world->world_generation &&
+          scene_status.active_object_count == 1U &&
+          scene_status.unique_mesh_count == 1U &&
+          scene_status.published_blob_count == 1U &&
+          scene_status.published_blob_bytes == cube_size);
+    CHECK(meiso_composition_scene_status_encode(
+        &scene_status,
+        (MeisoMutableBuffer){scene_suffix, sizeof(scene_suffix)},
+        &scene_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(publish_actual_state(
+        &fixture->scene_actual,
+        7U,
+        6U,
+        52U,
+        (MeisoByteView){scene_suffix, scene_size}
+    ));
+    CHECK(deliver_state_over_scheduler(
+        &fixture->tcp,
+        &fixture->scene_actual,
+        false,
+        EDGE_SCENE_ACTUAL,
+        HOST_SCENE_ACTUAL_ACCEPT,
+        &current
+    ));
+    CHECK(current.version == 7U &&
+          meiso_runtime_actual_state_decode(current.payload, &decoded) &&
+          decoded.applied_desired.version == 6U &&
+          decoded.production_epoch == 52U);
+
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.host.runtime,
+        *meiso_wifi_telemetry_endpoint(),
+        &host_wifi
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.edge.runtime,
+        *meiso_wifi_telemetry_endpoint(),
+        &edge_wifi
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.host.runtime,
+        *meiso_composition_scene_presentation_endpoint(),
+        &host_presentation
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.edge.runtime,
+        *meiso_composition_scene_presentation_endpoint(),
+        &edge_presentation
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.host.runtime,
+        *meiso_composition_scene_scene_endpoint(),
+        &host_scene
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_production_snapshot(
+        fixture->tcp.edge.runtime,
+        *meiso_composition_scene_scene_endpoint(),
+        &edge_scene
+    ) == MEISO_RUNTIME_OK);
+    CHECK(host_wifi.data_active && edge_wifi.data_active &&
+          host_wifi.production_epoch == 88U &&
+          edge_wifi.production_epoch == 88U &&
+          host_presentation.data_active && edge_presentation.data_active &&
+          host_presentation.production_epoch == 51U &&
+          edge_presentation.production_epoch == 51U &&
+          host_scene.data_active && edge_scene.data_active &&
+          host_scene.production_epoch == 52U &&
+          edge_scene.production_epoch == 52U &&
+          host_wifi.production_epoch_high_water == 88U &&
+          edge_wifi.production_epoch_high_water == 88U &&
+          host_presentation.production_epoch_high_water == 51U &&
+          edge_presentation.production_epoch_high_water == 51U &&
+          host_scene.production_epoch_high_water == 52U &&
+          edge_scene.production_epoch_high_water == 52U);
+    return true;
+}
+
+static bool reject_old_production_epoch(
+    SemanticFixture *fixture,
+    TxSource *source,
+    uint64_t production_epoch,
+    const MeisoStreamSample *sample
+)
+{
+    MeisoRuntimeSchedulerStepResult step;
+    MeisoSessionSnapshot before;
+    MeisoSessionSnapshot after;
+    const uint64_t completions_before = source->completions;
+
+    CHECK(sample != NULL &&
+          meiso_session_snapshot(fixture->tcp.edge.session, &before) &&
+          !before.outbound_pending);
+    source->work.value.stream_sample.production_epoch = production_epoch;
+    source->work.value.stream_sample.sample = *sample;
+    source->poll_status = MEISO_RUNTIME_SCHEDULER_POLL_READY;
+    memset(&step, 0xa5, sizeof(step));
+    CHECK(meiso_runtime_scheduler_step(
+        fixture->tcp.edge.scheduler, &step
+    ) == MEISO_RUNTIME_SCHEDULER_STEP_REJECTED);
+    CHECK(step.completion.source_id == source->id &&
+          step.completion.kind == MEISO_RUNTIME_SCHEDULER_WORK_STREAM_SAMPLE &&
+          step.completion.code ==
+              MEISO_RUNTIME_SCHEDULER_COMPLETION_REJECTED &&
+          step.completion.runtime_status ==
+              MEISO_RUNTIME_PRODUCTION_EPOCH_MISMATCH &&
+          source->completions == completions_before + 1U &&
+          source->poll_status == MEISO_RUNTIME_SCHEDULER_POLL_EMPTY &&
+          meiso_session_snapshot(fixture->tcp.edge.session, &after) &&
+          !after.outbound_pending);
+    return true;
+}
+
+static bool restore_generation_two_streams(
+    SemanticFixture *fixture,
+    const MeisoCompositionSceneWorldRef *world
+)
+{
+    const MeisoWifiTelemetryFieldMask fields =
+        MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+        MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM;
+    TxSource *wifi_source = &fixture->tcp.edge_sources[EDGE_WIFI_STREAM];
+    TxSource *render_source = &fixture->tcp.edge_sources[EDGE_RENDER_STREAM];
+    MeisoWifiTelemetrySample wifi_value;
+    MeisoWifiTelemetrySample decoded_wifi;
+    MeisoCompositionSceneRenderResult render_value;
+    MeisoCompositionSceneRenderResult decoded_render;
+    MeisoStreamSample wifi_sample;
+    MeisoStreamSample render_sample;
+    MeisoStreamSample queued;
+    MeisoRuntimeEvent event;
+    MeisoStreamReceiveResult receive;
+    uint8_t wifi_payload[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
+    uint8_t render_payload[
+        MEISO_COMPOSITION_SCENE_RENDER_RESULT_WIRE_SIZE
+    ];
+    size_t wifi_size = 0U;
+    size_t render_size = 0U;
+
+    CHECK(world != NULL &&
+          meiso_composition_scene_store_fake_render(
+              fixture->scene_store, 77U, 400U, 410U, &render_value
+          ) == MEISO_COMPOSITION_SCENE_RENDER_COMPLETE &&
+          render_value.applied_scene_owner_incarnation ==
+              world->desired_owner_incarnation &&
+          render_value.applied_scene_state_version ==
+              world->desired_state_version &&
+          render_value.active_plan_generation == world->plan_generation &&
+          render_value.world_generation == world->world_generation);
+    memset(&wifi_value, 0, sizeof(wifi_value));
+    wifi_value.selected_fields = fields;
+    wifi_value.present_fields = fields;
+    wifi_value.link_state = true;
+    wifi_value.signal_mbm = -4600;
+    CHECK(meiso_wifi_telemetry_sample_encode(
+        &wifi_value,
+        (MeisoMutableBuffer){wifi_payload, sizeof(wifi_payload)},
+        &wifi_size
+    ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
+    CHECK(meiso_composition_scene_render_result_encode(
+        &render_value,
+        (MeisoMutableBuffer){render_payload, sizeof(render_payload)},
+        &render_size
+    ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    memset(&wifi_sample, 0, sizeof(wifi_sample));
+    wifi_sample.key = (MeisoStreamKey){EDGE_OWNER, 177U, 3U};
+    wifi_sample.source_time = composition_time(400U);
+    wifi_sample.payload = (MeisoByteView){wifi_payload, wifi_size};
+    memset(&render_sample, 0, sizeof(render_sample));
+    render_sample.key = (MeisoStreamKey){EDGE_OWNER, 417U, 7U};
+    render_sample.source_time = composition_time(410U);
+    render_sample.payload = (MeisoByteView){render_payload, render_size};
+
+    CHECK(reject_old_production_epoch(
+        fixture, wifi_source, 77U, &wifi_sample
+    ));
+    CHECK(reject_old_production_epoch(
+        fixture, render_source, 46U, &render_sample
+    ));
+    CHECK(meiso_stream_begin_producer(
+        fixture->wifi_stream, EDGE_OWNER, 178U
+    ) == MEISO_STREAM_PRODUCER_SWITCHED);
+    CHECK(meiso_stream_begin_producer(
+        fixture->render_stream, EDGE_OWNER, 418U
+    ) == MEISO_STREAM_PRODUCER_SWITCHED);
+    CHECK(meiso_stream_count(fixture->wifi_stream) == 0U &&
+          meiso_stream_count(fixture->render_stream) == 0U);
+
+    wifi_source->work.value.stream_sample.production_epoch = 88U;
+    wifi_source->work.value.stream_sample.sample = wifi_sample;
+    CHECK(dispatch_source(
+        &fixture->tcp.edge,
+        &fixture->tcp.host,
+        wifi_source,
+        NULL,
+        &event
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE &&
+          route_key_equal(
+              event.route, route_key(&fixture->tcp, ROUTE_WIFI_DATA)
+          ) && event.production_epoch == 88U &&
+          event.stream_sample.key.epoch == 177U &&
+          event.stream_sample.key.sequence == 3U);
+    receive = meiso_stream_receive(
+        fixture->wifi_stream, &event.stream_sample, NULL
+    );
+    CHECK(receive.code == MEISO_STREAM_RECEIVE_EPOCH_MISMATCH &&
+          meiso_stream_count(fixture->wifi_stream) == 0U);
+
+    render_source->work.value.stream_sample.production_epoch = 52U;
+    render_source->work.value.stream_sample.sample = render_sample;
+    CHECK(dispatch_source(
+        &fixture->tcp.edge,
+        &fixture->tcp.host,
+        render_source,
+        NULL,
+        &event
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE &&
+          route_key_equal(
+              event.route, route_key(&fixture->tcp, ROUTE_RENDER_RESULT)
+          ) && event.production_epoch == 52U &&
+          event.stream_sample.key.epoch == 417U &&
+          event.stream_sample.key.sequence == 7U);
+    receive = meiso_stream_receive(
+        fixture->render_stream, &event.stream_sample, NULL
+    );
+    CHECK(receive.code == MEISO_STREAM_RECEIVE_EPOCH_MISMATCH &&
+          meiso_stream_count(fixture->render_stream) == 0U);
+
+    wifi_sample.key.epoch = 178U;
+    wifi_sample.key.sequence = 1U;
+    wifi_sample.source_time = composition_time(420U);
+    wifi_source->work.value.stream_sample.production_epoch = 88U;
+    wifi_source->work.value.stream_sample.sample = wifi_sample;
+    CHECK(dispatch_source(
+        &fixture->tcp.edge,
+        &fixture->tcp.host,
+        wifi_source,
+        NULL,
+        &event
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE &&
+          route_key_equal(
+              event.route, route_key(&fixture->tcp, ROUTE_WIFI_DATA)
+          ) && event.production_epoch == 88U &&
+          event.stream_sample.key.epoch == 178U &&
+          event.stream_sample.key.sequence == 1U &&
+          meiso_wifi_telemetry_sample_decode(
+              event.stream_sample.payload, &decoded_wifi
+          ) == MEISO_WIFI_TELEMETRY_CODEC_OK &&
+          decoded_wifi.link_state && decoded_wifi.signal_mbm == -4600);
+    receive = meiso_stream_receive(
+        fixture->wifi_stream, &event.stream_sample, NULL
+    );
+    CHECK(receive.code == MEISO_STREAM_RECEIVE_ACCEPTED &&
+          receive.flags == MEISO_STREAM_RECEIVE_FLAG_NONE &&
+          receive.missing_before == 0U &&
+          meiso_stream_count(fixture->wifi_stream) == 1U &&
+          meiso_stream_peek(fixture->wifi_stream, &queued) &&
+          queued.key.epoch == 178U && queued.key.sequence == 1U &&
+          meiso_stream_pop(fixture->wifi_stream));
+
+    render_sample.key.epoch = 418U;
+    render_sample.key.sequence = 1U;
+    render_sample.source_time = composition_time(430U);
+    render_source->work.value.stream_sample.production_epoch = 52U;
+    render_source->work.value.stream_sample.sample = render_sample;
+    CHECK(dispatch_source(
+        &fixture->tcp.edge,
+        &fixture->tcp.host,
+        render_source,
+        NULL,
+        &event
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE &&
+          route_key_equal(
+              event.route, route_key(&fixture->tcp, ROUTE_RENDER_RESULT)
+          ) && event.production_epoch == 52U &&
+          event.stream_sample.key.epoch == 418U &&
+          event.stream_sample.key.sequence == 1U &&
+          meiso_composition_scene_render_result_decode(
+              event.stream_sample.payload, &decoded_render
+          ) == MEISO_COMPOSITION_SCENE_CODEC_OK &&
+          decoded_render.applied_scene_state_version == 6U &&
+          decoded_render.active_plan_generation == 2U &&
+          decoded_render.world_generation == world->world_generation);
+    receive = meiso_stream_receive(
+        fixture->render_stream, &event.stream_sample, NULL
+    );
+    CHECK(receive.code == MEISO_STREAM_RECEIVE_ACCEPTED &&
+          receive.flags == MEISO_STREAM_RECEIVE_FLAG_NONE &&
+          receive.missing_before == 0U &&
+          meiso_stream_count(fixture->render_stream) == 1U &&
+          meiso_stream_peek(fixture->render_stream, &queued) &&
+          queued.key.epoch == 418U && queued.key.sequence == 1U &&
+          queued.payload.size == render_size &&
+          memcmp(queued.payload.data, render_payload, render_size) == 0 &&
+          meiso_composition_scene_store_record_result_published(
+              fixture->scene_store, world, 418U, 1U
+          ) &&
+          meiso_stream_pop(fixture->render_stream));
+    return true;
+}
+
+static bool catalog_generation_two_lifecycle(
+    SemanticFixture *fixture,
+    MeisoByteView cube,
+    const MeisoContentId *cube_id,
+    const MeisoCompositionSceneDesired *scene,
+    const MeisoCompositionSceneWorldRef *old_world,
+    const uint8_t old_token[MEISO_SHA256_DIGEST_SIZE]
+)
+{
+    MeisoCompositionSceneDesired decoded_scene;
+    MeisoCompositionSceneWorldRef new_world;
+    MeisoCompositionCoordinatorPlanView active;
+    MeisoRuntimeBlobSnapshot host_blob;
+    MeisoRuntimeBlobSnapshot edge_blob;
+    MeisoRuntimeSnapshot host_runtime;
+    MeisoRuntimeSnapshot edge_runtime;
+    MeisoSessionSnapshot host_session;
+    MeisoSessionSnapshot edge_session;
+    MeisoStateView current;
+    MeisoStateOffer offer;
+    MeisoBlobView cached;
+    uint8_t new_token[MEISO_SHA256_DIGEST_SIZE];
+
+    CHECK(fixture != NULL && cube_id != NULL && scene != NULL &&
+          old_world != NULL && old_token != NULL &&
+          replace_catalog_generation(&fixture->tcp, 2U) &&
+          assert_catalog_replacement_closed_gates(fixture) &&
+          start_catalog_generation_two_coordinator(
+              fixture, cube_id, old_world, old_token
+          ) &&
+          meiso_blob_store_count(fixture->blob_store) == 1U &&
+          meiso_blob_store_lookup(
+              fixture->blob_store, cube_id, &cached
+          ) && cached.content.size == cube.size &&
+          deliver_wifi_desired_version(fixture, 2U) &&
+          deliver_scene_state_without_prepare(
+              fixture, 6U, scene, &decoded_scene
+          ));
+    CHECK(meiso_composition_scene_store_prepare(
+        fixture->scene_store,
+        HOST_OWNER.incarnation,
+        6U,
+        2U,
+        &decoded_scene
+    ) == MEISO_COMPOSITION_SCENE_PREPARE_MISSING_BLOB);
+    CHECK(republish_cube_duplicate_over_scheduler(
+        fixture, cube, cube_id
+    ));
+    CHECK(meiso_composition_scene_store_prepare(
+        fixture->scene_store,
+        HOST_OWNER.incarnation,
+        6U,
+        2U,
+        &decoded_scene
+    ) == MEISO_COMPOSITION_SCENE_PREPARE_PREPARED);
+    CHECK(activate_catalog_generation_two_plan(
+        fixture, old_world, old_token, &new_world, new_token
+    ));
+    CHECK(meiso_composition_coordinator_active(
+        fixture->coordinator, &active
+    ) && active.ref.desired_owner_incarnation == HOST_OWNER.incarnation &&
+          active.ref.desired_state_version == 6U &&
+          active.ref.plan_generation == 2U &&
+          active.plan != NULL && active.plan->capability_generation == 2U &&
+          !active.prepared_token_present);
+    CHECK(deliver_catalog_generation_two_actuals(
+        fixture, cube.size, &new_world
+    ));
+    CHECK(restore_generation_two_streams(fixture, &new_world));
+
+    CHECK(meiso_runtime_blob_snapshot(
+        fixture->tcp.host.runtime, &host_blob
+    ) && meiso_runtime_blob_snapshot(
+        fixture->tcp.edge.runtime, &edge_blob
+    ) && host_blob.transfer_id_high_water == 2U &&
+          edge_blob.transfer_id_high_water == 2U &&
+          !host_blob.transfer_active && !host_blob.begin_ready &&
+          !host_blob.publish_pending && !host_blob.result_pending &&
+          !edge_blob.transfer_active && !edge_blob.begin_ready &&
+          !edge_blob.publish_pending && !edge_blob.result_pending);
+    CHECK(meiso_state_publisher_current(
+        fixture->wifi_desired.publisher, &current
+    ) && current.version == 2U &&
+          meiso_state_publisher_current(
+              fixture->scene_desired.publisher, &current
+          ) && current.version == 6U &&
+          meiso_state_publisher_current(
+              fixture->plan_desired.publisher, &current
+          ) && current.version == 6U &&
+          meiso_state_publisher_current(
+              fixture->wifi_actual.publisher, &current
+          ) && current.version == 2U &&
+          meiso_state_publisher_current(
+              fixture->presentation_actual.publisher, &current
+          ) && current.version == 3U &&
+          meiso_state_publisher_current(
+              fixture->scene_actual.publisher, &current
+          ) && current.version == 7U);
+    CHECK(!meiso_state_publisher_next_offer(
+              fixture->wifi_desired.publisher, &offer
+          ) &&
+          !meiso_state_publisher_next_offer(
+              fixture->scene_desired.publisher, &offer
+          ) &&
+          !meiso_state_publisher_next_offer(
+              fixture->plan_desired.publisher, &offer
+          ) &&
+          !meiso_state_publisher_next_offer(
+              fixture->wifi_actual.publisher, &offer
+          ) &&
+          !meiso_state_publisher_next_offer(
+              fixture->presentation_actual.publisher, &offer
+          ) &&
+          !meiso_state_publisher_next_offer(
+              fixture->scene_actual.publisher, &offer
+          ));
+    CHECK(meiso_runtime_snapshot(
+        fixture->tcp.host.runtime, &host_runtime
+    ) && meiso_runtime_snapshot(
+        fixture->tcp.edge.runtime, &edge_runtime
+    ) && host_runtime.active_catalog_generation == 2U &&
+          edge_runtime.active_catalog_generation == 2U &&
+          meiso_session_snapshot(
+              fixture->tcp.host.session, &host_session
+          ) && meiso_session_snapshot(
+              fixture->tcp.edge.session, &edge_session
+          ) && host_session.state == MEISO_SESSION_STATE_READY &&
+          edge_session.state == MEISO_SESSION_STATE_READY &&
+          host_session.failure == MEISO_SESSION_FAILURE_NONE &&
+          edge_session.failure == MEISO_SESSION_FAILURE_NONE &&
+          host_session.session_id_known && edge_session.session_id_known &&
+          meiso_session_id_equal(
+              host_session.session_id, edge_session.session_id
+          ) && !host_session.outbound_pending &&
+          !edge_session.outbound_pending &&
+          !host_session.local_close_reason_known &&
+          !edge_session.local_close_reason_known &&
+          !host_session.peer_close_reason_known &&
+          !edge_session.peer_close_reason_known);
+    return true;
+}
+
 static bool test_r2b0_loopback_catalog_scheduler(void)
 {
     TcpFixture fixture;
@@ -2810,9 +4304,9 @@ static bool test_r2b0_loopback_catalog_scheduler(void)
           edge_scheduler.phase == MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
           host_scheduler.catalog_generation == 1U &&
           edge_scheduler.catalog_generation == 1U &&
-          host_scheduler.control_source_count == 8U &&
+          host_scheduler.control_source_count == 9U &&
           host_scheduler.data_source_count == 1U &&
-          edge_scheduler.control_source_count == 7U &&
+          edge_scheduler.control_source_count == 8U &&
           edge_scheduler.data_source_count == 2U);
     destroy_tcp_fixture(&fixture);
     return true;
@@ -2847,6 +4341,7 @@ static bool test_composite_semantic_loop(void)
     MeisoBlobView blob_after;
     MeisoCompositionCoordinatorPlanView initial_plan;
     MeisoCompositionCoordinatorPlanView final_plan;
+    uint8_t old_token[MEISO_SHA256_DIGEST_SIZE];
     MeisoRuntimeSchedulerSnapshot host_scheduler;
     MeisoRuntimeSchedulerSnapshot edge_scheduler;
 
@@ -2857,7 +4352,7 @@ static bool test_composite_semantic_loop(void)
     ));
     scene = scene_value(cube_id);
     CHECK(deliver_scene_snapshot(&fixture, 1U, &scene));
-    CHECK(activate_plan_over_state(&fixture, &world));
+    CHECK(activate_plan_over_state(&fixture, &world, old_token));
     CHECK(meiso_composition_coordinator_active(
         fixture.coordinator, &initial_plan
     ) && initial_plan.ref.desired_owner_incarnation ==
@@ -3019,6 +4514,24 @@ static bool test_composite_semantic_loop(void)
           fixture.tcp.edge.runtime_frames_with_multi_write_progress > 0U &&
           fixture.tcp.host.runtime_frames_with_multi_read_progress > 0U &&
           fixture.tcp.edge.runtime_frames_with_multi_read_progress > 0U);
+    CHECK(catalog_generation_two_lifecycle(
+        &fixture,
+        cube,
+        &cube_id,
+        &deleted_scene,
+        &world,
+        old_token
+    ));
+    CHECK(meiso_runtime_scheduler_snapshot(
+        fixture.tcp.host.scheduler, &host_scheduler
+    ) && meiso_runtime_scheduler_snapshot(
+        fixture.tcp.edge.scheduler, &edge_scheduler
+    ) && host_scheduler.phase == MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
+          edge_scheduler.phase == MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
+          host_scheduler.catalog_generation == 2U &&
+          edge_scheduler.catalog_generation == 2U &&
+          host_scheduler.successful_data_slots == 2U &&
+          edge_scheduler.successful_data_slots == 12U);
     destroy_semantic_fixture(&fixture);
     return true;
 }
