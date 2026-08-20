@@ -428,6 +428,30 @@ MeisoRuntimeInitStatus meiso_runtime_v3_init(
 );
 
 /*
+ * Explicitly reconciles this handle with its permanently bound Session at an
+ * SDK/control boundary. This is a single-owner, non-reentrant mutation and
+ * has no output or borrowed storage.
+ *
+ * A READY Session with the exact bound SessionId, local role, and negotiated
+ * limits returns OK and preserves the complete Runtime byte-for-byte,
+ * including pending State, catalog, Blob transfer, and Blob publication
+ * state. If the Session is unavailable, unknown, or no longer READY, the
+ * first call atomically invalidates the Runtime, clears its catalogs and all
+ * pending State/Blob state (including the Edge reassembly scratch), preserves
+ * the Blob transfer-id high-water, and returns CORE_NOT_READY; later
+ * calls return STALE_SESSION. A live identity/role/limits mismatch invalidates
+ * identically but returns STALE_SESSION on the first and every later call.
+ * Immutable binding/configuration and monotonic high-water bookkeeping may
+ * remain in the opaque arena; cleared catalog/State/Blob semantic state is no
+ * longer observable as active or reusable.
+ * During a Blob publication verifier callback it returns CONFLICT with no
+ * mutation.
+ */
+MeisoRuntimeStatus meiso_runtime_refresh_bound_session(
+    MeisoRuntime *runtime
+);
+
+/*
  * Edge only. The complete catalog is one bounded, atomic wire frame.
  * A generation successfully queued to Core, including one later rejected,
  * cannot be reused. TX_BUSY does not consume it.

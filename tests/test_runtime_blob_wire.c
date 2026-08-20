@@ -1876,17 +1876,38 @@ static bool test_session_loss_clears_runtime_only_staging(void)
     ) == MEISO_RUNTIME_OK);
     CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &snapshot));
     CHECK(snapshot.transfer_active && snapshot.result_pending);
+    CHECK(meiso_runtime_send_blob_result(
+        pair.edge_runtime, &event.blob_transfer, MEISO_RUNTIME_BLOB_BEGIN
+    ) == MEISO_RUNTIME_OK);
+    CHECK(receive_outbound(
+        &pair, pair.edge_session, pair.host_session, &message, NULL, 0U
+    ));
+    CHECK(meiso_runtime_receive(
+        pair.host_runtime, &message, &event
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_send_blob_chunk(
+        pair.host_runtime,
+        &transfer,
+        0U,
+        (MeisoByteView){BLOB_BYTES, sizeof(BLOB_BYTES)}
+    ) == MEISO_RUNTIME_OK);
+    CHECK(receive_outbound(
+        &pair, pair.host_session, pair.edge_session, &message, NULL, 0U
+    ));
+    CHECK(meiso_runtime_receive(
+        pair.edge_runtime, &message, &event
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &snapshot));
+    CHECK(snapshot.transfer_active && !snapshot.result_pending &&
+          !snapshot.publish_pending &&
+          snapshot.next_offset == sizeof(BLOB_BYTES));
 
     meiso_session_transport_lost(pair.host_session);
     meiso_session_transport_lost(pair.edge_session);
-    CHECK(meiso_runtime_send_blob_abort(
-        pair.host_runtime,
-        &transfer,
-        MEISO_RUNTIME_BLOB_ABORT_CALLER_REQUEST
-    ) == MEISO_RUNTIME_CORE_NOT_READY);
-    CHECK(meiso_runtime_send_blob_result(
-        pair.edge_runtime, &event.blob_transfer, MEISO_RUNTIME_BLOB_BEGIN
-    ) == MEISO_RUNTIME_CORE_NOT_READY);
+    CHECK(meiso_runtime_refresh_bound_session(pair.host_runtime) ==
+          MEISO_RUNTIME_CORE_NOT_READY);
+    CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
+          MEISO_RUNTIME_CORE_NOT_READY);
     CHECK(meiso_runtime_blob_snapshot(pair.host_runtime, &snapshot));
     CHECK(!snapshot.transfer_active && !snapshot.publish_pending &&
           !snapshot.result_pending &&
@@ -1895,6 +1916,10 @@ static bool test_session_loss_clears_runtime_only_staging(void)
     CHECK(!snapshot.transfer_active && !snapshot.publish_pending &&
           !snapshot.result_pending &&
           snapshot.transfer_id_high_water == 1U);
+    CHECK(meiso_runtime_refresh_bound_session(pair.host_runtime) ==
+          MEISO_RUNTIME_STALE_SESSION);
+    CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
+          MEISO_RUNTIME_STALE_SESSION);
     CHECK(meiso_runtime_send_blob_begin(
         pair.host_runtime,
         blob_route_key(),
@@ -1902,6 +1927,115 @@ static bool test_session_loss_clears_runtime_only_staging(void)
         4U,
         &transfer
     ) == MEISO_RUNTIME_STALE_SESSION);
+    return true;
+}
+
+static bool test_ready_bound_session_identity_mismatch_is_stale(void)
+{
+    size_t variant;
+
+    for (variant = 0U; variant < 3U; ++variant) {
+        RuntimePair pair;
+        MeisoSessionConfig bound_config = session_config(
+            variant == 2U ? MEISO_SESSION_ROLE_EDGE :
+                            MEISO_SESSION_ROLE_HOST
+        );
+        MeisoSessionConfig peer_config = session_config(
+            variant == 2U ? MEISO_SESSION_ROLE_HOST :
+                            MEISO_SESSION_ROLE_EDGE
+        );
+        MeisoSession *bound_session = NULL;
+        MeisoSession *peer_session = NULL;
+        MeisoSession *new_host;
+        MeisoSession *new_edge;
+        MeisoContentId content_id = blob_content_id();
+        MeisoRuntimeBlobTransferRef transfer = {0};
+        MeisoRuntimeBlobSnapshot blob = {0};
+        MeisoRuntimeSnapshot runtime = {0};
+        MeisoSessionSnapshot old_bound = {0};
+        MeisoSessionSnapshot new_bound = {0};
+
+        CHECK(init_pair(&pair));
+        CHECK(meiso_session_snapshot(pair.host_session, &old_bound));
+        CHECK(activate_blob_catalog(&pair));
+        CHECK(meiso_runtime_send_blob_begin(
+            pair.host_runtime,
+            blob_route_key(),
+            &content_id,
+            sizeof(BLOB_BYTES),
+            &transfer
+        ) == MEISO_RUNTIME_OK);
+        CHECK(transfer.transfer_id == 1U);
+
+        if (variant == 0U) {
+            bound_config.local_nonce.low += 10U;
+            peer_config.local_nonce.low += 10U;
+        } else if (variant == 1U) {
+            bound_config.limits = (MeisoSessionLimits){12288U, 4096U, 32U};
+            peer_config.limits = bound_config.limits;
+        }
+        CHECK(init_session(
+            &pair.host_session_arena, &bound_config, &bound_session
+        ));
+        CHECK(init_session(
+            &pair.edge_session_arena, &peer_config, &peer_session
+        ));
+        CHECK(bound_session == pair.host_session &&
+              peer_session == pair.edge_session);
+        new_host = bound_config.local_role == MEISO_SESSION_ROLE_HOST ?
+            bound_session : peer_session;
+        new_edge = bound_config.local_role == MEISO_SESSION_ROLE_EDGE ?
+            bound_session : peer_session;
+        CHECK(meiso_session_start(new_edge) == MEISO_SESSION_START_STARTED);
+        CHECK(meiso_session_start(new_host) == MEISO_SESSION_START_STARTED);
+        CHECK(handshake(new_host, new_edge));
+        CHECK(handshake(new_edge, new_host));
+        CHECK(handshake(new_host, new_edge));
+        CHECK(handshake(new_edge, new_host));
+        CHECK(meiso_session_snapshot(bound_session, &new_bound) &&
+              new_bound.state == MEISO_SESSION_STATE_READY &&
+              new_bound.session_id_known);
+        if (variant == 0U) {
+            CHECK(!meiso_session_id_equal(
+                old_bound.session_id, new_bound.session_id
+            ) && old_bound.local_role == new_bound.local_role &&
+                  memcmp(
+                      &old_bound.negotiated_limits,
+                      &new_bound.negotiated_limits,
+                      sizeof(old_bound.negotiated_limits)
+                  ) == 0);
+        } else if (variant == 1U) {
+            CHECK(meiso_session_id_equal(
+                old_bound.session_id, new_bound.session_id
+            ) && old_bound.local_role == new_bound.local_role &&
+                  memcmp(
+                      &old_bound.negotiated_limits,
+                      &new_bound.negotiated_limits,
+                      sizeof(old_bound.negotiated_limits)
+                  ) != 0);
+        } else {
+            CHECK(meiso_session_id_equal(
+                old_bound.session_id, new_bound.session_id
+            ) && old_bound.local_role != new_bound.local_role &&
+                  memcmp(
+                      &old_bound.negotiated_limits,
+                      &new_bound.negotiated_limits,
+                      sizeof(old_bound.negotiated_limits)
+                  ) == 0);
+        }
+
+        CHECK(meiso_runtime_refresh_bound_session(pair.host_runtime) ==
+              MEISO_RUNTIME_STALE_SESSION);
+        CHECK(meiso_runtime_snapshot(pair.host_runtime, &runtime));
+        CHECK(!runtime.core_ready && !runtime.active_catalog_present &&
+              !runtime.staged_catalog_present &&
+              !runtime.catalog_decision_pending);
+        CHECK(meiso_runtime_blob_snapshot(pair.host_runtime, &blob));
+        CHECK(!blob.transfer_active && !blob.publish_pending &&
+              !blob.result_pending && blob.transfer_id_high_water == 1U);
+        CHECK(meiso_runtime_refresh_bound_session(pair.host_runtime) ==
+              MEISO_RUNTIME_STALE_SESSION);
+    }
     return true;
 }
 
@@ -2532,8 +2666,15 @@ static bool test_v3_state_stream_and_blob_coexist(void)
     MeisoByteView payload;
     MeisoContentId content_id = blob_content_id();
     MeisoRuntimeBlobTransferRef transfer = {0};
+    MeisoRuntimeBlobTransferRef edge_transfer = {0};
+    MeisoRuntimeBlobSnapshot blob_snapshot = {0};
+    MeisoRuntimeSnapshot runtime_snapshot = {0};
     MeisoSessionRuntimeMessage message = {0};
     MeisoRuntimeEvent event = {0};
+    MeisoRuntimeV3Config edge_config;
+    size_t edge_runtime_size;
+    size_t index;
+    uint8_t *scratch;
     uint8_t desired_bytes[16];
     uint8_t actual_bytes[128];
     static const uint8_t sample_bytes[] = {0x31U, 0x32U, 0x33U};
@@ -2697,6 +2838,92 @@ static bool test_v3_state_stream_and_blob_coexist(void)
         &transfer
     ) == MEISO_RUNTIME_OK);
     CHECK(transfer.transfer_id == 1U);
+    CHECK(receive_outbound(
+        &pair, pair.host_session, pair.edge_session, &message, NULL, 0U
+    ));
+    CHECK(meiso_runtime_receive(
+        pair.edge_runtime, &message, &event
+    ) == MEISO_RUNTIME_OK);
+    CHECK(event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          event.blob_operation == MEISO_RUNTIME_BLOB_BEGIN);
+    edge_transfer = event.blob_transfer;
+    CHECK(meiso_runtime_send_blob_result(
+        pair.edge_runtime, &edge_transfer, MEISO_RUNTIME_BLOB_BEGIN
+    ) == MEISO_RUNTIME_OK);
+    CHECK(receive_outbound(
+        &pair, pair.edge_session, pair.host_session, &message, NULL, 0U
+    ));
+    CHECK(meiso_runtime_receive(
+        pair.host_runtime, &message, &event
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_send_blob_chunk(
+        pair.host_runtime,
+        &transfer,
+        0U,
+        (MeisoByteView){BLOB_BYTES, sizeof(BLOB_BYTES)}
+    ) == MEISO_RUNTIME_OK);
+    CHECK(receive_outbound(
+        &pair, pair.host_session, pair.edge_session, &message, NULL, 0U
+    ));
+    CHECK(meiso_runtime_receive(
+        pair.edge_runtime, &message, &event
+    ) == MEISO_RUNTIME_OK);
+
+    CHECK(meiso_runtime_desired_state_encode(
+        &desired,
+        (MeisoMutableBuffer){desired_bytes, sizeof(desired_bytes)},
+        &payload
+    ));
+    offer.generation.value = 3U;
+    offer.state.owner = (MeisoOwnerScope){MEISO_OWNER_ROLE_HOST, 31U};
+    offer.state.version = 2U;
+    offer.state.payload = payload;
+    CHECK(meiso_runtime_send_state_offer(
+        pair.host_runtime,
+        (MeisoRuntimeRouteKey){
+            1U, ENDPOINT, ENDPOINT_INCARNATION, DESIRED_ID,
+            MEISO_RUNTIME_FACET_DESIRED
+        },
+        &offer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(receive_outbound(
+        &pair, pair.host_session, pair.edge_session, &message, NULL, 0U
+    ));
+    CHECK(meiso_runtime_receive(
+        pair.edge_runtime, &message, &event
+    ) == MEISO_RUNTIME_OK);
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_OFFER &&
+          event.state_offer.state.version == 2U);
+    CHECK(meiso_runtime_send_blob_result(
+        pair.edge_runtime, &edge_transfer, MEISO_RUNTIME_BLOB_CHUNK
+    ) == MEISO_RUNTIME_CONFLICT);
+
+    edge_config = runtime_config(pair.edge_session);
+    edge_runtime_size = meiso_runtime_v3_memory_required(&edge_config);
+    CHECK(edge_runtime_size > edge_config.max_blob_transfer_bytes);
+    scratch = pair.edge_runtime_arena.bytes + edge_runtime_size -
+        edge_config.max_blob_transfer_bytes;
+    CHECK(memcmp(scratch, BLOB_BYTES, sizeof(BLOB_BYTES)) == 0);
+    meiso_session_transport_lost(pair.edge_session);
+    CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
+          MEISO_RUNTIME_CORE_NOT_READY);
+    for (index = 0U; index < edge_config.max_blob_transfer_bytes; ++index) {
+        CHECK(scratch[index] == 0U);
+    }
+    CHECK(meiso_runtime_snapshot(pair.edge_runtime, &runtime_snapshot));
+    CHECK(!runtime_snapshot.core_ready &&
+          !runtime_snapshot.active_catalog_present &&
+          !runtime_snapshot.staged_catalog_present &&
+          !runtime_snapshot.catalog_decision_pending &&
+          runtime_snapshot.highest_catalog_generation == 1U);
+    CHECK(meiso_runtime_blob_snapshot(
+        pair.edge_runtime, &blob_snapshot
+    ));
+    CHECK(!blob_snapshot.transfer_active && !blob_snapshot.publish_pending &&
+          !blob_snapshot.result_pending &&
+          blob_snapshot.transfer_id_high_water == 1U);
+    CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
+          MEISO_RUNTIME_STALE_SESSION);
     return true;
 }
 
@@ -2909,7 +3136,11 @@ static bool test_commit_transport_failures_skip_core_publish(void)
 typedef struct {
     MeisoRuntime *runtime;
     const MeisoRuntimeBlobTransferRef *transfer;
+    uint8_t *refresh_before;
+    size_t runtime_size;
     MeisoRuntimeStatus reentry_status;
+    MeisoRuntimeStatus refresh_status;
+    bool refresh_untouched;
     bool query_status;
     bool query_untouched;
     size_t calls;
@@ -2927,7 +3158,9 @@ static bool recording_reentrant_verifier(
     MeisoRuntimeBlobSnapshot sentinel;
 
     if (recording == NULL || recording->runtime == NULL ||
-        recording->transfer == NULL || content.size != sizeof(BLOB_BYTES) ||
+        recording->transfer == NULL || recording->refresh_before == NULL ||
+        recording->runtime_size == 0U ||
+        content.size != sizeof(BLOB_BYTES) ||
         !meiso_runtime_blob_sha256_verify(
             expected_content_id, content, NULL
         )) {
@@ -2935,6 +3168,17 @@ static bool recording_reentrant_verifier(
     }
     recording->calls++;
     memmove(recording->observed, content.data, content.size);
+    memmove(
+        recording->refresh_before, recording->runtime,
+        recording->runtime_size
+    );
+    recording->refresh_status = meiso_runtime_refresh_bound_session(
+        recording->runtime
+    );
+    recording->refresh_untouched = memcmp(
+        recording->refresh_before, recording->runtime,
+        recording->runtime_size
+    ) == 0;
     recording->reentry_status = meiso_runtime_send_blob_result(
         recording->runtime,
         recording->transfer,
@@ -2953,6 +3197,7 @@ static bool recording_reentrant_verifier(
 static bool test_combined_verifier_and_runtime_reentry_guard(void)
 {
     RuntimePair pair;
+    RuntimeArena refresh_before;
     BlobArena blob_arena;
     MeisoBlobStore *store = NULL;
     MeisoRuntimeBlobTransferRef transfer = {0};
@@ -2960,6 +3205,7 @@ static bool test_combined_verifier_and_runtime_reentry_guard(void)
     MeisoRuntimeBlobPublishReport report = {0};
     MeisoRuntimeBlobSnapshot before = {0};
     MeisoRuntimeBlobSnapshot after = {0};
+    MeisoRuntimeV3Config runtime_config_value;
     RecordingVerifierContext recording;
 
     CHECK(init_test_blob_store(&blob_arena, &store));
@@ -2968,6 +3214,13 @@ static bool test_combined_verifier_and_runtime_reentry_guard(void)
     memset(&recording, 0, sizeof(recording));
     recording.runtime = pair.edge_runtime;
     recording.transfer = &commit_event.blob_transfer;
+    runtime_config_value = runtime_config(pair.edge_session);
+    recording.runtime_size = meiso_runtime_v3_memory_required(
+        &runtime_config_value
+    );
+    CHECK(recording.runtime_size != 0U &&
+          recording.runtime_size <= sizeof(refresh_before.bytes));
+    recording.refresh_before = refresh_before.bytes;
     CHECK(meiso_runtime_publish_blob_receive(
         pair.edge_runtime,
         &commit_event.blob_transfer,
@@ -2978,6 +3231,8 @@ static bool test_combined_verifier_and_runtime_reentry_guard(void)
     ) == MEISO_RUNTIME_OK);
     CHECK(recording.calls == 1U &&
           recording.reentry_status == MEISO_RUNTIME_CONFLICT &&
+          recording.refresh_status == MEISO_RUNTIME_CONFLICT &&
+          recording.refresh_untouched &&
           !recording.query_status && recording.query_untouched &&
           memcmp(recording.observed, BLOB_BYTES, sizeof(BLOB_BYTES)) == 0);
     CHECK(report.commit_status == MEISO_BLOB_COMMIT_PUBLISHED &&
@@ -2994,6 +3249,7 @@ static bool test_combined_verifier_and_runtime_reentry_guard(void)
 static bool test_publish_alias_and_skipped_bridge_cleanup(void)
 {
     RuntimePair pair;
+    RuntimeArena runtime_before;
     BlobArena blob_arena;
     MeisoBlobStore *store = NULL;
     MeisoRuntimeBlobTransferRef transfer = {0};
@@ -3002,12 +3258,27 @@ static bool test_publish_alias_and_skipped_bridge_cleanup(void)
     MeisoRuntimeBlobSnapshot before = {0};
     MeisoRuntimeBlobSnapshot after = {0};
     MeisoBlobStats stats = {0};
+    MeisoRuntimeV3Config config;
+    size_t runtime_size;
 
     CHECK(init_test_blob_store(&blob_arena, &store));
     CHECK(receive_small_blob_to_commit(&pair, &transfer, &commit_event));
     CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &before));
     CHECK(before.transfer_active && before.publish_pending &&
           !before.result_pending);
+    config = runtime_config(pair.edge_session);
+    runtime_size = meiso_runtime_v3_memory_required(&config);
+    CHECK(runtime_size != 0U && runtime_size <= sizeof(runtime_before.bytes));
+    memmove(
+        runtime_before.bytes, pair.edge_runtime_arena.bytes, runtime_size
+    );
+    CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
+          MEISO_RUNTIME_OK);
+    CHECK(memcmp(
+        runtime_before.bytes, pair.edge_runtime_arena.bytes, runtime_size
+    ) == 0);
+    CHECK(meiso_runtime_refresh_bound_session(NULL) ==
+          MEISO_RUNTIME_INVALID_ARGUMENT);
     CHECK(meiso_runtime_publish_blob_receive(
         pair.edge_runtime,
         &commit_event.blob_transfer,
@@ -3340,6 +3611,9 @@ int main(void)
         return 1;
     }
     if (!test_session_loss_clears_runtime_only_staging()) {
+        return 1;
+    }
+    if (!test_ready_bound_session_identity_mismatch_is_stale()) {
         return 1;
     }
     if (!test_result_phase_and_offset_validation()) {

@@ -1407,6 +1407,13 @@ MeisoRuntimeInitStatus meiso_runtime_v3_init(
     );
 }
 
+MeisoRuntimeStatus meiso_runtime_refresh_bound_session(
+    MeisoRuntime *runtime
+)
+{
+    return check_bound_mutable_internal(runtime, true);
+}
+
 static int endpoint_index_in_bank(
     const MeisoRuntime *runtime,
     uint8_t bank,

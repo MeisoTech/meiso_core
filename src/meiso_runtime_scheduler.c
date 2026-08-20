@@ -353,10 +353,20 @@ static MeisoRuntimeSchedulerStatus refresh_boundary(
 {
     MeisoRuntimeSnapshot runtime_snapshot;
     MeisoSessionSnapshot session_snapshot;
+    MeisoRuntimeStatus runtime_status;
     uint64_t generation;
     bool present;
 
-    if (!session_runtime_ready(
+    runtime_status = meiso_runtime_refresh_bound_session(scheduler->runtime);
+    if (runtime_status == MEISO_RUNTIME_CONFLICT) {
+        return MEISO_RUNTIME_SCHEDULER_REENTRANT;
+    }
+    if (runtime_status != MEISO_RUNTIME_OK &&
+        runtime_status != MEISO_RUNTIME_CORE_NOT_READY &&
+        runtime_status != MEISO_RUNTIME_STALE_SESSION) {
+        return MEISO_RUNTIME_SCHEDULER_INVALID_STATE;
+    }
+    if (runtime_status != MEISO_RUNTIME_OK || !session_runtime_ready(
             scheduler->runtime,
             scheduler->session,
             &runtime_snapshot,
@@ -1365,6 +1375,12 @@ MeisoRuntimeSchedulerStepStatus meiso_runtime_scheduler_step(
         return MEISO_RUNTIME_SCHEDULER_STEP_INVALID_STATE;
     }
     boundary_status = refresh_boundary(scheduler, &session_snapshot);
+    if (boundary_status == MEISO_RUNTIME_SCHEDULER_REENTRANT) {
+        return MEISO_RUNTIME_SCHEDULER_STEP_REENTRANT;
+    }
+    if (boundary_status == MEISO_RUNTIME_SCHEDULER_INVALID_STATE) {
+        return MEISO_RUNTIME_SCHEDULER_STEP_INVALID_STATE;
+    }
     if (boundary_status == MEISO_RUNTIME_SCHEDULER_STALE_SESSION) {
         return MEISO_RUNTIME_SCHEDULER_STEP_SESSION_TERMINAL;
     }

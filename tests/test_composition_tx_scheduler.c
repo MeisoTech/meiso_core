@@ -2246,6 +2246,8 @@ static bool test_catalog_rebind_and_terminal_notify_once(void)
     MeisoRuntimeSchedulerWork state_work;
     MeisoRuntimeSchedulerStepResult result;
     MeisoRuntimeSchedulerSnapshot snapshot;
+    MeisoRuntimeSnapshot runtime_snapshot;
+    MeisoRuntimeBlobSnapshot blob_snapshot;
     MeisoRuntimeEvent event = {0};
     TestSource *catalog;
     TestSource *state;
@@ -2347,6 +2349,18 @@ static bool test_catalog_rebind_and_terminal_notify_once(void)
     memset(&result, 0xa5, sizeof(result));
     CHECK(meiso_runtime_scheduler_step(fixture.scheduler, &result) ==
           MEISO_RUNTIME_SCHEDULER_STEP_SESSION_TERMINAL);
+    CHECK(meiso_runtime_snapshot(pair.edge_runtime, &runtime_snapshot) &&
+          !runtime_snapshot.core_ready &&
+          !runtime_snapshot.active_catalog_present &&
+          !runtime_snapshot.staged_catalog_present &&
+          !runtime_snapshot.catalog_decision_pending);
+    CHECK(meiso_runtime_blob_snapshot(
+        pair.edge_runtime, &blob_snapshot
+    ));
+    CHECK(!blob_snapshot.core_ready && !blob_snapshot.transfer_active &&
+          !blob_snapshot.publish_pending && !blob_snapshot.result_pending);
+    CHECK(meiso_runtime_refresh_bound_session(pair.edge_runtime) ==
+          MEISO_RUNTIME_STALE_SESSION);
     for (index = 0U; index < fixture.source_count; ++index) {
         CHECK(fixture.sources[index].boundary_calls == 2U &&
               fixture.sources[index].last_boundary ==

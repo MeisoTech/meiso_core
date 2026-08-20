@@ -343,6 +343,9 @@ MeisoRuntimeStatus meiso_runtime_scheduler_publish_blob_receive(
  * REJECTED and visits that source. A data member receives at most one dispatch
  * attempt per round, including invalid/rejected attempts. Session terminal is
  * permanent and notifies every source exactly once with generation zero.
+ * Before selection, step explicitly refreshes the Runtime's bound Session;
+ * a terminal boundary therefore invalidates and clears the Runtime's pending
+ * State/Blob state and Edge reassembly scratch before callbacks are invoked.
  * CONTROL uses a persistent round-robin cursor. POLL_INVALID, READY-invalid,
  * and every nonbusy Runtime rejection are visited and advance that cursor;
  * if a complete scan has no dispatchable control, selection continues into
