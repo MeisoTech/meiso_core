@@ -309,6 +309,14 @@ rejection；`ABORT+ABORTED`。其中terminal rejection是value 5..12。其他组
   forced-abort cleanup、duplicate publication 后显式 SceneStore visibility，以及 v3 State/Stream/Blob
   coexistence。
 
+public commit `a392850` 的后续R2b4 integration不改变本页API/wire，并在真实loopback TCP、双方R2a
+scheduler上把exact 262144-byte canonical `MSH0`分成64个4096-byte `CHUNK`。Host只接收
+`BEGIN+READY`和`COMMIT+PUBLISHED`，Edge没有发送逐块ACK；第32块后Edge反向发送独立Wi-Fi与
+RenderResult Stream。262145-byte `BEGIN`在Host Runtime admission处以`PAYLOAD_CAPACITY`拒绝，未
+排入Session outbound，也未建立transfer或Core stage。Actions run `32322475279`四个job全部success。
+该结果补充AF_INET max-single-Blob evidence，不把Core BlobStore slot总容量、K230 memory或吞吐性能
+纳入Runtime合同。
+
 commit `a8a777a` 的 fresh Debug、strict 与 ASan+UBSan build 均 CTest 23/23；clang analyzer 对
 Runtime、composition 与新 test 为零 finding，C/C++ strict headers/source 通过。macOS arm64、
 composition Profile v2 配置下，Host Runtime arena 为 14,904 bytes，Edge Runtime arena 为

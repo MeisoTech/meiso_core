@@ -166,8 +166,10 @@ rebind、Runtime gate reset/high-water preservation、capability-generation-2 co
 world重建及Blob cache duplicate revalidation。R2b3又以真实RST使旧Session/Runtime/Scheduler/route/
 epoch fail closed；SceneStore旧world保持到不同SessionId/新arena连接上的新coordinator开始control scope，
 此时才清world/visibility并使旧coordinator/token/world失效。随后显式重发State、重建visibility/world/
-gate；同process Core cache duplicate可复用。该结果不是自动resume或fresh Edge，
-max-Blob、wrong Profile、backpressure与target仍未覆盖。
+gate；同process Core cache duplicate可复用。R2b4再在该新Session上用64个4096-byte `CHUNK`传输exact
+262144-byte `MSH0`，证明无逐块ACK、262145-byte本地capacity拒绝、Edge反向Wi-Fi/RenderResult及
+Core publish→显式visibility→scene swap的资源边界。该结果不是自动resume或fresh Edge；wrong Profile、
+backpressure、SCAP 16-slot aggregate与target仍未覆盖。
 Resource semantic core v0 的准确 conformance image 已在 K230D
 上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
 [系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与

@@ -110,8 +110,15 @@ scope，随后旧coordinator/token/world失效。新AF_INET连接使用新Sessio
 Scheduler arena，只复用同process Core cache与SceneStore；desired、visibility、world和gate均未自动继承，
 显式重发后以Core `DUPLICATE`+`mark_visible`、Plan generation 3、
 Wi-Fi/Presentation/Scene actual epoch `99/61/62`及Wi-Fi/RenderResult epoch `179/419` sequence 1恢复。Actions run
-`32321051775`四个job全部success。该结果不证明自动resume、fresh Edge process、max-Blob、wrong-profile、
-backpressure、K230D/renderer backend、性能、安全transport、offline lease执行或physical presentation。
+`32321051775`四个job全部success。public commit `a392850` 又在该新Session上完成R2b4 max-Blob/resource
+boundary：一个exact 262144-byte canonical `MSH0`以64个4096-byte `CHUNK`完成传输，只有
+`BEGIN/READY`和`COMMIT/PUBLISHED`两次结果、没有逐块ACK；262145-byte `BEGIN`在Host本地以
+`PAYLOAD_CAPACITY`拒绝且不产生wire/Runtime transfer/Core或Scene副作用。传输中点Edge反向发送Wi-Fi
+epoch `179`/sequence `2`及old-world RenderResult epoch `419`/sequence `2`，证明两个peer outbound
+scheduler独立；publish、显式visibility与scene swap后RenderResult sequence `3`引用新world。Actions run
+`32322475279`四个job全部success。该结果不证明自动resume、fresh Edge process、wrong-profile、
+backpressure、SCAP 16-slot aggregate、K230D/renderer backend、性能、安全transport、offline lease执行或
+physical presentation。
 
 Windows 配置入口仍保留；其结果必须按实际 toolchain 和当次 CTest evidence 记录：
 

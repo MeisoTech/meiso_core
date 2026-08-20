@@ -394,10 +394,33 @@ world失效。同process Core cache与SceneStore保留，但desired、visibility
 COMMIT Runtime-scratch borrow校准offset并在同配置fixture重验范围，产品实现未变。GitHub Actions run
 `32321051775`四个job全部success。
 
-R2b0--R2b3上述证据严格标记为
+public commit `a392850` 已push到`main`与`rain/core-session-v0`，完成R2b4 max-Blob/resource
+boundary。它沿用R2b3重连后的真实AF_INET Session：262145-byte Mesh `BEGIN`在Host本地返回
+`PAYLOAD_CAPACITY`，除source completion与`data_probe_due`外，不消耗successful slot、不产生Session
+outbound、不建立Runtime transfer/Core stage，也不改变两端Runtime/Session、Edge scheduler、BlobStore或
+SceneStore。exact 262144-byte canonical `MSH0`（1 vertex、65517 indices、SHA-256
+`418a5b882e82eafe440a720a040cc8e2e36ee4cefdd1c7cbe6114e1df091cf8f`）随后以64个exact
+4096-byte `CHUNK`传输；只有`BEGIN/READY`与`COMMIT/PUBLISHED`，没有逐块ACK。
+
+第32块后，Edge自己的outbound scheduler分别发送Wi-Fi epoch `179`/sequence `2`与old-world
+RenderResult epoch `419`/sequence `2`；Host Blob方向的64个data slot和Edge反向两个data slot独立计数。
+Core publication与显式SceneStore visibility完成后，Scene desired v8在Plan generation 3下swap到新world；
+Scene actual v9/production epoch `62`的invalid transition fail closed，v10/epoch `63`生效，旧epoch `62`
+RenderResult拒绝而epoch `419`/sequence `3`引用新world。
+
+R2b4当前macOS arm64五arena ledger（均alignment 8）为Host Runtime 17,384 bytes、Edge Runtime
+279,528（含262,144-byte scratch）、2-slot Mesh BlobStore 1,049,056、SceneStore 31,656、Coordinator
+1,520，合计1,379,144 bytes。逻辑publication为cube 304 + max Mesh 262,144 = 262,448 bytes；新active
+world的`resident_mesh_bytes`为262,080，target/job仍为0。该口径不含Session、scheduler、POSIX adapter、
+State/Stream、TCP kernel buffer、Host外部asset buffer或GPU/CMA；2-slot只属于本integration fixture，
+不验证SCAP 16 publication slots或8+8 candidate worst case。GitHub Actions run `32322475279`四个job
+全部success。这里的当前HEAD数值与上文`a8a777a` R1 commit-snapshot arena数值属于不同版本/fixture，
+不得混合相加。
+
+R2b0--R2b4上述证据严格标记为
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback same-Session happy
 lifecycle/catalog replacement及explicit same-process reconnect）；它没有覆盖自动resume、fresh Edge、
-wrong Profile、max-Blob、backpressure、fair-contention stress，也没有证明K230/K1 build/run、
+wrong Profile、backpressure、fair-contention stress或16-slot aggregate，也没有证明K230/K1 build/run、
 Hz/latency/jitter/throughput/performance、Host editor、renderer backend、
 GPU/target/job/CMA、transport security、offline lease执行或physical output。`offline_lease_ms`在C2只被校验/保留；C2没有
 Session-loss signal，backend`DEADLINE`只是caller报告的本地attempt结果。本轮也没有合并外部Host
@@ -468,10 +491,11 @@ firmware 中包含 driver/API 也不等于物理 endpoint 存在。
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - MediaStream 与 Resource lifecycle/telemetry 的公共集成；
-- Composition的自动resume、fresh Edge、wrong-Profile、max-Blob、backpressure与fair-contention
+- Composition的自动resume、fresh Edge、wrong-Profile、backpressure、SCAP 16-slot aggregate与fair-contention
   fault/recovery，Host editor、renderer/present backend与真实presentation endpoint；R2b0已有loopback
   happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2b2已有
-  same-Session catalog replacement evidence，R2b3已有explicit same-process RST/new-Session evidence，R2a已有
+  same-Session catalog replacement evidence，R2b3已有explicit same-process RST/new-Session evidence，R2b4已有
+  max-single-Blob/resource-boundary evidence，R2a已有
   portable builder/fair scheduler evidence，C2
   coordinator与R1 Runtime v3 Blob carriage也已有Host evidence，但没有target interoperability、
   offline lease执行或physical output；

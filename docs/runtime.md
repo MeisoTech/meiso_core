@@ -221,8 +221,24 @@ generation 3/new token、Wi-Fi/Presentation/Scene actual epoch `99/61/62`、Wi-F
 `179/419` sequence 1恢复。
 Linux CI首次暴露测试把scratch误认作arena tail的padding假设；`43ae3ce`改为从真实COMMIT Runtime-scratch
 borrow校准offset并在同配置fixture重验范围，产品代码未变。Actions run `32321051775`四个job全部success。
-该证据不证明自动resume、fresh Edge process、max-Blob、wrong Profile、backpressure、K230/renderer、
-性能或transport security。
+public commit `a392850` 在R2b3的新AF_INET Session上完成R2b4 max-Blob/resource boundary。Host先把
+262145-byte Mesh `BEGIN`本地拒绝为`PAYLOAD_CAPACITY`：source完成一次rejected completion且
+`data_probe_due`置位，但successful slot、Session outbound、Runtime transfer/high-water、两端
+Runtime/Session arena、Edge scheduler、Core BlobStore与SceneStore均不变。随后exact 262144-byte
+canonical `MSH0`以64个4096-byte `CHUNK`传输；只有`BEGIN+READY`和`COMMIT+PUBLISHED`，没有逐块
+ACK。第32块后Edge独立发送Wi-Fi epoch `179`/sequence `2`及old-world RenderResult epoch `419`/
+sequence `2`；publish→显式`mark_visible`→Scene desired v8/swap→actual v10/production epoch `63`后，
+RenderResult sequence `3`引用新world。
+
+当前macOS arm64 ABI的R2b4五arena ledger为Host Runtime 17,384、Edge Runtime 279,528（含
+262,144-byte reassembly scratch）、2-slot Mesh BlobStore 1,049,056、SceneStore 31,656、Coordinator
+1,520 bytes，均alignment 8，合计1,379,144 bytes。逻辑账为BlobStore中cube 304 + max Mesh 262,144 =
+262,448 bytes；active world只引用max Mesh的262,080-byte vertex+index区域，target/job仍为0。该五项
+是当前HEAD/R2b4 fixture口径；上文R1 arena数字仍是`a8a777a` commit snapshot，两组不能混合相加。
+该口径不含Session、scheduler、POSIX adapter、State/Stream、TCP kernel buffer、Host外部asset buffer或GPU/CMA；
+2-slot是此fixture配置，不等于SCAP声明的16-slot aggregate。Actions run `32322475279`四个job全部
+success。该证据不证明自动resume、fresh Edge process、wrong Profile、backpressure、K230/renderer、
+16-slot aggregate、性能或transport security。
 
 ## Blob route 与可见性
 

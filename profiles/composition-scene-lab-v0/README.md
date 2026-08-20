@@ -100,7 +100,8 @@ route，但每个 handle 全局只有一个 transfer；`STREAM_SAMPLE` 仍只支
 六类 frame meaning、Core API/source 与 Session wire 均不变。R1 已证明 portable catalog/Blob
 carriage；R2a 已证明portable combined builder与独立fair scheduler；R2b0已证明真实AF_INET loopback
 happy path，R2b1证明same-Session lifecycle，R2b2证明same-Session catalog replacement，R2b3已证明
-explicit same-process RST/new-Session recovery；其余negative matrix与target interoperability留待后续/K1。
+explicit same-process RST/new-Session recovery，R2b4已证明max-single-Blob/resource boundary；其余
+negative matrix与target interoperability留待后续/K1。
 
 ## C0 canonical wire
 
@@ -388,7 +389,7 @@ public commit `5d92ff6` 的fresh Debug CTest为24/24，strict C11/C++17通过，
 builder、test为0 finding。该结果只证明portable/in-process调度与Profile builder；source queue的
 deadline/drop/gap policy仍由Profile integration负责。R2b0现已覆盖真实AF_INET loopback happy path，
 R2b1覆盖same-Session lifecycle，R2b2覆盖same-Session catalog replacement，R2b3覆盖explicit
-same-process RST/new-Session recovery；自动resume、fresh Edge、wrong Profile、max-Blob、backpressure与
+same-process RST/new-Session recovery，R2b4覆盖max-single-Blob/resource boundary；自动resume、fresh Edge、wrong Profile、backpressure与
 fair-contention stress仍未覆盖，K1仍须
 验证K230D，Hz/latency/jitter/throughput/performance也未测量。
 
@@ -485,6 +486,38 @@ public commits `9df5268`、`e4a726f`与`43ae3ce` 已push到`main`与`rain/core-s
 状态为`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback explicit
 same-process reconnect）。这不是自动resume，也不证明fresh Edge process、wrong Profile、max-Blob、
 backpressure、K230/K1、renderer/present、性能、安全transport或physical output。
+
+## R2b4 max-Blob/resource-boundary evidence（完成）
+
+public commit `a392850` 已push到`main`与`rain/core-session-v0`，沿用R2b3重连后的真实AF_INET Session：
+
+- canonical `MSH0` total exact 262144 bytes：64-byte header、1 vertex、65517 indices、262080-byte
+  vertex+index区域；ContentId SHA-256为
+  `418a5b882e82eafe440a720a040cc8e2e36ee4cefdd1c7cbe6114e1df091cf8f`；Runtime SHA、Profile verifier
+  与decode shape全部一致；
+- 262145-byte `BEGIN`在Host Runtime返回`PAYLOAD_CAPACITY`。source记录rejected completion且scheduler
+  `data_probe_due`置位，但successful slots、Session outbound、Runtime transfer/high-water、两端
+  Runtime/Session、Edge scheduler、Core BlobStore与SceneStore均不变；
+- 合法transfer exact 64×4096-byte `CHUNK`，BEGIN的唯一`RESULT`为`READY`，COMMIT的terminal
+  `RESULT`为`PUBLISHED`；每个CHUNK后Edge result source completion不变，即无逐块ACK；
+- 第32块后Edge反向发送Wi-Fi production epoch `99`/Stream epoch `179`/sequence `2`及old-world
+  RenderResult production epoch `62`/Stream epoch `419`/sequence `2`。Host 64个Blob data slots与Edge
+  两个反向data slots按peer独立；
+- COMMIT经Runtime scratch、Core bridge与Mesh verifier发布，显式`mark_visible`后Scene desired v8在既有
+  Plan generation 3下swap；Scene actual v9/epoch `62` invalid transition拒绝，v10/epoch `63`提交，旧
+  production epoch `62` result拒绝，RenderResult epoch `419`/sequence `3`引用新world。
+
+R2b4 resource ledger严格分层：逻辑Mesh total为262144、active resident vertex+index为262080；Core
+BlobStore中cube 304 + max Mesh 262144，共2 blobs/262448 logical bytes。当前macOS arm64五arena（alignment
+8）为Host Runtime 17,384、Edge Runtime 279,528（含262,144 scratch）、2-slot Mesh BlobStore
+1,049,056、SceneStore 31,656、Coordinator 1,520，合计1,379,144 bytes。target/job为0。该合计不含
+Session、scheduler、POSIX adapter、State/Stream、Host external asset buffer、TCP kernel、GPU/CMA；2-slot是
+integration fixture配置，不能外推为SCAP 16-slot/8+8 candidate aggregate evidence。
+
+Actions run `32322475279`四个job全部success。状态是
+`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`（loopback max-single-Blob/resource
+boundary）；不证明自动resume、fresh Edge、wrong Profile、backpressure、fair-contention stress、K230/K1、
+renderer/present、Hz/latency/jitter/throughput/performance、安全transport或physical output。
 
 ## C0 executable evidence
 

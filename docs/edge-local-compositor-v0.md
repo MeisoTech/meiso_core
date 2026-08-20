@@ -422,6 +422,27 @@ public commits `9df5268`、`e4a726f`与`43ae3ce` 已push到`main`与`rain/core-s
 wrong Profile、max-Blob、backpressure、fair-contention stress、K230/K1、renderer/present、性能、安全
 transport或physical output。
 
+### R2b4 — Max Blob与resource boundary（完成）
+
+public commit `a392850` 沿用R2b3的新AF_INET Session：Host本地拒绝262145-byte Mesh `BEGIN`且无
+wire/Runtime transfer/Core/Scene副作用；随后把exact 262144-byte canonical `MSH0`作为64个4096-byte
+`CHUNK`发送，Edge只在BEGIN后返回`READY`、COMMIT后返回`PUBLISHED`，没有逐块ACK。第32块后Edge
+自己的outbound scheduler继续发送Wi-Fi epoch `179`/sequence `2`与old-world RenderResult epoch `419`/
+sequence `2`；Core publish与显式visibility后，scene swap在Plan generation 3内产生新world，actual v10/
+production epoch `63`开放RenderResult sequence `3`。这验证Blob与反向Wi-Fi/result分别走两个peer的
+独立scheduler，没有改变Core或compositor ownership。
+
+macOS arm64的当前五arena ledger为Host/Edge Runtime `17,384/279,528` bytes（Edge含262,144-byte
+scratch）、2-slot Mesh BlobStore `1,049,056`、SceneStore `31,656`、Coordinator `1,520`；均alignment 8，
+合计`1,379,144`。逻辑published bytes为cube 304 + max Mesh 262,144 = 262,448，active world的
+`resident_mesh_bytes=262080`，target/job为0。它不含Session/scheduler/adapter/State/Stream、Host asset
+buffer、TCP kernel、GPU/CMA；2-slot只是fixture，不验证SCAP 16-slot aggregate。Actions run
+`32322475279`四个job全部success。
+
+R2b4仍只是loopback Host semantic/wire/transport evidence；不证明自动resume、fresh Edge、wrong Profile、
+backpressure、fair-contention stress、K230/K1、renderer/present、Hz/latency/throughput、安全transport或
+physical output。
+
 ### H1 — Host editor/devtool
 
 - Host tool 只通过 typed Profile API 创建/校验 mesh、发布 Blob、提交完整 SceneDesired、观察
