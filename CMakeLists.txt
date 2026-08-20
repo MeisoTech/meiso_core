@@ -260,6 +260,50 @@ target_link_libraries(
 meiso_enable_warnings(meiso_composition_reference_renderer_test)
 
 add_executable(
+    meiso_composition_offscreen_runner
+    targets/k230d-linux/composition_offscreen_runner.c
+)
+target_link_libraries(
+    meiso_composition_offscreen_runner
+    PRIVATE meiso_composition_scene_profile
+)
+meiso_enable_warnings(meiso_composition_offscreen_runner)
+
+add_executable(
+    meiso_composition_offscreen_runner_candidate_contract
+    targets/k230d-linux/composition_offscreen_runner.c
+)
+target_compile_definitions(
+    meiso_composition_offscreen_runner_candidate_contract
+    PRIVATE MEISO_K230_LINUX_TARGET=1
+)
+target_link_libraries(
+    meiso_composition_offscreen_runner_candidate_contract
+    PRIVATE meiso_composition_scene_profile
+)
+meiso_enable_warnings(
+    meiso_composition_offscreen_runner_candidate_contract
+)
+
+add_executable(
+    meiso_composition_offscreen_runner_test
+    tests/test_composition_offscreen_runner.c
+    targets/k230d-linux/composition_offscreen_runner.c
+)
+target_compile_definitions(
+    meiso_composition_offscreen_runner_test
+    PRIVATE
+        MEISO_COMPOSITION_OFFSCREEN_RUNNER_NO_MAIN=1
+        MEISO_OFFSCREEN_RUNNER_SOURCE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/targets/k230d-linux/composition_offscreen_runner.c"
+        MEISO_OFFSCREEN_CROSS_SCRIPT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/targets/k230d-linux/build_composition_offscreen_runner.sh"
+)
+target_link_libraries(
+    meiso_composition_offscreen_runner_test
+    PRIVATE meiso_composition_scene_profile
+)
+meiso_enable_warnings(meiso_composition_offscreen_runner_test)
+
+add_executable(
     meiso_composition_coordinator_test
     tests/test_composition_coordinator.c
 )
@@ -425,6 +469,40 @@ add_test(
     NAME meiso_composition_reference_renderer_test
     COMMAND meiso_composition_reference_renderer_test
 )
+add_test(
+    NAME meiso_composition_offscreen_runner_test
+    COMMAND meiso_composition_offscreen_runner_test
+)
+add_test(
+    NAME meiso_composition_offscreen_runner_native
+    COMMAND meiso_composition_offscreen_runner
+)
+set_tests_properties(
+    meiso_composition_offscreen_runner_native
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION "HOST_OFFSCREEN_REFERENCE_VERIFIED"
+        FAIL_REGULAR_EXPRESSION "TARGET_OFFSCREEN_REFERENCE_VERIFIED"
+)
+add_test(
+    NAME meiso_composition_offscreen_runner_candidate_contract
+    COMMAND meiso_composition_offscreen_runner_candidate_contract
+)
+set_tests_properties(
+    meiso_composition_offscreen_runner_candidate_contract
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "OFFSCREEN_REFERENCE_VECTOR_PASSED.*k230d_linux_candidate"
+        FAIL_REGULAR_EXPRESSION "TARGET_.*VERIFIED"
+)
+find_program(MEISO_SH_EXECUTABLE sh)
+if(MEISO_SH_EXECUTABLE)
+    add_test(
+        NAME meiso_composition_offscreen_cross_script_syntax
+        COMMAND
+            "${MEISO_SH_EXECUTABLE}" -n
+            "${CMAKE_CURRENT_SOURCE_DIR}/targets/k230d-linux/build_composition_offscreen_runner.sh"
+    )
+endif()
 add_test(
     NAME meiso_composition_coordinator_test
     COMMAND meiso_composition_coordinator_test
