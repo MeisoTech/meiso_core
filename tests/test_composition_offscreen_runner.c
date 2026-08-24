@@ -471,6 +471,11 @@ static bool test_cross_script_is_build_only(void)
           strstr(script, "\"$MEISO_K230_LINUX_CC\"") != NULL &&
           strstr(script, "-DMEISO_K230_LINUX_TARGET=1") != NULL &&
           strstr(script, "-march=rv64gcv_xtheadc") != NULL &&
+          strstr(
+              script,
+              "-Wl,--dynamic-linker=/lib/ld-linux-riscv64-lp64d.so.1"
+          ) != NULL &&
+          strstr(script, "ld-linux-riscv64v_xthead-lp64d.so.1") == NULL &&
           strstr(script, "composition_offscreen_runner.c") != NULL &&
           strstr(script, "qemu") == NULL && strstr(script, "ssh") == NULL &&
           strstr(script, "scp") == NULL && strstr(script, "\ncc ") == NULL &&

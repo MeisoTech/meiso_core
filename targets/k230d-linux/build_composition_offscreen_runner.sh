@@ -13,6 +13,7 @@ output=$1
 "$MEISO_K230_LINUX_CC" \
     -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
     -march=rv64gcv_xtheadc -mabi=lp64d \
+    -Wl,--dynamic-linker=/lib/ld-linux-riscv64-lp64d.so.1 \
     -DMEISO_K230_LINUX_TARGET=1 \
     -I"$repo_root/include" \
     -I"$repo_root/profiles/composition-scene-lab-v0" \
