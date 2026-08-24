@@ -179,6 +179,14 @@ static void make_route_capacity_only(
         max_fragment_payload_bytes;
 }
 
+static void poison_inactive_route_truth(
+    MeisoCompositionMediaRouteConfig *route
+)
+{
+    memset(&route->binding, 0xa5, sizeof(route->binding));
+    memset(&route->effective, 0xa5, sizeof(route->effective));
+}
+
 static bool snapshot(
     const MeisoCompositionMediaTransport *transport,
     MeisoCompositionMediaTransportSnapshot *out_snapshot
@@ -291,10 +299,16 @@ static bool initialize_mask_pair(
             make_route_capacity_only(
                 &pair->host_config.routes[route_index], route_index
             );
+            poison_inactive_route_truth(
+                &pair->host_config.routes[route_index]
+            );
         }
         if ((edge_mask & route_mask) == 0U) {
             make_route_capacity_only(
                 &pair->edge_config.routes[route_index], route_index
+            );
+            poison_inactive_route_truth(
+                &pair->edge_config.routes[route_index]
             );
         }
     }
@@ -628,6 +642,10 @@ static bool test_handshake_would_block_and_aliases(void)
     CHECK(snapshot(pair.edge, &edge_snapshot));
     CHECK(host_snapshot.phase == MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE);
     CHECK(edge_snapshot.phase == MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE);
+    CHECK(host_snapshot.configured_active_route_mask ==
+              MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK &&
+          edge_snapshot.configured_active_route_mask ==
+              MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK);
     CHECK(host_snapshot.bound_route_mask == UINT8_C(0x03));
     CHECK(edge_snapshot.bound_route_mask == UINT8_C(0x03));
 
@@ -831,7 +849,12 @@ static bool test_active_route_masks(void)
     MeisoCompositionMediaTransportSnapshot edge_snapshot;
     MeisoCompositionMediaTransportConfig invalid =
         transport_config(MEISO_SESSION_ROLE_HOST);
+    TestArena invalid_arena;
+    TestArena invalid_arena_before;
+    MeisoCompositionMediaTransport *invalid_transport =
+        (MeisoCompositionMediaTransport *)(uintptr_t)0x1234U;
     OwnedPacket packet;
+    uint8_t host_before[TEST_ARENA_CAPACITY];
     size_t size_sentinel = 71U;
     size_t alignment_sentinel = 73U;
 
@@ -850,6 +873,18 @@ static bool test_active_route_masks(void)
               &invalid, &size_sentinel, &alignment_sentinel
           ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
     CHECK(size_sentinel == 71U && alignment_sentinel == 73U);
+    memset(&invalid_arena, 0xa5, sizeof(invalid_arena));
+    invalid_arena_before = invalid_arena;
+    CHECK(meiso_composition_media_transport_init(
+              &invalid,
+              (MeisoMutableBuffer){invalid_arena.bytes,
+                                   sizeof(invalid_arena.bytes)},
+              &invalid_transport
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
+    CHECK(invalid_transport ==
+              (MeisoCompositionMediaTransport *)(uintptr_t)0x1234U &&
+          memcmp(&invalid_arena, &invalid_arena_before,
+                 sizeof(invalid_arena)) == 0);
 
     CHECK(initialize_mask_pair(
         &mismatch,
@@ -863,10 +898,16 @@ static bool test_active_route_masks(void)
     ));
     CHECK(capture_packet(mismatch.edge, &packet));
     CHECK(packet.ref.source == MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA);
-    CHECK(complete_and_receive(
-        mismatch.edge, mismatch.host, &packet,
-        MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH
-    ));
+    memcpy(host_before, mismatch.host_arena.bytes, mismatch.host_bytes);
+    CHECK(meiso_composition_media_transport_complete_outbound(
+              mismatch.edge, &packet.ref
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    CHECK(meiso_composition_media_transport_receive_packet(
+              mismatch.host,
+              (MeisoByteView){packet.bytes, packet.size}
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH);
+    CHECK(memcmp(host_before, mismatch.host_arena.bytes,
+                 mismatch.host_bytes) == 0);
     CHECK(snapshot(mismatch.host, &host_snapshot));
     CHECK(snapshot(mismatch.edge, &edge_snapshot));
     CHECK(host_snapshot.phase ==
