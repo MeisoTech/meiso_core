@@ -204,6 +204,23 @@ typedef struct {
     bool delivery_accepted;
     bool delivery_failed;
     uint64_t replaced_pending_count;
+
+    /*
+     * Exact older value whose copied payload is currently borrowed by the
+     * control scheduler, sent but not yet accepted, or accepted while the
+     * matching Actual.observed_desired is still outstanding.  The public
+     * command fields above always describe the latest locally coalesced
+     * value; accepting this older value never marks that latest value
+     * accepted.
+     */
+    bool inflight_present;
+    uint64_t inflight_command_id;
+    MeisoOwnerScope inflight_owner;
+    uint64_t inflight_state_version;
+    MeisoDeliveryGeneration inflight_delivery_generation;
+    bool inflight_source_completed;
+    bool inflight_offer_accepted;
+    bool inflight_actual_observed;
 } MeisoCompositionHostAppDesiredSnapshot;
 
 /* Profile bytes are decoded into the typed fields in the aggregate snapshot. */
@@ -432,12 +449,17 @@ MeisoCompositionHostAppStatus meiso_composition_host_app_put_mesh(
 /*
  * enabled=false requires value/settings==NULL and emits prefix-only desired.
  * Commands may be queued during handshake; wire delivery starts only after
- * exact Profile-v3 READY. A later command for the same desired channel may
- * atomically replace its undelivered local value. The new receipt names the
- * replaced command_id; that old command is locally terminal REPLACED and can
- * never later appear in a pump delivery event. Presentation token echo is an
- * internal higher State version retaining the originating command_id; it does
- * not synthesize a second user command receipt.
+ * exact Profile-v3 READY. Each channel owns one immutable copied payload for
+ * an exact wire in-flight offer while its StatePublisher may independently
+ * retain/coalesce the latest local value. A later same-channel command names
+ * a replaced command only when that command was still local and had not
+ * become the exact in-flight offer; an already queued/sent offer completes
+ * under its own command_id. The next coalesced value is not offered until the
+ * old exact offer has both been accepted and appeared in a successfully
+ * decoded Actual.observed_desired (an apply failure still counts as observed).
+ * Presentation token echo is an internal higher State version retaining the
+ * originating command_id and obeys the same per-channel barrier; it does not
+ * synthesize a second user command receipt.
  */
 MeisoCompositionHostAppStatus meiso_composition_host_app_set_scene(
     MeisoCompositionHostApp *app,

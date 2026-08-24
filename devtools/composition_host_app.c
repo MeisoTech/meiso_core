@@ -109,6 +109,16 @@ static const uint8_t INLINE_ROUTE_INDEX[
 typedef struct {
     MeisoStatePublisher *publisher;
     MeisoCompositionHostAppDesiredSnapshot snapshot;
+    uint8_t inflight_payload[HOST_DESIRED_SCRATCH_BYTES];
+    size_t inflight_payload_size;
+    uint64_t inflight_command_id;
+    MeisoOwnerScope inflight_owner;
+    uint64_t inflight_version;
+    MeisoDeliveryGeneration inflight_generation;
+    bool inflight_present;
+    bool inflight_source_completed;
+    bool inflight_offer_accepted;
+    bool inflight_actual_observed;
     bool offer_queued;
     bool offer_sent;
     bool plan_present;
@@ -231,6 +241,21 @@ _Static_assert(
         MEISO_COMPOSITION_HOST_APP_ACTUAL_COUNT == 6U &&
         MEISO_COMPOSITION_HOST_APP_INLINE_STREAM_COUNT == 3U,
     "host channel tables"
+);
+_Static_assert(
+    MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI ==
+            MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI &&
+        MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION ==
+            MEISO_COMPOSITION_HOST_APP_ACTUAL_PRESENTATION &&
+        MEISO_COMPOSITION_HOST_APP_DESIRED_SCENE ==
+            MEISO_COMPOSITION_HOST_APP_ACTUAL_SCENE &&
+        MEISO_COMPOSITION_HOST_APP_DESIRED_DEVICE ==
+            MEISO_COMPOSITION_HOST_APP_ACTUAL_DEVICE &&
+        MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA ==
+            MEISO_COMPOSITION_HOST_APP_ACTUAL_RENDER_MEDIA &&
+        MEISO_COMPOSITION_HOST_APP_DESIRED_CAMERA_MEDIA ==
+            MEISO_COMPOSITION_HOST_APP_ACTUAL_CAMERA_MEDIA,
+    "desired and actual barrier channel ordering"
 );
 _Static_assert(
     HOST_MEDIA_ADAPTER_RESERVE_BYTES >=
@@ -832,9 +857,6 @@ static MeisoCompositionHostAppStatus publish_desired_profile(
             MEISO_COMPOSITION_HOST_APP_INVALID_ARGUMENT;
     }
     target = &app->desired[channel];
-    if (target->offer_queued || target->offer_sent) {
-        return MEISO_COMPOSITION_HOST_APP_BUSY;
-    }
     if (app->next_command_id == UINT64_MAX ||
         target->snapshot.state_version == UINT64_MAX) {
         return MEISO_COMPOSITION_HOST_APP_COUNTER_EXHAUSTED;
@@ -842,7 +864,9 @@ static MeisoCompositionHostAppStatus publish_desired_profile(
     command_id = app->next_command_id;
     version = target->snapshot.state_version + 1U;
     replaced_local = target->snapshot.requested &&
-        target->snapshot.delivery_pending;
+        target->snapshot.delivery_pending &&
+        (!target->inflight_present ||
+         target->snapshot.command_id != target->inflight_command_id);
     desired.enabled = enabled;
     desired.profile = profile;
     if (!meiso_runtime_desired_state_encode(
@@ -867,12 +891,10 @@ static MeisoCompositionHostAppStatus publish_desired_profile(
     memset(&receipt, 0, sizeof(receipt));
     receipt.command_id = command_id;
     receipt.kind = kind;
-    receipt.local_result = publish_status == MEISO_STATE_PUBLISH_NEW &&
-            !replaced_local ?
+    receipt.local_result = !replaced_local ?
         MEISO_COMPOSITION_HOST_APP_LOCAL_QUEUED :
         MEISO_COMPOSITION_HOST_APP_LOCAL_REPLACED_PENDING;
-    if (publish_status == MEISO_STATE_PUBLISH_REPLACED_PENDING ||
-        replaced_local) {
+    if (replaced_local) {
         receipt.replaced_command_present = true;
         receipt.replaced_command_id = target->snapshot.command_id;
         ++target->snapshot.replaced_pending_count;
@@ -1445,6 +1467,49 @@ static void terminate_active_media(
     }
 }
 
+static void clear_desired_inflight(HostDesiredChannel *channel)
+{
+    memset(channel->inflight_payload, 0, sizeof(channel->inflight_payload));
+    channel->inflight_payload_size = 0U;
+    channel->inflight_command_id = 0U;
+    memset(&channel->inflight_owner, 0, sizeof(channel->inflight_owner));
+    channel->inflight_version = 0U;
+    memset(&channel->inflight_generation, 0,
+           sizeof(channel->inflight_generation));
+    channel->inflight_present = false;
+    channel->inflight_source_completed = false;
+    channel->inflight_offer_accepted = false;
+    channel->inflight_actual_observed = false;
+    channel->offer_queued = false;
+    channel->offer_sent = false;
+    channel->snapshot.inflight_present = false;
+    channel->snapshot.inflight_command_id = 0U;
+    memset(&channel->snapshot.inflight_owner, 0,
+           sizeof(channel->snapshot.inflight_owner));
+    channel->snapshot.inflight_state_version = 0U;
+    memset(&channel->snapshot.inflight_delivery_generation, 0,
+           sizeof(channel->snapshot.inflight_delivery_generation));
+    channel->snapshot.inflight_source_completed = false;
+    channel->snapshot.inflight_offer_accepted = false;
+    channel->snapshot.inflight_actual_observed = false;
+}
+
+static void expose_desired_inflight(HostDesiredChannel *channel)
+{
+    channel->snapshot.inflight_present = channel->inflight_present;
+    channel->snapshot.inflight_command_id = channel->inflight_command_id;
+    channel->snapshot.inflight_owner = channel->inflight_owner;
+    channel->snapshot.inflight_state_version = channel->inflight_version;
+    channel->snapshot.inflight_delivery_generation =
+        channel->inflight_generation;
+    channel->snapshot.inflight_source_completed =
+        channel->inflight_source_completed;
+    channel->snapshot.inflight_offer_accepted =
+        channel->inflight_offer_accepted;
+    channel->snapshot.inflight_actual_observed =
+        channel->inflight_actual_observed;
+}
+
 static void clear_terminal_views(MeisoCompositionHostApp *app)
 {
     const uint64_t transfer_id_high_water =
@@ -1454,8 +1519,7 @@ static void clear_terminal_views(MeisoCompositionHostApp *app)
          ++index) {
         memset(&app->desired[index].snapshot, 0,
                sizeof(app->desired[index].snapshot));
-        app->desired[index].offer_queued = false;
-        app->desired[index].offer_sent = false;
+        clear_desired_inflight(&app->desired[index]);
         app->desired[index].plan_present = false;
         app->desired[index].plan_echoed = false;
         memset(&app->desired[index].plan, 0,
@@ -1568,6 +1632,33 @@ static bool route_channel(
     return false;
 }
 
+static bool owner_equal(MeisoOwnerScope lhs, MeisoOwnerScope rhs)
+{
+    return lhs.role == rhs.role && lhs.incarnation == rhs.incarnation;
+}
+
+static bool desired_inflight_matches(
+    const HostDesiredChannel *channel,
+    MeisoDeliveryGeneration generation,
+    MeisoOwnerScope owner,
+    uint64_t version
+)
+{
+    return channel->inflight_present &&
+        channel->inflight_generation.value == generation.value &&
+        owner_equal(channel->inflight_owner, owner) &&
+        channel->inflight_version == version;
+}
+
+static void retire_completed_desired_inflight(HostDesiredChannel *channel)
+{
+    if (channel->inflight_present && channel->inflight_source_completed &&
+        channel->inflight_offer_accepted &&
+        channel->inflight_actual_observed) {
+        clear_desired_inflight(channel);
+    }
+}
+
 static bool start_desired_deliveries(MeisoCompositionHostApp *app)
 {
     size_t index;
@@ -1601,10 +1692,15 @@ static bool queue_desired_offer(
     MeisoRuntimeRouteKey route;
     MeisoRuntimeSchedulerWork work;
     MeisoCompositionDebugPeerStatus status;
-    if (!channel->snapshot.requested || channel->offer_queued ||
-        channel->offer_sent || !meiso_state_publisher_next_offer(
+    if (!channel->snapshot.requested || channel->inflight_present ||
+        !meiso_state_publisher_next_offer(
             channel->publisher, &offer
         )) {
+        return false;
+    }
+    if (offer.state.payload.size > sizeof(channel->inflight_payload) ||
+        (offer.state.payload.size != 0U &&
+         offer.state.payload.data == NULL)) {
         return false;
     }
     if (!meiso_composition_debug_peer_route_key(
@@ -1612,6 +1708,12 @@ static bool queue_desired_offer(
         )) {
         return false;
     }
+    if (offer.state.payload.size != 0U) {
+        memcpy(channel->inflight_payload, offer.state.payload.data,
+               offer.state.payload.size);
+    }
+    channel->inflight_payload_size = offer.state.payload.size;
+    offer.state.payload.data = channel->inflight_payload;
     memset(&work, 0, sizeof(work));
     work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER;
     work.value.state_offer.route = route;
@@ -1620,14 +1722,27 @@ static bool queue_desired_offer(
         app->peer, DESIRED_SOURCE_INDEX[index], &work
     );
     if (status != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+        memset(channel->inflight_payload, 0,
+               sizeof(channel->inflight_payload));
+        channel->inflight_payload_size = 0U;
         return false;
     }
+    channel->inflight_present = true;
+    channel->inflight_source_completed = false;
+    channel->inflight_offer_accepted = false;
+    channel->inflight_actual_observed = false;
+    channel->inflight_command_id = channel->snapshot.command_id;
+    channel->inflight_owner = offer.state.owner;
+    channel->inflight_version = offer.state.version;
+    channel->inflight_generation = offer.generation;
     channel->offer_queued = true;
+    channel->offer_sent = false;
+    expose_desired_inflight(channel);
     memset(out_result, 0, sizeof(*out_result));
     out_result->event_present = true;
     out_result->event = MEISO_COMPOSITION_HOST_APP_PUMP_DESIRED_DELIVERY;
     out_result->command_present = true;
-    out_result->command_id = channel->snapshot.command_id;
+    out_result->command_id = channel->inflight_command_id;
     out_result->desired_channel_present = true;
     out_result->desired_channel = (uint8_t)index;
     return true;
@@ -1740,28 +1855,43 @@ static bool handle_source_completion(
         if (meiso_composition_debug_peer_take_completion(
                 app->peer, DESIRED_SOURCE_INDEX[index], &completion
             ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
-            app->desired[index].offer_queued = false;
+            HostDesiredChannel *channel = &app->desired[index];
+            uint64_t completed_command_id;
+            if (!channel->inflight_present || !channel->offer_queued) {
+                enter_terminal(
+                    app,
+                    MEISO_COMPOSITION_HOST_APP_TERMINAL_INTERNAL_FAILURE,
+                    MEISO_COMPOSITION_MEDIA_TERMINAL_CONTROL_SESSION, EPROTO
+                );
+                return true;
+            }
+            completed_command_id = channel->inflight_command_id;
+            channel->offer_queued = false;
             if (completion.code == MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
-                app->desired[index].offer_sent = true;
+                channel->offer_sent = true;
+                channel->inflight_source_completed = true;
+                expose_desired_inflight(channel);
+                retire_completed_desired_inflight(channel);
             } else {
-                MeisoStateOffer offer;
-                if (meiso_state_publisher_next_offer(
-                        app->desired[index].publisher, &offer
-                    )) {
-                    (void)meiso_state_publisher_mark_delivery_failed(
-                        app->desired[index].publisher, offer.generation,
-                        offer.state.owner, offer.state.version
-                    );
+                (void)meiso_state_publisher_mark_delivery_failed(
+                    channel->publisher, channel->inflight_generation,
+                    channel->inflight_owner, channel->inflight_version
+                );
+                if (channel->snapshot.command_id ==
+                        channel->inflight_command_id &&
+                    channel->snapshot.state_version ==
+                        channel->inflight_version) {
+                    channel->snapshot.delivery_failed = true;
+                    channel->snapshot.delivery_pending = false;
                 }
-                app->desired[index].snapshot.delivery_failed = true;
-                app->desired[index].snapshot.delivery_pending = false;
+                clear_desired_inflight(channel);
             }
             memset(out_result, 0, sizeof(*out_result));
             out_result->event_present = true;
             out_result->event =
                 MEISO_COMPOSITION_HOST_APP_PUMP_DESIRED_DELIVERY;
             out_result->command_present = true;
-            out_result->command_id = app->desired[index].snapshot.command_id;
+            out_result->command_id = completed_command_id;
             out_result->desired_channel_present = true;
             out_result->desired_channel = (uint8_t)index;
             return true;
@@ -1837,11 +1967,6 @@ static bool handle_source_completion(
     return false;
 }
 
-static bool owner_equal(MeisoOwnerScope lhs, MeisoOwnerScope rhs)
-{
-    return lhs.role == rhs.role && lhs.incarnation == rhs.incarnation;
-}
-
 static bool maybe_echo_presentation_token(MeisoCompositionHostApp *app)
 {
     HostDesiredChannel *desired =
@@ -1852,7 +1977,7 @@ static bool maybe_echo_presentation_token(MeisoCompositionHostApp *app)
     size_t profile_size = 0U;
     uint64_t version;
     if (!desired->plan_present || desired->plan_echoed ||
-        desired->offer_queued || desired->offer_sent ||
+        desired->inflight_present ||
         !app->presentation_status_present ||
         app->presentation_status.candidate_state !=
             MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED ||
@@ -1972,7 +2097,6 @@ static bool decode_actual_profile(
                 actual.profile, &app->presentation_status
             ) != MEISO_COMPOSITION_SCENE_CODEC_OK) return false;
         app->presentation_status_present = true;
-        if (!maybe_echo_presentation_token(app)) return false;
         break;
     case MEISO_COMPOSITION_HOST_APP_ACTUAL_SCENE:
         if (meiso_composition_scene_status_decode(
@@ -2007,6 +2131,28 @@ static bool decode_actual_profile(
     }
     channel->snapshot.profile_decoded = true;
     return true;
+}
+
+static void note_desired_actual_observed(
+    MeisoCompositionHostApp *app,
+    size_t index
+)
+{
+    HostDesiredChannel *desired;
+    const MeisoRuntimeDesiredReference *observed;
+    if (index >= MEISO_COMPOSITION_HOST_APP_DESIRED_COUNT) {
+        return;
+    }
+    desired = &app->desired[index];
+    observed = &app->actual[index].snapshot.observed_desired;
+    if (!desired->inflight_present || !observed->present ||
+        !owner_equal(desired->inflight_owner, observed->owner) ||
+        desired->inflight_version != observed->version) {
+        return;
+    }
+    desired->inflight_actual_observed = true;
+    expose_desired_inflight(desired);
+    retire_completed_desired_inflight(desired);
 }
 
 static bool handle_actual_offer(
@@ -2060,6 +2206,7 @@ static bool handle_actual_offer(
     channel->snapshot.present = true;
     channel->snapshot.state_owner = current.owner;
     channel->snapshot.state_version = current.version;
+    note_desired_actual_observed(app, index);
     channel->accept_pending = true;
     channel->accept_generation = event->state_offer.generation;
     channel->accept_owner = event->state_offer.state.owner;
@@ -2084,25 +2231,44 @@ static bool handle_desired_accept(
 )
 {
     size_t index;
+    HostDesiredChannel *channel;
+    MeisoStateAcceptStatus accept_status;
+    uint64_t accepted_command_id;
     if (!route_channel(app, event->route, DESIRED_ROUTE_INDEX,
-                       MEISO_COMPOSITION_HOST_APP_DESIRED_COUNT, &index) ||
-        meiso_state_publisher_mark_delivery_accepted(
-            app->desired[index].publisher,
-            event->state_accept_generation,
-            event->state_accept_owner,
-            event->state_accept_version
-        ) > MEISO_STATE_ACCEPT_DUPLICATE) {
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_COUNT, &index)) {
         return false;
     }
-    app->desired[index].offer_sent = false;
-    app->desired[index].snapshot.delivery_pending = false;
-    app->desired[index].snapshot.delivery_accepted = true;
-    app->desired[index].snapshot.delivery_failed = false;
+    channel = &app->desired[index];
+    if (!desired_inflight_matches(
+            channel, event->state_accept_generation,
+            event->state_accept_owner, event->state_accept_version
+        )) {
+        return false;
+    }
+    accept_status = meiso_state_publisher_mark_delivery_accepted(
+        channel->publisher, event->state_accept_generation,
+        event->state_accept_owner, event->state_accept_version
+    );
+    if (accept_status != MEISO_STATE_ACCEPT_CONFIRMED &&
+        accept_status != MEISO_STATE_ACCEPT_DUPLICATE &&
+        accept_status != MEISO_STATE_ACCEPT_STALE) {
+        return false;
+    }
+    accepted_command_id = channel->inflight_command_id;
+    channel->inflight_offer_accepted = true;
+    if (channel->snapshot.command_id == channel->inflight_command_id &&
+        channel->snapshot.state_version == channel->inflight_version) {
+        channel->snapshot.delivery_pending = false;
+        channel->snapshot.delivery_accepted = true;
+        channel->snapshot.delivery_failed = false;
+    }
+    expose_desired_inflight(channel);
+    retire_completed_desired_inflight(channel);
     memset(out_result, 0, sizeof(*out_result));
     out_result->event_present = true;
     out_result->event = MEISO_COMPOSITION_HOST_APP_PUMP_DESIRED_DELIVERY;
     out_result->command_present = true;
-    out_result->command_id = app->desired[index].snapshot.command_id;
+    out_result->command_id = accepted_command_id;
     out_result->desired_channel_present = true;
     out_result->desired_channel = (uint8_t)index;
     return true;
@@ -2469,6 +2635,13 @@ static MeisoCompositionHostAppPumpStatus pump_local(
         if (queue_actual_accept(app, index, out_result)) {
             return MEISO_COMPOSITION_HOST_APP_PUMP_PROGRESS;
         }
+    }
+    if (!maybe_echo_presentation_token(app)) {
+        enter_terminal(
+            app, MEISO_COMPOSITION_HOST_APP_TERMINAL_INTERNAL_FAILURE,
+            MEISO_COMPOSITION_MEDIA_TERMINAL_CONTROL_SESSION, EPROTO
+        );
+        return MEISO_COMPOSITION_HOST_APP_PUMP_INTERNAL_FAILURE;
     }
     for (index = 0U; index < MEISO_COMPOSITION_HOST_APP_DESIRED_COUNT;
          ++index) {

@@ -1977,6 +1977,8 @@ cleanup:
 static bool deliver_media_actual(
     HostAppFixture *fixture,
     MeisoCompositionMediaSource source,
+    uint64_t desired_version,
+    uint64_t actual_state_version,
     uint64_t production_epoch,
     uint64_t media_stream_epoch,
     MeisoSessionNonce nonce
@@ -2026,7 +2028,7 @@ static bool deliver_media_actual(
           ) == MEISO_COMPOSITION_SESSION_V3_OK);
     memset(&actual, 0, sizeof(actual));
     actual.observed_desired = (MeisoRuntimeDesiredReference){
-        true, host_owner, 1U
+        true, host_owner, desired_version
     };
     actual.applied_desired = actual.observed_desired;
     actual.apply_result = MEISO_RUNTIME_APPLY_APPLIED;
@@ -2050,7 +2052,7 @@ static bool deliver_media_actual(
                    &state_config, &publisher
                ) == MEISO_STATE_INIT_OK &&
                meiso_state_publisher_publish(
-                   publisher, edge_owner, 1U, payload
+                   publisher, edge_owner, actual_state_version, payload
                ) == MEISO_STATE_PUBLISH_NEW &&
                meiso_state_publisher_begin_delivery(
                    publisher, (MeisoDeliveryGeneration){301U + channel}
@@ -2362,7 +2364,6 @@ static bool drive_render_frame(
     uint8_t completed_desired_versions = 0U;
     bool desired_offer_seen = false;
     bool desired_completion_seen = false;
-    bool frame_seen_while_control_pending = false;
     bool frame_seen = false;
     bool ok = false;
 
@@ -2511,29 +2512,12 @@ static bool drive_render_frame(
             desired_completion_seen = true;
         }
         frame_seen = snapshot.media[0].latest_present;
-        if (frame_seen && desired_offer_seen &&
-            !snapshot.desired[
-                MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA
-            ].delivery_accepted) {
-            frame_seen_while_control_pending = true;
-        }
         if (desired_completion_seen && snapshot.desired[
                 MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA
             ].delivery_accepted && snapshot.desired[
                 MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA
             ].state_version == desired_version) {
-            ++completed_desired_versions;
-            if (!frame_seen) {
-                CHECK_GOTO(desired_version < 32U, cleanup);
-                ++desired_version;
-                CHECK_GOTO(meiso_composition_host_app_set_render_media(
-                               fixture->app, true, &desired, &receipt
-                           ) == MEISO_COMPOSITION_HOST_APP_OK &&
-                           receipt.desired_state_version == desired_version,
-                           cleanup);
-                desired_offer_seen = false;
-                desired_completion_seen = false;
-            }
+            completed_desired_versions = 1U;
         }
         if (frame_seen && desired_completion_seen && snapshot.desired[
                 MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA
@@ -2574,9 +2558,7 @@ static bool drive_render_frame(
                            fixture->app, &latest.ref
                        ) == MEISO_COMPOSITION_HOST_APP_OK,
                        cleanup);
-            CHECK_GOTO(completed_desired_versions >= 1U &&
-                       frame_seen_while_control_pending,
-                       cleanup);
+            CHECK_GOTO(completed_desired_versions >= 1U, cleanup);
             ok = true;
             break;
         }
@@ -2703,6 +2685,7 @@ static bool test_render_media_smoke(void)
                ) && deliver_media_actual(
                    &fixture,
                    MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+                   1U, 1U,
                    501U, 601U, (MeisoSessionNonce){701U, 711U}
                ) && initialize_edge_media(
                    &fixture, MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER, &media
@@ -2728,6 +2711,12 @@ static bool test_render_media_smoke(void)
                    fixture.app, 0
                ) == MEISO_COMPOSITION_HOST_APP_OK,
                cleanup);
+    CHECK_GOTO(deliver_media_actual(
+                   &fixture,
+                   MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+                   2U, 2U,
+                   502U, 602U, (MeisoSessionNonce){702U, 712U}
+               ), cleanup);
     ok = true;
 
 cleanup:
@@ -2792,6 +2781,7 @@ static bool test_camera_and_both_media_masks(void)
             CHECK_GOTO(deliver_media_actual(
                            &fixture,
                            MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+                           1U, 1U,
                            501U, 601U,
                            (MeisoSessionNonce){701U, 711U}
                        ), case_cleanup);
@@ -2800,6 +2790,7 @@ static bool test_camera_and_both_media_masks(void)
             CHECK_GOTO(deliver_media_actual(
                            &fixture,
                            MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,
+                           1U, 1U,
                            502U, 602U,
                            (MeisoSessionNonce){702U, 712U}
                        ), case_cleanup);
@@ -2840,6 +2831,1004 @@ case_cleanup:
         CHECK(case_ok);
     }
     return true;
+}
+
+typedef struct {
+    void *arena;
+    size_t arena_bytes;
+    MeisoStatePublisher *publisher;
+    bool delivery_started;
+    MeisoRuntimeRouteKey route;
+} WifiActualHarness;
+
+static void destroy_wifi_actual_harness(WifiActualHarness *harness)
+{
+    if (harness != NULL) {
+        free(harness->arena);
+        memset(harness, 0, sizeof(*harness));
+    }
+}
+
+static bool initialize_wifi_actual_harness(
+    HostAppFixture *fixture,
+    WifiActualHarness *harness
+)
+{
+    const MeisoStateConfig config = {MEISO_STATE_DELIVERY_CONVERGENT};
+
+    CHECK(fixture != NULL && harness != NULL);
+    memset(harness, 0, sizeof(*harness));
+    harness->arena_bytes = meiso_state_publisher_memory_required(
+        &fixture->catalog.routes[ROUTE_WIFI_ACTUAL].route.resource, &config
+    );
+    harness->arena = calloc(1U, harness->arena_bytes);
+    return harness->arena_bytes != 0U && harness->arena != NULL &&
+        meiso_state_publisher_init(
+            harness->arena, harness->arena_bytes,
+            &fixture->catalog.routes[ROUTE_WIFI_ACTUAL].route.resource,
+            &config, &harness->publisher
+        ) == MEISO_STATE_INIT_OK &&
+        meiso_composition_debug_peer_route_key(
+            fixture->edge, ROUTE_WIFI_ACTUAL, &harness->route
+        );
+}
+
+static bool queue_wifi_actual_for_desired(
+    HostAppFixture *fixture,
+    WifiActualHarness *harness,
+    uint64_t desired_version,
+    uint64_t actual_version,
+    uint64_t production_epoch,
+    const MeisoWifiTelemetryEffectiveParameters *effective
+)
+{
+    const MeisoOwnerScope edge_owner = {MEISO_OWNER_ROLE_EDGE, 41U};
+    const MeisoOwnerScope host_owner = {MEISO_OWNER_ROLE_HOST, 31U};
+    uint8_t suffix[MEISO_WIFI_TELEMETRY_EFFECTIVE_PARAMETERS_WIRE_SIZE];
+    uint8_t wire[MEISO_WIFI_TELEMETRY_ACTUAL_STATE_MAX_PAYLOAD_SIZE];
+    MeisoRuntimeActualState actual;
+    MeisoByteView payload;
+    MeisoStateOffer offer;
+    MeisoRuntimeSchedulerWork work;
+    size_t suffix_size = 0U;
+
+    CHECK(fixture != NULL && harness != NULL && harness->publisher != NULL &&
+          effective != NULL && desired_version != 0U &&
+          actual_version != 0U && production_epoch != 0U);
+    CHECK(meiso_wifi_telemetry_effective_parameters_encode(
+              effective, (MeisoMutableBuffer){suffix, sizeof(suffix)},
+              &suffix_size
+          ) == MEISO_WIFI_TELEMETRY_CODEC_OK);
+    memset(&actual, 0, sizeof(actual));
+    actual.observed_desired = (MeisoRuntimeDesiredReference){
+        true, host_owner, desired_version
+    };
+    actual.applied_desired = actual.observed_desired;
+    actual.apply_result = MEISO_RUNTIME_APPLY_APPLIED;
+    actual.availability = MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    actual.effective_enabled = true;
+    actual.production_status = MEISO_RUNTIME_PRODUCTION_RUNNING;
+    actual.reason = MEISO_RUNTIME_PRODUCTION_REASON_NONE;
+    actual.production_epoch = production_epoch;
+    actual.profile = (MeisoByteView){suffix, suffix_size};
+    CHECK(meiso_runtime_actual_state_encode(
+              &actual, (MeisoMutableBuffer){wire, sizeof(wire)}, &payload
+          ) && meiso_state_publisher_publish(
+              harness->publisher, edge_owner, actual_version, payload
+          ) == MEISO_STATE_PUBLISH_NEW);
+    if (!harness->delivery_started) {
+        CHECK(meiso_state_publisher_begin_delivery(
+                  harness->publisher, (MeisoDeliveryGeneration){201U}
+              ) == MEISO_STATE_DELIVERY_STARTED);
+        harness->delivery_started = true;
+    }
+    CHECK(meiso_state_publisher_next_offer(harness->publisher, &offer));
+    memset(&work, 0, sizeof(work));
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER;
+    work.value.state_offer.route = harness->route;
+    work.value.state_offer.offer = offer;
+    return meiso_composition_debug_peer_queue_work(
+               fixture->edge, 2U, &work
+           ) == MEISO_COMPOSITION_DEBUG_PEER_OK;
+}
+
+static bool decode_wifi_desired_exact(
+    const MeisoStateOffer *offer,
+    uint64_t version,
+    const MeisoWifiTelemetryDesiredParameters *expected
+)
+{
+    MeisoRuntimeDesiredState desired;
+    MeisoWifiTelemetryDesiredParameters decoded;
+
+    return offer != NULL && expected != NULL &&
+        offer->state.version == version &&
+        meiso_runtime_desired_state_decode(offer->state.payload, &desired) &&
+        desired.enabled &&
+        meiso_wifi_telemetry_desired_parameters_decode(
+            desired.profile, &decoded
+        ) == MEISO_WIFI_TELEMETRY_CODEC_OK &&
+        decoded.selected_fields == expected->selected_fields &&
+        decoded.sample_period_ms == expected->sample_period_ms;
+}
+
+static bool queue_state_accept(
+    MeisoCompositionDebugPeer *edge,
+    uint8_t source_index,
+    const MeisoRuntimeEvent *event
+)
+{
+    MeisoRuntimeSchedulerWork accept;
+
+    CHECK(edge != NULL && event != NULL &&
+          event->type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    memset(&accept, 0, sizeof(accept));
+    accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
+    accept.value.state_accept.route = event->route;
+    accept.value.state_accept.generation = event->state_offer.generation;
+    accept.value.state_accept.owner = event->state_offer.state.owner;
+    accept.value.state_accept.version = event->state_offer.state.version;
+    return meiso_composition_debug_peer_queue_work(
+               edge, source_index, &accept
+           ) == MEISO_COMPOSITION_DEBUG_PEER_OK;
+}
+
+typedef struct {
+    void *arena;
+    MeisoStatePublisher *publisher;
+    MeisoRuntimeRouteKey route;
+    bool delivery_started;
+} PresentationActualHarness;
+
+static void destroy_presentation_actual_harness(
+    PresentationActualHarness *harness
+)
+{
+    if (harness != NULL) {
+        free(harness->arena);
+        memset(harness, 0, sizeof(*harness));
+    }
+}
+
+static bool initialize_presentation_actual_harness(
+    HostAppFixture *fixture,
+    PresentationActualHarness *harness
+)
+{
+    const MeisoStateConfig state_config = {
+        MEISO_STATE_DELIVERY_CONVERGENT
+    };
+    size_t required;
+
+    CHECK(fixture != NULL && harness != NULL);
+    memset(harness, 0, sizeof(*harness));
+    required = meiso_state_publisher_memory_required(
+        &fixture->catalog.routes[ROUTE_PRESENTATION_ACTUAL].route.resource,
+        &state_config
+    );
+    harness->arena = calloc(1U, required);
+    CHECK(required != 0U && harness->arena != NULL &&
+          meiso_state_publisher_init(
+              harness->arena, required,
+              &fixture->catalog.routes[
+                  ROUTE_PRESENTATION_ACTUAL
+              ].route.resource,
+              &state_config, &harness->publisher
+          ) == MEISO_STATE_INIT_OK &&
+          meiso_composition_debug_peer_route_key(
+              fixture->edge, ROUTE_PRESENTATION_ACTUAL, &harness->route
+          ));
+    return true;
+}
+
+static bool decode_presentation_desired(
+    const MeisoStateOffer *offer,
+    uint64_t version,
+    MeisoCompositionScenePresentationPlan *out_plan
+)
+{
+    MeisoRuntimeDesiredState desired;
+
+    return offer != NULL && out_plan != NULL &&
+        offer->state.version == version &&
+        meiso_runtime_desired_state_decode(offer->state.payload, &desired) &&
+        desired.enabled &&
+        meiso_composition_scene_presentation_plan_decode(
+            desired.profile, out_plan
+        ) == MEISO_COMPOSITION_SCENE_CODEC_OK;
+}
+
+static bool queue_presentation_actual(
+    HostAppFixture *fixture,
+    PresentationActualHarness *harness,
+    const MeisoCompositionScenePresentationPlan *plan,
+    const uint8_t token[MEISO_SHA256_DIGEST_SIZE],
+    uint64_t desired_version,
+    uint64_t actual_version,
+    MeisoCompositionSceneCandidateState candidate_state
+)
+{
+    const MeisoOwnerScope edge_owner = {MEISO_OWNER_ROLE_EDGE, 41U};
+    const MeisoOwnerScope host_owner = {MEISO_OWNER_ROLE_HOST, 31U};
+    uint8_t suffix[MEISO_COMPOSITION_SCENE_PRESENTATION_STATUS_WIRE_SIZE];
+    uint8_t wire[
+        MEISO_COMPOSITION_SCENE_PRESENTATION_ACTUAL_STATE_MAX_PAYLOAD_SIZE
+    ];
+    MeisoCompositionScenePresentationStatus status;
+    MeisoRuntimeActualState actual;
+    MeisoByteView payload;
+    MeisoStateOffer offer;
+    MeisoRuntimeSchedulerWork work;
+    size_t suffix_size = 0U;
+    MeisoStatePublishStatus publish;
+
+    CHECK(fixture != NULL && harness != NULL && plan != NULL &&
+          token != NULL && harness->publisher != NULL &&
+          (candidate_state == MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED ||
+           candidate_state ==
+               MEISO_COMPOSITION_SCENE_CANDIDATE_ACTIVATION_PENDING));
+    memset(&status, 0, sizeof(status));
+    status.capability_generation = plan->capability_generation;
+    status.candidate_state = candidate_state;
+    status.candidate_plan_generation = plan->plan_generation;
+    memcpy(status.candidate_digest, plan->candidate_digest,
+           sizeof(status.candidate_digest));
+    status.active_state = MEISO_COMPOSITION_SCENE_ACTIVE_NONE;
+    status.reason = MEISO_COMPOSITION_SCENE_PRESENTATION_REASON_NONE;
+    status.prepared_token_present = true;
+    memcpy(status.prepared_token, token, sizeof(status.prepared_token));
+    status.scene_binding = plan->scene_binding;
+    status.target_width = plan->target_width;
+    status.target_height = plan->target_height;
+    status.color_format = plan->color_format;
+    status.depth_format = plan->depth_format;
+    CHECK(meiso_composition_scene_presentation_status_encode(
+              &status, (MeisoMutableBuffer){suffix, sizeof(suffix)},
+              &suffix_size
+          ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+    memset(&actual, 0, sizeof(actual));
+    actual.observed_desired = (MeisoRuntimeDesiredReference){
+        true, host_owner, desired_version
+    };
+    actual.applied_desired = actual.observed_desired;
+    actual.apply_result = MEISO_RUNTIME_APPLY_APPLIED;
+    actual.availability = MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    actual.effective_enabled = false;
+    actual.production_status = MEISO_RUNTIME_PRODUCTION_STARTING;
+    actual.reason = MEISO_RUNTIME_PRODUCTION_REASON_APPLYING;
+    actual.production_epoch = 0U;
+    actual.profile = (MeisoByteView){suffix, suffix_size};
+    CHECK(meiso_runtime_actual_state_encode(
+              &actual, (MeisoMutableBuffer){wire, sizeof(wire)}, &payload
+          ));
+    publish = meiso_state_publisher_publish(
+        harness->publisher, edge_owner, actual_version, payload
+    );
+    CHECK(publish == MEISO_STATE_PUBLISH_NEW);
+    if (!harness->delivery_started) {
+        CHECK(meiso_state_publisher_begin_delivery(
+                  harness->publisher, (MeisoDeliveryGeneration){301U}
+              ) == MEISO_STATE_DELIVERY_STARTED);
+        harness->delivery_started = true;
+    }
+    CHECK(meiso_state_publisher_next_offer(harness->publisher, &offer));
+    memset(&work, 0, sizeof(work));
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER;
+    work.value.state_offer.route = harness->route;
+    work.value.state_offer.offer = offer;
+    return meiso_composition_debug_peer_queue_work(
+               fixture->edge, 6U, &work
+           ) == MEISO_COMPOSITION_DEBUG_PEER_OK;
+}
+
+static bool test_wifi_inflight_barrier_and_coalesce(void)
+{
+    const MeisoOwnerScope host_owner = {MEISO_OWNER_ROLE_HOST, 31U};
+    const MeisoWifiTelemetryDesiredParameters values[4] = {
+        {MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE, 500U},
+        {MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+             MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM, 600U},
+        {MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE, 700U},
+        {MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+             MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM, 800U}
+    };
+    HostAppFixture fixture;
+    WifiActualHarness actual;
+    MeisoStateReplica *desired_replica = NULL;
+    void *desired_replica_arena = NULL;
+    size_t desired_replica_bytes;
+    MeisoCompositionHostAppCommandReceipt receipts[4];
+    MeisoRuntimeRouteKey desired_route;
+    MeisoRuntimeEvent borrowed_v2;
+    uint8_t v2_payload[
+        MEISO_WIFI_TELEMETRY_DESIRED_STATE_MAX_PAYLOAD_SIZE
+    ];
+    size_t v2_payload_size = 0U;
+    bool v2_offer_seen = false;
+    bool v2_accept_source_complete = false;
+    bool v2_barrier_seen = false;
+    bool actual_v2_source_complete = false;
+    bool actual_v2_accept_seen = false;
+    bool v4_offer_seen = false;
+    bool v4_accept_source_complete = false;
+    bool actual_v4_queued = false;
+    bool actual_v4_source_complete = false;
+    bool actual_v4_accept_seen = false;
+    bool ok = false;
+    struct timespec deadline;
+
+    memset(&actual, 0, sizeof(actual));
+    memset(&borrowed_v2, 0, sizeof(borrowed_v2));
+    CHECK(initialize_fixture(&fixture, UINT64_C(0x7000)));
+    CHECK_GOTO(meiso_composition_host_app_set_wifi(
+                   fixture.app, true, &values[0], &receipts[0]
+               ) == MEISO_COMPOSITION_HOST_APP_OK &&
+               meiso_composition_host_app_set_wifi(
+                   fixture.app, true, &values[1], &receipts[1]
+               ) == MEISO_COMPOSITION_HOST_APP_OK &&
+               receipts[0].desired_state_version == 1U &&
+               receipts[1].desired_state_version == 2U &&
+               receipts[1].replaced_command_present &&
+               receipts[1].replaced_command_id == receipts[0].command_id &&
+               drive_control_ready(&fixture), cleanup);
+    desired_replica_bytes = meiso_state_replica_memory_required(
+        &fixture.catalog.routes[ROUTE_WIFI_DESIRED].route.resource
+    );
+    desired_replica_arena = calloc(1U, desired_replica_bytes);
+    CHECK_GOTO(desired_replica_bytes != 0U &&
+               desired_replica_arena != NULL &&
+               meiso_state_replica_init(
+                   desired_replica_arena, desired_replica_bytes,
+                   &fixture.catalog.routes[ROUTE_WIFI_DESIRED].route.resource,
+                   &desired_replica
+               ) == MEISO_STATE_INIT_OK &&
+               meiso_state_replica_begin_owner(
+                   desired_replica, host_owner
+               ) == MEISO_STATE_OWNER_STARTED &&
+               meiso_composition_debug_peer_route_key(
+                   fixture.edge, ROUTE_WIFI_DESIRED, &desired_route
+               ) && initialize_wifi_actual_harness(&fixture, &actual) &&
+               make_deadline(&deadline), cleanup);
+
+    while (remaining_ms(&deadline) > 0 && !v2_offer_seen) {
+        const MeisoCompositionHostAppIoReady ready = {
+            true, true, false, false
+        };
+        MeisoCompositionHostAppPumpResult host_result;
+        MeisoCompositionDebugPeerPumpResult edge_result;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK_GOTO(host_pump_status_benign(
+                       meiso_composition_host_app_pump(
+                           fixture.app, &ready, &host_result
+                       )
+                   ), cleanup);
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK_GOTO(edge_pump_status_benign(
+                       meiso_composition_debug_peer_pump(
+                           fixture.edge, true, true, &edge_result
+                       )
+                   ), cleanup);
+        if (edge_result.event_present) {
+            CHECK_GOTO(edge_result.event.type ==
+                           MEISO_RUNTIME_EVENT_STATE_OFFER &&
+                       route_equal(edge_result.event.route, desired_route) &&
+                       decode_wifi_desired_exact(
+                           &edge_result.event.state_offer, 2U, &values[1]
+                       ) && edge_result.event.state_offer.state.payload.size <=
+                           sizeof(v2_payload), cleanup);
+            borrowed_v2 = edge_result.event;
+            v2_payload_size =
+                borrowed_v2.state_offer.state.payload.size;
+            memcpy(v2_payload,
+                   borrowed_v2.state_offer.state.payload.data,
+                   v2_payload_size);
+            v2_offer_seen = true;
+        }
+    }
+    CHECK_GOTO(v2_offer_seen &&
+               meiso_composition_host_app_set_wifi(
+                   fixture.app, true, &values[2], &receipts[2]
+               ) == MEISO_COMPOSITION_HOST_APP_OK &&
+               meiso_composition_host_app_set_wifi(
+                   fixture.app, true, &values[3], &receipts[3]
+               ) == MEISO_COMPOSITION_HOST_APP_OK &&
+               receipts[2].desired_state_version == 3U &&
+               receipts[2].local_result ==
+                   MEISO_COMPOSITION_HOST_APP_LOCAL_QUEUED &&
+               !receipts[2].replaced_command_present &&
+               receipts[3].desired_state_version == 4U &&
+               receipts[3].local_result ==
+                   MEISO_COMPOSITION_HOST_APP_LOCAL_REPLACED_PENDING &&
+               receipts[3].replaced_command_present &&
+               receipts[3].replaced_command_id == receipts[2].command_id &&
+               borrowed_v2.state_offer.state.payload.size == v2_payload_size &&
+               memcmp(borrowed_v2.state_offer.state.payload.data,
+                      v2_payload, v2_payload_size) == 0,
+               cleanup);
+    {
+        MeisoCompositionHostAppSnapshot snapshot;
+        const MeisoStateReceiveStatus receive = meiso_state_replica_receive(
+            desired_replica, borrowed_v2.state_offer.state.owner,
+            borrowed_v2.state_offer.state.version,
+            borrowed_v2.state_offer.state.payload
+        );
+
+        CHECK_GOTO(meiso_composition_host_app_snapshot(
+                       fixture.app, &snapshot
+                   ) && snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].command_id == receipts[3].command_id &&
+                   snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].state_version == 4U &&
+                   snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].inflight_present &&
+                   snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].inflight_command_id == receipts[1].command_id &&
+                   snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].inflight_state_version == 2U &&
+                   !snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].inflight_offer_accepted &&
+                   !snapshot.desired[
+                       MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                   ].inflight_actual_observed &&
+                   receive == MEISO_STATE_RECEIVE_NEW &&
+                   meiso_composition_debug_peer_commit_state_receive(
+                       fixture.edge, borrowed_v2.route,
+                       &borrowed_v2.state_offer, receive
+                   ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                   queue_state_accept(fixture.edge, 1U, &borrowed_v2),
+                   cleanup);
+    }
+
+    CHECK_GOTO(make_deadline(&deadline), cleanup);
+    while (remaining_ms(&deadline) > 0 && !v2_barrier_seen) {
+        const MeisoCompositionHostAppIoReady ready = {
+            true, true, false, false
+        };
+        MeisoCompositionHostAppPumpResult host_result;
+        MeisoCompositionDebugPeerPumpResult edge_result;
+        MeisoRuntimeSchedulerCompletion completion;
+        MeisoCompositionHostAppSnapshot snapshot;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK_GOTO(host_pump_status_benign(
+                       meiso_composition_host_app_pump(
+                           fixture.app, &ready, &host_result
+                       )
+                   ), cleanup);
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK_GOTO(edge_pump_status_benign(
+                       meiso_composition_debug_peer_pump(
+                           fixture.edge, true, true, &edge_result
+                       )
+                   ) && !edge_result.event_present, cleanup);
+        memset(&completion, 0, sizeof(completion));
+        if (meiso_composition_debug_peer_take_completion(
+                fixture.edge, 1U, &completion
+            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            CHECK_GOTO(completion.code ==
+                           MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT,
+                       cleanup);
+            v2_accept_source_complete = true;
+        }
+        CHECK_GOTO(meiso_composition_host_app_snapshot(
+                       fixture.app, &snapshot
+                   ), cleanup);
+        if (v2_accept_source_complete && snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+            ].inflight_source_completed && snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+            ].inflight_offer_accepted) {
+            CHECK_GOTO(snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                       ].inflight_present &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                       ].inflight_state_version == 2U &&
+                       !snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                       ].inflight_actual_observed &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                       ].state_version == 4U,
+                       cleanup);
+            v2_barrier_seen = true;
+        }
+    }
+    CHECK_GOTO(v2_barrier_seen && queue_wifi_actual_for_desired(
+                   &fixture, &actual, 2U, 1U, 77U,
+                   &(const MeisoWifiTelemetryEffectiveParameters){
+                       values[1].selected_fields,
+                       values[1].sample_period_ms
+                   }
+               ) && make_deadline(&deadline), cleanup);
+
+    while (remaining_ms(&deadline) > 0) {
+        const MeisoCompositionHostAppIoReady ready = {
+            true, true, false, false
+        };
+        MeisoCompositionHostAppPumpResult host_result;
+        MeisoCompositionDebugPeerPumpResult edge_result;
+        MeisoRuntimeSchedulerCompletion completion;
+        MeisoCompositionHostAppSnapshot snapshot;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK_GOTO(host_pump_status_benign(
+                       meiso_composition_host_app_pump(
+                           fixture.app, &ready, &host_result
+                       )
+                   ), cleanup);
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK_GOTO(edge_pump_status_benign(
+                       meiso_composition_debug_peer_pump(
+                           fixture.edge, true, true, &edge_result
+                       )
+                   ), cleanup);
+        if (edge_result.event_present) {
+            if (edge_result.event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT &&
+                route_equal(edge_result.event.route, actual.route)) {
+                const MeisoStateAcceptStatus accepted =
+                    meiso_state_publisher_mark_delivery_accepted(
+                        actual.publisher,
+                        edge_result.event.state_accept_generation,
+                        edge_result.event.state_accept_owner,
+                        edge_result.event.state_accept_version
+                    );
+
+                CHECK_GOTO(accepted == MEISO_STATE_ACCEPT_CONFIRMED,
+                           cleanup);
+                if (edge_result.event.state_accept_version == 1U) {
+                    actual_v2_accept_seen = true;
+                } else if (edge_result.event.state_accept_version == 2U) {
+                    actual_v4_accept_seen = true;
+                } else {
+                    CHECK_GOTO(false, cleanup);
+                }
+            } else if (edge_result.event.type ==
+                           MEISO_RUNTIME_EVENT_STATE_OFFER &&
+                       route_equal(edge_result.event.route, desired_route)) {
+                const MeisoStateReceiveStatus receive =
+                    meiso_state_replica_receive(
+                        desired_replica,
+                        edge_result.event.state_offer.state.owner,
+                        edge_result.event.state_offer.state.version,
+                        edge_result.event.state_offer.state.payload
+                    );
+
+                CHECK_GOTO(!v4_offer_seen &&
+                       decode_wifi_desired_exact(
+                           &edge_result.event.state_offer, 4U, &values[3]
+                       ) && receive == MEISO_STATE_RECEIVE_NEW &&
+                       meiso_composition_debug_peer_commit_state_receive(
+                           fixture.edge, edge_result.event.route,
+                           &edge_result.event.state_offer, receive
+                       ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                       queue_state_accept(fixture.edge, 1U,
+                                          &edge_result.event), cleanup);
+                v4_offer_seen = true;
+            } else {
+                CHECK_GOTO(false, cleanup);
+            }
+        }
+        memset(&completion, 0, sizeof(completion));
+        if (meiso_composition_debug_peer_take_completion(
+                fixture.edge, 2U, &completion
+            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            CHECK_GOTO(completion.code ==
+                           MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT,
+                       cleanup);
+            if (!actual_v2_source_complete) {
+                actual_v2_source_complete = true;
+            } else {
+                actual_v4_source_complete = true;
+            }
+        }
+        memset(&completion, 0, sizeof(completion));
+        if (meiso_composition_debug_peer_take_completion(
+                fixture.edge, 1U, &completion
+            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            CHECK_GOTO(v4_offer_seen && completion.code ==
+                           MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT,
+                       cleanup);
+            v4_accept_source_complete = true;
+        }
+        if (actual_v2_source_complete && actual_v2_accept_seen &&
+            v4_offer_seen && !actual_v4_queued) {
+            CHECK_GOTO(queue_wifi_actual_for_desired(
+                           &fixture, &actual, 4U, 2U, 78U,
+                           &(const MeisoWifiTelemetryEffectiveParameters){
+                               values[3].selected_fields,
+                               values[3].sample_period_ms
+                           }
+                       ), cleanup);
+            actual_v4_queued = true;
+        }
+        CHECK_GOTO(meiso_composition_host_app_snapshot(
+                       fixture.app, &snapshot
+                   ), cleanup);
+        if (actual_v4_source_complete && actual_v4_accept_seen &&
+            v4_accept_source_complete &&
+            snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+            ].delivery_accepted &&
+            !snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+            ].inflight_present &&
+            snapshot.actual[
+                MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI
+            ].present && snapshot.actual[
+                MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI
+            ].observed_desired.version == 4U) {
+            CHECK_GOTO(snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                       ].command_id == receipts[3].command_id &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI
+                       ].state_version == 4U &&
+                       snapshot.actual[
+                           MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI
+                       ].applied_desired.version == 4U &&
+                       snapshot.actual[
+                           MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI
+                       ].production_epoch == 78U &&
+                       snapshot.wifi_effective_present &&
+                       snapshot.wifi_effective.selected_fields ==
+                           values[3].selected_fields &&
+                       snapshot.wifi_effective.sample_period_ms == 800U,
+                       cleanup);
+            ok = true;
+            break;
+        }
+    }
+
+cleanup:
+    destroy_wifi_actual_harness(&actual);
+    free(desired_replica_arena);
+    destroy_fixture(&fixture);
+    return ok;
+}
+
+static bool test_presentation_echo_inflight_barrier(void)
+{
+    const MeisoOwnerScope host_owner = {MEISO_OWNER_ROLE_HOST, 31U};
+    const MeisoCompositionHostAppPresentationSettings settings = {
+        MEISO_COMPOSITION_SCENE_PLAN_USE_SAFETY_FRAME,
+        MEISO_COMPOSITION_SCENE_TARGET_WIDTH,
+        MEISO_COMPOSITION_SCENE_TARGET_HEIGHT,
+        MEISO_COMPOSITION_SCENE_COLOR_RGBA8888,
+        MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32,
+        MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ,
+        1000U
+    };
+    HostAppFixture fixture;
+    PresentationActualHarness actual;
+    MeisoStateReplica *desired_replica = NULL;
+    void *desired_replica_arena = NULL;
+    size_t desired_replica_bytes;
+    MeisoCompositionHostAppCommandReceipt receipt;
+    MeisoRuntimeRouteKey desired_route;
+    MeisoRuntimeEvent desired_v1;
+    MeisoCompositionScenePresentationPlan plan_v1;
+    MeisoCompositionScenePresentationPlan plan_echo;
+    uint8_t token[MEISO_SHA256_DIGEST_SIZE];
+    bool desired_v1_seen = false;
+    bool actual_v1_source_complete = false;
+    bool actual_v1_accept_seen = false;
+    bool actual_observed_before_accept = false;
+    uint8_t desired_accept_completions = 0U;
+    bool echo_seen = false;
+    bool actual_v2_queued = false;
+    bool actual_v2_source_complete = false;
+    bool actual_v2_accept_seen = false;
+    bool ok = false;
+    struct timespec deadline;
+    size_t index;
+
+    memset(&actual, 0, sizeof(actual));
+    memset(&desired_v1, 0, sizeof(desired_v1));
+    memset(&plan_v1, 0, sizeof(plan_v1));
+    memset(&plan_echo, 0, sizeof(plan_echo));
+    for (index = 0U; index < sizeof(token); ++index) {
+        token[index] = (uint8_t)(UINT8_C(0x41) + (uint8_t)index);
+    }
+    CHECK(initialize_fixture(&fixture, UINT64_C(0x7100)));
+    CHECK_GOTO(meiso_composition_host_app_set_presentation(
+                   fixture.app, true, &settings, &receipt
+               ) == MEISO_COMPOSITION_HOST_APP_OK &&
+               receipt.command_id == 1U &&
+               receipt.desired_state_version == 1U &&
+               receipt.plan_generation_present &&
+               receipt.plan_generation == 1U &&
+               drive_control_ready(&fixture), cleanup);
+    desired_replica_bytes = meiso_state_replica_memory_required(
+        &fixture.catalog.routes[ROUTE_PRESENTATION_DESIRED].route.resource
+    );
+    desired_replica_arena = calloc(1U, desired_replica_bytes);
+    CHECK_GOTO(desired_replica_bytes != 0U &&
+               desired_replica_arena != NULL &&
+               meiso_state_replica_init(
+                   desired_replica_arena, desired_replica_bytes,
+                   &fixture.catalog.routes[
+                       ROUTE_PRESENTATION_DESIRED
+                   ].route.resource,
+                   &desired_replica
+               ) == MEISO_STATE_INIT_OK &&
+               meiso_state_replica_begin_owner(
+                   desired_replica, host_owner
+               ) == MEISO_STATE_OWNER_STARTED &&
+               meiso_composition_debug_peer_route_key(
+                   fixture.edge, ROUTE_PRESENTATION_DESIRED, &desired_route
+               ) && initialize_presentation_actual_harness(
+                   &fixture, &actual
+               ) && make_deadline(&deadline), cleanup);
+
+    while (remaining_ms(&deadline) > 0 && !desired_v1_seen) {
+        const MeisoCompositionHostAppIoReady ready = {
+            true, true, false, false
+        };
+        MeisoCompositionHostAppPumpResult host_result;
+        MeisoCompositionDebugPeerPumpResult edge_result;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK_GOTO(host_pump_status_benign(
+                       meiso_composition_host_app_pump(
+                           fixture.app, &ready, &host_result
+                       )
+                   ), cleanup);
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK_GOTO(edge_pump_status_benign(
+                       meiso_composition_debug_peer_pump(
+                           fixture.edge, true, true, &edge_result
+                       )
+                   ), cleanup);
+        if (edge_result.event_present) {
+            CHECK_GOTO(edge_result.event.type ==
+                           MEISO_RUNTIME_EVENT_STATE_OFFER &&
+                       route_equal(edge_result.event.route, desired_route) &&
+                       decode_presentation_desired(
+                           &edge_result.event.state_offer, 1U, &plan_v1
+                       ) && plan_v1.plan_generation == 1U &&
+                       !plan_v1.prepared_token_echo_present,
+                       cleanup);
+            desired_v1 = edge_result.event;
+            desired_v1_seen = true;
+        }
+    }
+    if (desired_v1_seen) {
+        const MeisoStateReceiveStatus receive = meiso_state_replica_receive(
+            desired_replica, desired_v1.state_offer.state.owner,
+            desired_v1.state_offer.state.version,
+            desired_v1.state_offer.state.payload
+        );
+
+        CHECK_GOTO(receive == MEISO_STATE_RECEIVE_NEW &&
+                   meiso_composition_debug_peer_commit_state_receive(
+                       fixture.edge, desired_v1.route,
+                       &desired_v1.state_offer, receive
+                   ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                   queue_presentation_actual(
+                       &fixture, &actual, &plan_v1, token, 1U, 1U,
+                       MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED
+                   ) && make_deadline(&deadline), cleanup);
+    } else {
+        CHECK_GOTO(false, cleanup);
+    }
+
+    while (remaining_ms(&deadline) > 0 &&
+           (!actual_observed_before_accept ||
+            !actual_v1_source_complete || !actual_v1_accept_seen)) {
+        const MeisoCompositionHostAppIoReady ready = {
+            true, true, false, false
+        };
+        MeisoCompositionHostAppPumpResult host_result;
+        MeisoCompositionDebugPeerPumpResult edge_result;
+        MeisoRuntimeSchedulerCompletion completion;
+        MeisoCompositionHostAppSnapshot snapshot;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK_GOTO(host_pump_status_benign(
+                       meiso_composition_host_app_pump(
+                           fixture.app, &ready, &host_result
+                       )
+                   ), cleanup);
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK_GOTO(edge_pump_status_benign(
+                       meiso_composition_debug_peer_pump(
+                           fixture.edge, true, true, &edge_result
+                       )
+                   ), cleanup);
+        if (edge_result.event_present) {
+            CHECK_GOTO(edge_result.event.type ==
+                           MEISO_RUNTIME_EVENT_STATE_ACCEPT &&
+                       route_equal(edge_result.event.route, actual.route) &&
+                       edge_result.event.state_accept_version == 1U &&
+                       meiso_state_publisher_mark_delivery_accepted(
+                           actual.publisher,
+                           edge_result.event.state_accept_generation,
+                           edge_result.event.state_accept_owner,
+                           edge_result.event.state_accept_version
+                       ) == MEISO_STATE_ACCEPT_CONFIRMED,
+                       cleanup);
+            actual_v1_accept_seen = true;
+        }
+        memset(&completion, 0, sizeof(completion));
+        if (meiso_composition_debug_peer_take_completion(
+                fixture.edge, 6U, &completion
+            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            CHECK_GOTO(completion.code ==
+                           MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT,
+                       cleanup);
+            actual_v1_source_complete = true;
+        }
+        CHECK_GOTO(meiso_composition_host_app_snapshot(
+                       fixture.app, &snapshot
+                   ), cleanup);
+        if (snapshot.actual[
+                MEISO_COMPOSITION_HOST_APP_ACTUAL_PRESENTATION
+            ].present && snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+            ].inflight_actual_observed) {
+            CHECK_GOTO(snapshot.presentation_status_present &&
+                       snapshot.presentation_status.candidate_state ==
+                           MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ].inflight_present &&
+                       !snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ].inflight_offer_accepted &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ].state_version == 1U &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ].command_id == receipt.command_id,
+                       cleanup);
+            actual_observed_before_accept = true;
+        }
+    }
+    CHECK_GOTO(actual_observed_before_accept &&
+               actual_v1_source_complete && actual_v1_accept_seen &&
+               queue_state_accept(fixture.edge, 5U, &desired_v1) &&
+               make_deadline(&deadline), cleanup);
+
+    while (remaining_ms(&deadline) > 0) {
+        const MeisoCompositionHostAppIoReady ready = {
+            true, true, false, false
+        };
+        MeisoCompositionHostAppPumpResult host_result;
+        MeisoCompositionDebugPeerPumpResult edge_result;
+        MeisoRuntimeSchedulerCompletion completion;
+        MeisoCompositionHostAppSnapshot snapshot;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK_GOTO(host_pump_status_benign(
+                       meiso_composition_host_app_pump(
+                           fixture.app, &ready, &host_result
+                       )
+                   ), cleanup);
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK_GOTO(edge_pump_status_benign(
+                       meiso_composition_debug_peer_pump(
+                           fixture.edge, true, true, &edge_result
+                       )
+                   ), cleanup);
+        if (edge_result.event_present) {
+            if (edge_result.event.type == MEISO_RUNTIME_EVENT_STATE_OFFER &&
+                route_equal(edge_result.event.route, desired_route)) {
+                const MeisoStateReceiveStatus receive =
+                    meiso_state_replica_receive(
+                        desired_replica,
+                        edge_result.event.state_offer.state.owner,
+                        edge_result.event.state_offer.state.version,
+                        edge_result.event.state_offer.state.payload
+                    );
+
+                CHECK_GOTO(!echo_seen &&
+                       decode_presentation_desired(
+                           &edge_result.event.state_offer, 2U, &plan_echo
+                       ) && plan_echo.plan_generation ==
+                           plan_v1.plan_generation &&
+                       memcmp(plan_echo.candidate_digest,
+                              plan_v1.candidate_digest,
+                              sizeof(plan_echo.candidate_digest)) == 0 &&
+                       plan_echo.prepared_token_echo_present &&
+                       memcmp(plan_echo.prepared_token_echo, token,
+                              sizeof(token)) == 0 &&
+                       receive == MEISO_STATE_RECEIVE_NEW &&
+                       meiso_composition_debug_peer_commit_state_receive(
+                           fixture.edge, edge_result.event.route,
+                           &edge_result.event.state_offer, receive
+                       ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                       queue_state_accept(
+                           fixture.edge, 5U, &edge_result.event
+                       ), cleanup);
+                echo_seen = true;
+            } else if (edge_result.event.type ==
+                           MEISO_RUNTIME_EVENT_STATE_ACCEPT &&
+                       route_equal(edge_result.event.route, actual.route)) {
+                CHECK_GOTO(edge_result.event.state_accept_version == 2U &&
+                       meiso_state_publisher_mark_delivery_accepted(
+                           actual.publisher,
+                           edge_result.event.state_accept_generation,
+                           edge_result.event.state_accept_owner,
+                           edge_result.event.state_accept_version
+                       ) == MEISO_STATE_ACCEPT_CONFIRMED,
+                       cleanup);
+                actual_v2_accept_seen = true;
+            } else {
+                CHECK_GOTO(false, cleanup);
+            }
+        }
+        memset(&completion, 0, sizeof(completion));
+        if (meiso_composition_debug_peer_take_completion(
+                fixture.edge, 5U, &completion
+            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            CHECK_GOTO(completion.code ==
+                           MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT &&
+                       desired_accept_completions < 2U,
+                       cleanup);
+            ++desired_accept_completions;
+        }
+        memset(&completion, 0, sizeof(completion));
+        if (meiso_composition_debug_peer_take_completion(
+                fixture.edge, 6U, &completion
+            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            CHECK_GOTO(actual_v2_queued && completion.code ==
+                           MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT,
+                       cleanup);
+            actual_v2_source_complete = true;
+        }
+        if (echo_seen && desired_accept_completions >= 1U &&
+            !actual_v2_queued) {
+            CHECK_GOTO(queue_presentation_actual(
+                           &fixture, &actual, &plan_echo, token, 2U, 2U,
+                           MEISO_COMPOSITION_SCENE_CANDIDATE_ACTIVATION_PENDING
+                       ), cleanup);
+            actual_v2_queued = true;
+        }
+        CHECK_GOTO(meiso_composition_host_app_snapshot(
+                       fixture.app, &snapshot
+                   ), cleanup);
+        if (echo_seen && desired_accept_completions == 2U &&
+            actual_v2_source_complete && actual_v2_accept_seen &&
+            snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+            ].delivery_accepted && !snapshot.desired[
+                MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+            ].inflight_present && snapshot.actual[
+                MEISO_COMPOSITION_HOST_APP_ACTUAL_PRESENTATION
+            ].observed_desired.version == 2U) {
+            CHECK_GOTO(snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ].command_id == receipt.command_id &&
+                       snapshot.desired[
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ].state_version == 2U &&
+                       snapshot.plan_generation_high_water == 1U &&
+                       snapshot.presentation_status_present &&
+                       snapshot.presentation_status.candidate_state ==
+                           MEISO_COMPOSITION_SCENE_CANDIDATE_ACTIVATION_PENDING &&
+                       snapshot.presentation_status.prepared_token_present &&
+                       memcmp(snapshot.presentation_status.prepared_token,
+                              token, sizeof(token)) == 0,
+                       cleanup);
+            ok = true;
+            break;
+        }
+    }
+
+cleanup:
+    destroy_presentation_actual_harness(&actual);
+    free(desired_replica_arena);
+    destroy_fixture(&fixture);
+    return ok;
 }
 
 static bool test_fixture_checkpoint(void)
@@ -2910,7 +3899,10 @@ cleanup:
 
 int main(void)
 {
-    if (!test_fixture_checkpoint() || !test_blob_full_interleave() ||
+    if (!test_fixture_checkpoint() ||
+        !test_wifi_inflight_barrier_and_coalesce() ||
+        !test_presentation_echo_inflight_barrier() ||
+        !test_blob_full_interleave() ||
         !test_inline_duplicate_result() || !test_render_media_smoke()) {
         return 1;
     }
