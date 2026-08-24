@@ -158,6 +158,7 @@ typedef struct {
     uint64_t scene_space_epoch;
     uint64_t host_clock_epoch;
     FrameOutput frame_output;
+    uint8_t frame_drain_cursor;
     uint8_t loop_cursor;
     bool close_requested;
 } Service;
@@ -1894,7 +1895,8 @@ static void write_be_u64(uint8_t *output, uint64_t value)
 
 static bool queue_frame_output(
     Service *service,
-    MeisoCompositionMediaSource source
+    MeisoCompositionMediaSource source,
+    bool *out_emitted
 )
 {
     MeisoCompositionMediaLatestView latest;
@@ -1903,6 +1905,7 @@ static bool queue_frame_output(
     char metadata[512];
     int written;
 
+    *out_emitted = false;
     if (service->frame_output.pending) {
         return true;
     }
@@ -1977,8 +1980,12 @@ static bool queue_frame_output(
         latest.unit.access_unit.size,
         service->frame_fd >= 0 ? "true" : "false"
     );
-    return written > 0 && (size_t)written < sizeof(metadata) &&
-        emit_line(metadata);
+    if (written <= 0 || (size_t)written >= sizeof(metadata) ||
+        !emit_line(metadata)) {
+        return false;
+    }
+    *out_emitted = true;
+    return true;
 }
 
 static bool write_frame_output(Service *service, bool writable)
@@ -1996,6 +2003,9 @@ static bool write_frame_output(Service *service, bool writable)
     if (result > 0) {
         service->frame_output.offset += (size_t)result;
         if (service->frame_output.offset == service->frame_output.size) {
+            service->frame_drain_cursor =
+                service->frame_output.bytes[8] ==
+                    MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW ? 1U : 0U;
             memset(&service->frame_output, 0, sizeof(service->frame_output));
         }
         return true;
@@ -2597,18 +2607,49 @@ static void destroy_service(Service *service)
 
 static bool drain_latest_frames(Service *service)
 {
+    MeisoCompositionHostAppSnapshot snapshot;
+    uint8_t scan;
+
     if (service->frame_output.pending) {
         return true;
     }
-    if (!queue_frame_output(
-            service, MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW
-        )) {
+    if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
         return false;
     }
-    if (service->frame_output.pending) {
+    if (!snapshot.media_bound || snapshot.media_active_route_mask == 0U) {
         return true;
     }
-    return queue_frame_output(service, MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA);
+    if ((snapshot.media_active_route_mask &
+         (uint8_t)(UINT8_C(1) << service->frame_drain_cursor)) == 0U) {
+        service->frame_drain_cursor =
+            (snapshot.media_active_route_mask &
+             MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER) != 0U ? 0U : 1U;
+    }
+    for (scan = 0U; scan < MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT;
+         ++scan) {
+        uint8_t route = (uint8_t)((service->frame_drain_cursor + scan) %
+            MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT);
+        MeisoCompositionHostAppMediaRouteMask route_mask =
+            (MeisoCompositionHostAppMediaRouteMask)(UINT8_C(1) << route);
+        MeisoCompositionMediaSource source = route == 0U ?
+            MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW :
+            MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA;
+        bool emitted;
+
+        if ((snapshot.media_active_route_mask & route_mask) == 0U) {
+            continue;
+        }
+        if (!queue_frame_output(service, source, &emitted)) {
+            return false;
+        }
+        if (emitted) {
+            if (!service->frame_output.pending) {
+                service->frame_drain_cursor = (uint8_t)(route ^ UINT8_C(1));
+            }
+            return true;
+        }
+    }
+    return true;
 }
 
 static bool run_service(Service *service)
