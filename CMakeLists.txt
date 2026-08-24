@@ -242,6 +242,25 @@ if(UNIX)
             meiso_composition_media_posix_tcp_adapter
     )
     meiso_enable_warnings(meiso_composition_host_app)
+
+    add_library(
+        meiso_composition_edge_app
+        targets/k230d-linux/composition_edge_app.c
+    )
+    target_include_directories(
+        meiso_composition_edge_app
+        PUBLIC targets/k230d-linux
+    )
+    target_link_libraries(
+        meiso_composition_edge_app
+        PUBLIC
+            meiso_composition_debug_peer
+            meiso_composition_media_posix_tcp_adapter
+            meiso_wifi_linux_adapter
+            meiso_device_telemetry_linux_adapter
+            meiso_camera_v4l2_adapter
+    )
+    meiso_enable_warnings(meiso_composition_edge_app)
 endif()
 
 add_library(
@@ -559,6 +578,18 @@ if(TARGET meiso_composition_host_app)
     meiso_enable_warnings(meiso_composition_host_app_test)
 endif()
 
+if(TARGET meiso_composition_edge_app)
+    add_executable(
+        meiso_composition_edge_app_test
+        tests/test_composition_edge_app.c
+    )
+    target_link_libraries(
+        meiso_composition_edge_app_test
+        PRIVATE meiso_composition_edge_app
+    )
+    meiso_enable_warnings(meiso_composition_edge_app_test)
+endif()
+
 add_executable(meiso_runtime_v4_test tests/test_runtime_v4.c)
 target_link_libraries(
     meiso_runtime_v4_test
@@ -847,6 +878,12 @@ if(TARGET meiso_composition_host_app_test)
     add_test(
         NAME meiso_composition_host_app_test
         COMMAND meiso_composition_host_app_test
+    )
+endif()
+if(TARGET meiso_composition_edge_app_test)
+    add_test(
+        NAME meiso_composition_edge_app_test
+        COMMAND meiso_composition_edge_app_test
     )
 endif()
 add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)
