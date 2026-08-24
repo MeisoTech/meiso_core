@@ -433,6 +433,30 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 enable_testing()
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME meiso_k230_debug_dashboard_server_test
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/devtools/web/k230_debug_dashboard/test_server.py"
+    )
+endif()
+find_program(MEISO_NODE_EXECUTABLE node)
+if(MEISO_NODE_EXECUTABLE)
+    add_test(
+        NAME meiso_k230_debug_dashboard_model_test
+        COMMAND
+            "${MEISO_NODE_EXECUTABLE}" --test
+            "${CMAKE_CURRENT_SOURCE_DIR}/devtools/web/k230_debug_dashboard/test_model.mjs"
+    )
+    add_test(
+        NAME meiso_k230_debug_dashboard_javascript_syntax
+        COMMAND
+            "${MEISO_NODE_EXECUTABLE}" --check
+            "${CMAKE_CURRENT_SOURCE_DIR}/devtools/web/k230_debug_dashboard/static/app.js"
+    )
+endif()
 add_test(NAME meiso_resource_test COMMAND meiso_resource_test)
 add_test(NAME meiso_state_test COMMAND meiso_state_test)
 add_test(NAME meiso_stream_test COMMAND meiso_stream_test)
