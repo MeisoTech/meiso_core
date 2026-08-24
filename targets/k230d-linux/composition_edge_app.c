@@ -271,6 +271,16 @@ struct MeisoCompositionEdgeApp {
     uint8_t visible_blob_count;
     uint64_t blob_published_bytes;
     uint64_t blob_transfer_id_high_water;
+    MeisoRuntimeBlobTransferRef blob_receive_transfer;
+    MeisoRuntimeBlobTransferRef blob_result_transfer;
+    uint64_t blob_receive_next_offset;
+    MeisoRuntimeBlobOperation blob_result_operation;
+    bool blob_receive_active;
+    bool blob_receive_begin_ready;
+    bool blob_result_pending;
+    bool blob_result_queued;
+    bool blob_result_marks_ready;
+    bool blob_result_clears_active;
     uint8_t state_scratch[
         MEISO_COMPOSITION_SCENE_DESIRED_STATE_MAX_PAYLOAD_SIZE
     ];
@@ -2434,6 +2444,18 @@ static void enter_terminal(
     }
     meiso_composition_debug_peer_abort(app->peer, error_number);
     app->active_media = NULL;
+    memset(&app->blob_receive_transfer, 0,
+           sizeof(app->blob_receive_transfer));
+    memset(&app->blob_result_transfer, 0,
+           sizeof(app->blob_result_transfer));
+    app->blob_receive_next_offset = 0U;
+    app->blob_result_operation = 0U;
+    app->blob_receive_active = false;
+    app->blob_receive_begin_ready = false;
+    app->blob_result_pending = false;
+    app->blob_result_queued = false;
+    app->blob_result_marks_ready = false;
+    app->blob_result_clears_active = false;
     app->thermal_request_pending = false;
     app->thermal_request_dispatched = false;
     app->thermal_result_present = false;
@@ -2646,6 +2668,61 @@ static bool handle_actual_accept(
     return true;
 }
 
+static bool blob_route_equal(
+    MeisoRuntimeRouteKey lhs,
+    MeisoRuntimeRouteKey rhs
+)
+{
+    return lhs.catalog_generation == rhs.catalog_generation &&
+        meiso_endpoint_id_equal(lhs.endpoint_id, rhs.endpoint_id) &&
+        lhs.endpoint_incarnation == rhs.endpoint_incarnation &&
+        meiso_resource_id_equal(lhs.resource_id, rhs.resource_id) &&
+        lhs.facet == rhs.facet;
+}
+
+static bool blob_transfer_equal(
+    const MeisoRuntimeBlobTransferRef *lhs,
+    const MeisoRuntimeBlobTransferRef *rhs
+)
+{
+    return lhs != NULL && rhs != NULL &&
+        blob_route_equal(lhs->route, rhs->route) &&
+        lhs->transfer_id == rhs->transfer_id &&
+        meiso_content_id_equal(&lhs->content_id, &rhs->content_id) &&
+        lhs->total_size == rhs->total_size;
+}
+
+static bool queue_blob_result(
+    MeisoCompositionEdgeApp *app,
+    const MeisoRuntimeBlobTransferRef *transfer,
+    MeisoRuntimeBlobOperation operation,
+    bool marks_ready,
+    bool clears_active
+)
+{
+    MeisoRuntimeSchedulerWork work;
+    if (app == NULL || transfer == NULL || app->blob_result_pending ||
+        app->blob_result_queued) {
+        return false;
+    }
+    memset(&work, 0, sizeof(work));
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_BLOB_RESULT;
+    work.value.blob_result.transfer = *transfer;
+    work.value.blob_result.operation = operation;
+    if (meiso_composition_debug_peer_queue_work(
+            app->peer, SOURCE_BLOB_RESULT, &work
+        ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+        return false;
+    }
+    app->blob_result_transfer = *transfer;
+    app->blob_result_operation = operation;
+    app->blob_result_pending = true;
+    app->blob_result_queued = true;
+    app->blob_result_marks_ready = marks_ready;
+    app->blob_result_clears_active = clears_active;
+    return true;
+}
+
 static bool handle_blob_request(
     MeisoCompositionEdgeApp *app,
     const MeisoRuntimeEvent *event,
@@ -2654,42 +2731,126 @@ static bool handle_blob_request(
 )
 {
     MeisoRuntimeBlobPublishReport report;
+    uint64_t previous_high_water;
+    uint64_t chunk_end;
     bool prepare_attempted;
     bool active_plan;
+    bool begin_accepted = false;
+    bool result_required = false;
+    bool result_clears_active = false;
+    bool core_published = false;
     MeisoCompositionScenePrepareStatus prepare;
+    previous_high_water = app->blob_transfer_id_high_water;
     if (event->blob_transfer.transfer_id >
         app->blob_transfer_id_high_water) {
         app->blob_transfer_id_high_water = event->blob_transfer.transfer_id;
     }
-    if (event->blob_operation == MEISO_RUNTIME_BLOB_COMMIT) {
-        memset(&report, 0, sizeof(report));
-        if (meiso_composition_debug_peer_publish_blob_receive(
-                app->peer, &event->blob_transfer, app->blob_store,
-                meiso_composition_scene_mesh_blob_verify, NULL, &report
-            ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+    switch (event->blob_operation) {
+    case MEISO_RUNTIME_BLOB_BEGIN:
+        begin_accepted = event->blob_transfer.transfer_id >
+                previous_high_water &&
+            meiso_content_id_valid(&event->blob_transfer.content_id) &&
+            !app->blob_receive_active &&
+            event->blob_transfer.total_size <=
+                MEISO_COMPOSITION_SCENE_MAX_MESH_BLOB_SIZE;
+        if (begin_accepted) {
+            app->blob_receive_transfer = event->blob_transfer;
+            app->blob_receive_next_offset = 0U;
+            app->blob_receive_active = true;
+            app->blob_receive_begin_ready = false;
+        }
+        result_required = true;
+        break;
+    case MEISO_RUNTIME_BLOB_CHUNK:
+        if (!app->blob_receive_active ||
+            !blob_transfer_equal(
+                &event->blob_transfer, &app->blob_receive_transfer
+            ) || !app->blob_receive_begin_ready) {
             return false;
         }
-        if (report.result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED) {
-            if (app->blob_published_bytes >
-                UINT64_MAX - event->blob_transfer.total_size) {
+        if (event->blob_offset != app->blob_receive_next_offset ||
+            event->blob_payload.size > UINT64_MAX - event->blob_offset) {
+            result_required = true;
+            result_clears_active = true;
+            break;
+        }
+        chunk_end = event->blob_offset + event->blob_payload.size;
+        if (chunk_end > app->blob_receive_transfer.total_size ||
+            (event->blob_payload.size <
+                    MEISO_RUNTIME_V3_BLOB_CHUNK_PAYLOAD_SIZE &&
+             chunk_end != app->blob_receive_transfer.total_size)) {
+            result_required = true;
+            result_clears_active = true;
+        } else {
+            app->blob_receive_next_offset = chunk_end;
+        }
+        break;
+    case MEISO_RUNTIME_BLOB_COMMIT:
+        if (!app->blob_receive_active ||
+            !blob_transfer_equal(
+                &event->blob_transfer, &app->blob_receive_transfer
+            ) || !app->blob_receive_begin_ready) {
+            return false;
+        }
+        result_required = true;
+        result_clears_active = true;
+        if (app->blob_receive_next_offset ==
+                event->blob_transfer.total_size &&
+            meiso_runtime_blob_sha256_verify(
+                &event->blob_transfer.content_id,
+                event->blob_payload, NULL
+            )) {
+            memset(&report, 0, sizeof(report));
+            if (meiso_composition_debug_peer_publish_blob_receive(
+                    app->peer, &event->blob_transfer, app->blob_store,
+                    meiso_composition_scene_mesh_blob_verify, NULL, &report
+                ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
                 return false;
             }
-            app->blob_published_bytes += event->blob_transfer.total_size;
+            if (report.result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED) {
+                if (app->blob_published_bytes >
+                    UINT64_MAX - event->blob_transfer.total_size) {
+                    return false;
+                }
+                app->blob_published_bytes +=
+                    event->blob_transfer.total_size;
+            }
+            core_published =
+                report.result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED ||
+                report.result == MEISO_RUNTIME_BLOB_RESULT_DUPLICATE;
+            if (core_published &&
+                (!remember_visible_blob(app, &event->blob_transfer) ||
+                 !apply_visible_blobs(app) ||
+                 !prepare_stored_scene(
+                     app, &prepare_attempted, &active_plan, &prepare
+                 ) || !try_prepare_presentation(app, now) ||
+                 !refresh_composition_actuals(app))) {
+                return false;
+            }
         }
-        if ((report.result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED ||
-             report.result == MEISO_RUNTIME_BLOB_RESULT_DUPLICATE) &&
-            (!remember_visible_blob(app, &event->blob_transfer) ||
-             !apply_visible_blobs(app) ||
-             !prepare_stored_scene(
-                 app, &prepare_attempted, &active_plan, &prepare
-             ) || !try_prepare_presentation(app, now) ||
-             !refresh_composition_actuals(app))) {
+        break;
+    case MEISO_RUNTIME_BLOB_ABORT:
+        if (!app->blob_receive_active ||
+            !blob_transfer_equal(
+                &event->blob_transfer, &app->blob_receive_transfer
+            )) {
             return false;
         }
+        result_required = true;
+        result_clears_active = true;
+        break;
+    default:
+        return false;
+    }
+    if (result_required && !queue_blob_result(
+            app, &event->blob_transfer, event->blob_operation,
+            begin_accepted, result_clears_active
+        )) {
+        return false;
     }
     memset(out_result, 0, sizeof(*out_result));
     out_result->event_present = true;
-    out_result->event = event->blob_operation == MEISO_RUNTIME_BLOB_COMMIT ?
+    out_result->event = core_published ?
         MEISO_COMPOSITION_EDGE_APP_PUMP_BLOB_PUBLISHED :
         MEISO_COMPOSITION_EDGE_APP_PUMP_CONTROL_PROGRESS;
     return true;
@@ -2733,6 +2894,55 @@ static bool handle_source_completion(
 {
     MeisoRuntimeSchedulerCompletion completion;
     size_t index;
+    if (meiso_composition_debug_peer_take_completion(
+            app->peer, SOURCE_BLOB_RESULT, &completion
+        ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+        app->blob_result_queued = false;
+        if (!app->blob_result_pending || completion.code !=
+                MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
+            enter_terminal(
+                app,
+                MEISO_COMPOSITION_EDGE_APP_TERMINAL_INTERNAL_FAILURE,
+                (int)completion.runtime_status
+            );
+            memset(out_result, 0, sizeof(*out_result));
+            out_result->event_present = true;
+            out_result->event =
+                MEISO_COMPOSITION_EDGE_APP_PUMP_EVENT_TERMINAL;
+            return true;
+        }
+        if (app->blob_result_marks_ready && app->blob_receive_active &&
+            blob_transfer_equal(
+                &app->blob_result_transfer, &app->blob_receive_transfer
+            )) {
+            app->blob_receive_begin_ready = true;
+        }
+        if (app->blob_result_clears_active && app->blob_receive_active &&
+            blob_transfer_equal(
+                &app->blob_result_transfer, &app->blob_receive_transfer
+            )) {
+            memset(
+                &app->blob_receive_transfer, 0,
+                sizeof(app->blob_receive_transfer)
+            );
+            app->blob_receive_next_offset = 0U;
+            app->blob_receive_active = false;
+            app->blob_receive_begin_ready = false;
+        }
+        memset(
+            &app->blob_result_transfer, 0,
+            sizeof(app->blob_result_transfer)
+        );
+        app->blob_result_operation = 0U;
+        app->blob_result_pending = false;
+        app->blob_result_marks_ready = false;
+        app->blob_result_clears_active = false;
+        memset(out_result, 0, sizeof(*out_result));
+        out_result->event_present = true;
+        out_result->event =
+            MEISO_COMPOSITION_EDGE_APP_PUMP_CONTROL_PROGRESS;
+        return true;
+    }
     for (index = 0U; index < MEISO_COMPOSITION_EDGE_APP_DESIRED_COUNT;
          ++index) {
         if (meiso_composition_debug_peer_take_completion(
@@ -2849,6 +3059,9 @@ static bool app_source_work_outstanding(
     size_t index;
     if (app == NULL) {
         return false;
+    }
+    if (app->blob_result_pending || app->blob_result_queued) {
+        return true;
     }
     for (index = 0U; index < MEISO_COMPOSITION_EDGE_APP_DESIRED_COUNT;
          ++index) {
@@ -4511,6 +4724,14 @@ bool meiso_composition_edge_app_snapshot(
     );
     value.blob_published_bytes = app->blob_published_bytes;
     value.blob_transfer_id_high_water = app->blob_transfer_id_high_water;
+    value.blob_transfer = app->blob_result_pending ?
+        app->blob_result_transfer : app->blob_receive_transfer;
+    value.blob_next_offset = app->blob_receive_next_offset;
+    value.blob_result_operation = app->blob_result_operation;
+    value.blob_transfer_active = app->blob_receive_active;
+    value.blob_begin_ready = app->blob_receive_begin_ready;
+    value.blob_result_pending = app->blob_result_pending;
+    value.blob_result_queued = app->blob_result_queued;
     value.next_thermal_request_id = app->next_thermal_request_id;
     value.thermal_request_pending = app->thermal_request_pending;
     value.media_slots_consumed = app->media_slots_consumed;

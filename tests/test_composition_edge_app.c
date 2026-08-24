@@ -840,6 +840,357 @@ static bool route_key_equal(
         lhs.facet == rhs.facet;
 }
 
+static bool blob_transfer_equal(
+    const MeisoRuntimeBlobTransferRef *lhs,
+    const MeisoRuntimeBlobTransferRef *rhs
+)
+{
+    return lhs != NULL && rhs != NULL &&
+        route_key_equal(lhs->route, rhs->route) &&
+        lhs->transfer_id == rhs->transfer_id &&
+        lhs->total_size == rhs->total_size &&
+        meiso_content_id_equal(&lhs->content_id, &rhs->content_id);
+}
+
+static bool drive_blob_transfer(
+    MeisoCompositionEdgeApp *edge,
+    MeisoCompositionDebugPeer *host,
+    MeisoByteView payload,
+    const MeisoContentId *content_id,
+    MeisoRuntimeBlobResult expected_result,
+    uint32_t expected_published_count,
+    uint64_t expected_published_bytes,
+    uint64_t expected_transfer_id,
+    MeisoRuntimeBlobTransferRef *out_transfer
+)
+{
+    MeisoRuntimeRouteKey route;
+    MeisoRuntimeSchedulerWork work;
+    MeisoRuntimeBlobTransferRef transfer;
+    MeisoRuntimeBlobTransferRef queued_result_transfer;
+    MeisoCompositionEdgeAppSnapshot snapshot;
+    bool transfer_present = false;
+    bool begin_completed = false;
+    bool ready_seen = false;
+    bool chunk_queued = false;
+    bool chunk_completed = false;
+    bool commit_queued = false;
+    bool commit_completed = false;
+    bool terminal_seen = false;
+    bool saw_begin_pending = false;
+    bool saw_begin_queued = false;
+    bool saw_begin_ready = false;
+    bool saw_full_chunk = false;
+    bool saw_commit_pending = false;
+    bool saw_commit_queued = false;
+    bool checked_begin_queued_borrow = false;
+    bool checked_commit_queued_borrow = false;
+    uint64_t blob_publish_events = 0U;
+    uint64_t blob_result_events = 0U;
+    size_t step;
+
+    CHECK(edge != NULL && host != NULL && payload.data != NULL &&
+          payload.size != 0U && content_id != NULL && out_transfer != NULL &&
+          (expected_result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED ||
+           expected_result == MEISO_RUNTIME_BLOB_RESULT_INTEGRITY_FAILED) &&
+          meiso_composition_debug_peer_route_key(
+              host, ROUTE_MESH_BLOB, &route
+          ));
+    memset(&transfer, 0, sizeof(transfer));
+    memset(&queued_result_transfer, 0, sizeof(queued_result_transfer));
+    memset(&work, 0, sizeof(work));
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_BLOB_BEGIN;
+    work.value.blob_begin.route = route;
+    work.value.blob_begin.content_id = *content_id;
+    work.value.blob_begin.total_size = payload.size;
+    CHECK(meiso_composition_debug_peer_queue_work(host, 3U, &work) ==
+          MEISO_COMPOSITION_DEBUG_PEER_OK);
+
+    for (step = 0U; step < 60000U; ++step) {
+        MeisoCompositionDebugPeerPumpResult host_result;
+        MeisoCompositionDebugPeerPumpStatus host_status;
+        MeisoCompositionEdgeAppPumpResult edge_result;
+        MeisoCompositionEdgeAppPumpStatus edge_status;
+        MeisoCompositionEdgeAppIoReady io = {
+            true, true, false, false, false,
+            {77U, UINT64_C(50000000000) + (uint64_t)step}
+        };
+
+        memset(&host_result, 0, sizeof(host_result));
+        host_status = meiso_composition_debug_peer_pump(
+            host, true, true, &host_result
+        );
+        CHECK(benign_host_status(host_status));
+        if (host_result.completed_source_present) {
+            MeisoRuntimeSchedulerCompletion completion;
+
+            memset(&completion, 0, sizeof(completion));
+            CHECK(meiso_composition_debug_peer_take_completion(
+                      host, host_result.completed_source_index, &completion
+                  ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                  completion.code ==
+                      MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT);
+            if (host_result.completed_source_index == 3U) {
+                CHECK(!begin_completed &&
+                      completion.kind ==
+                          MEISO_RUNTIME_SCHEDULER_WORK_BLOB_BEGIN &&
+                      completion.generated_blob_transfer_present &&
+                      completion.generated_blob_transfer.transfer_id ==
+                          expected_transfer_id &&
+                      completion.generated_blob_transfer.total_size ==
+                          payload.size &&
+                      meiso_content_id_equal(
+                          &completion.generated_blob_transfer.content_id,
+                          content_id
+                      ) && route_key_equal(
+                          completion.generated_blob_transfer.route, route
+                      ));
+                transfer = completion.generated_blob_transfer;
+                transfer_present = true;
+                begin_completed = true;
+            } else if (host_result.completed_source_index == 4U) {
+                CHECK(chunk_queued && !chunk_completed &&
+                      completion.kind ==
+                          MEISO_RUNTIME_SCHEDULER_WORK_BLOB_CHUNK &&
+                      !completion.generated_blob_transfer_present);
+                chunk_completed = true;
+            } else if (host_result.completed_source_index == 5U) {
+                CHECK(commit_queued && !commit_completed &&
+                      completion.kind ==
+                          MEISO_RUNTIME_SCHEDULER_WORK_BLOB_COMMIT &&
+                      !completion.generated_blob_transfer_present);
+                commit_completed = true;
+            } else {
+                CHECK(false);
+            }
+        }
+        if (host_result.event_present &&
+            host_result.event.type == MEISO_RUNTIME_EVENT_BLOB_RESULT) {
+            const MeisoRuntimeEvent *event = &host_result.event;
+
+            ++blob_result_events;
+            CHECK(transfer_present &&
+                  blob_transfer_equal(&event->blob_transfer, &transfer));
+            if (event->blob_operation == MEISO_RUNTIME_BLOB_BEGIN) {
+                CHECK(!ready_seen && !terminal_seen &&
+                      event->blob_result ==
+                          MEISO_RUNTIME_BLOB_RESULT_READY &&
+                      event->blob_next_offset == 0U);
+                ready_seen = true;
+            } else if (event->blob_operation ==
+                       MEISO_RUNTIME_BLOB_COMMIT) {
+                CHECK(commit_queued && !terminal_seen &&
+                      event->blob_result == expected_result &&
+                      event->blob_next_offset == payload.size);
+                terminal_seen = true;
+            } else {
+                CHECK(false);
+            }
+        }
+        if (ready_seen && begin_completed && !chunk_queued) {
+            memset(&work, 0, sizeof(work));
+            work.kind = MEISO_RUNTIME_SCHEDULER_WORK_BLOB_CHUNK;
+            work.value.blob_chunk.transfer = transfer;
+            work.value.blob_chunk.offset = 0U;
+            work.value.blob_chunk.payload = payload;
+            CHECK(meiso_composition_debug_peer_queue_work(host, 4U, &work) ==
+                  MEISO_COMPOSITION_DEBUG_PEER_OK);
+            chunk_queued = true;
+        }
+        if (chunk_completed && !commit_queued) {
+            memset(&work, 0, sizeof(work));
+            work.kind = MEISO_RUNTIME_SCHEDULER_WORK_BLOB_COMMIT;
+            work.value.blob_commit.transfer = transfer;
+            CHECK(meiso_composition_debug_peer_queue_work(host, 5U, &work) ==
+                  MEISO_COMPOSITION_DEBUG_PEER_OK);
+            commit_queued = true;
+        }
+
+        CHECK(meiso_composition_edge_app_snapshot(edge, &snapshot));
+        io.control_writable = !snapshot.blob_result_queued ||
+            (snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_BEGIN ?
+                 checked_begin_queued_borrow :
+                 checked_commit_queued_borrow);
+        memset(&edge_result, 0, sizeof(edge_result));
+        edge_status = meiso_composition_edge_app_pump(edge, &io, &edge_result);
+        CHECK(benign_edge_status(edge_status));
+        if (edge_result.event_present &&
+            edge_result.event ==
+                MEISO_COMPOSITION_EDGE_APP_PUMP_BLOB_PUBLISHED) {
+            ++blob_publish_events;
+        }
+        CHECK(meiso_composition_edge_app_snapshot(edge, &snapshot));
+        if (snapshot.blob_result_pending || snapshot.blob_result_queued ||
+            snapshot.blob_transfer_active) {
+            CHECK(transfer_present &&
+                  blob_transfer_equal(&snapshot.blob_transfer, &transfer) &&
+                  snapshot.blob_transfer_id_high_water ==
+                      expected_transfer_id);
+        }
+        if (snapshot.blob_result_pending &&
+            snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_BEGIN) {
+            saw_begin_pending = true;
+        }
+        if (snapshot.blob_result_queued &&
+            snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_BEGIN) {
+            saw_begin_queued = true;
+        }
+        if (snapshot.blob_transfer_active && snapshot.blob_begin_ready) {
+            saw_begin_ready = true;
+        }
+        if (snapshot.blob_transfer_active &&
+            snapshot.blob_next_offset == payload.size) {
+            saw_full_chunk = true;
+        }
+        if (snapshot.blob_result_pending &&
+            snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_COMMIT) {
+            saw_commit_pending = true;
+        }
+        if (snapshot.blob_result_queued &&
+            snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_COMMIT) {
+            saw_commit_queued = true;
+        }
+        if (snapshot.blob_result_queued &&
+            ((snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_BEGIN &&
+              !checked_begin_queued_borrow) ||
+             (snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+              !checked_commit_queued_borrow))) {
+            const MeisoCompositionEdgeAppSnapshot queued = snapshot;
+            const MeisoCompositionEdgeAppIoReady idle = {
+                false, false, false, false, false,
+                {77U, UINT64_C(50000070000) + (uint64_t)step}
+            };
+
+            queued_result_transfer = snapshot.blob_transfer;
+            memset(&edge_result, 0xa5, sizeof(edge_result));
+            edge_status = meiso_composition_edge_app_pump(
+                edge, &idle, &edge_result
+            );
+            CHECK(benign_edge_status(edge_status) &&
+                  meiso_composition_edge_app_snapshot(edge, &snapshot) &&
+                  snapshot.blob_result_pending &&
+                  snapshot.blob_result_queued &&
+                  snapshot.blob_result_operation ==
+                      queued.blob_result_operation &&
+                  blob_transfer_equal(
+                      &snapshot.blob_transfer, &queued_result_transfer
+                  ));
+            if (snapshot.blob_result_operation == MEISO_RUNTIME_BLOB_BEGIN) {
+                checked_begin_queued_borrow = true;
+            } else {
+                CHECK(snapshot.blob_result_operation ==
+                      MEISO_RUNTIME_BLOB_COMMIT);
+                checked_commit_queued_borrow = true;
+            }
+        }
+        if (terminal_seen && begin_completed && chunk_completed &&
+            commit_completed && !snapshot.blob_transfer_active &&
+            !snapshot.blob_result_pending && !snapshot.blob_result_queued &&
+            snapshot.blob_published_count == expected_published_count &&
+            snapshot.blob_published_bytes == expected_published_bytes &&
+            snapshot.blob_transfer_id_high_water == expected_transfer_id) {
+            break;
+        }
+    }
+    CHECK(step < 60000U && begin_completed && ready_seen && chunk_completed &&
+          commit_completed && terminal_seen && saw_begin_pending &&
+          saw_begin_queued && saw_begin_ready && saw_full_chunk &&
+          saw_commit_pending && saw_commit_queued &&
+          checked_begin_queued_borrow && checked_commit_queued_borrow &&
+          blob_result_events == 2U &&
+          blob_publish_events ==
+              (expected_result == MEISO_RUNTIME_BLOB_RESULT_PUBLISHED ?
+                   1U : 0U));
+    *out_transfer = transfer;
+    return true;
+}
+
+static bool drive_blob_carriage(
+    MeisoCompositionEdgeApp *edge,
+    MeisoCompositionDebugPeer *host,
+    MeisoContentId *out_cube_content_id,
+    size_t *out_cube_size,
+    uint64_t *out_resident_mesh_bytes
+)
+{
+    uint8_t cube[512];
+    uint8_t corrupt[512];
+    size_t cube_size = 0U;
+    MeisoContentId cube_content_id;
+    MeisoCompositionSceneMeshView cube_view;
+    MeisoRuntimeBlobTransferRef published;
+    MeisoRuntimeBlobTransferRef rejected;
+    MeisoCompositionEdgeAppSnapshot snapshot;
+    uint64_t result_events_after_terminal = 0U;
+    size_t step;
+
+    CHECK(edge != NULL && host != NULL && out_cube_content_id != NULL &&
+          out_cube_size != NULL && out_resident_mesh_bytes != NULL &&
+          meiso_composition_scene_mesh_encode(
+              meiso_composition_scene_canonical_cube(),
+              (MeisoMutableBuffer){cube, sizeof(cube)}, &cube_size
+          ) == MEISO_COMPOSITION_SCENE_CODEC_OK && cube_size == 304U &&
+          meiso_composition_scene_mesh_content_id(
+              (MeisoByteView){cube, cube_size}, &cube_content_id
+          ) && meiso_composition_scene_mesh_decode(
+              (MeisoByteView){cube, cube_size}, &cube_view
+          ) == MEISO_COMPOSITION_SCENE_CODEC_OK &&
+          cube_view.vertex_records.size <=
+              UINT64_MAX - cube_view.index_records.size);
+    CHECK(drive_blob_transfer(
+        edge, host, (MeisoByteView){cube, cube_size}, &cube_content_id,
+        MEISO_RUNTIME_BLOB_RESULT_PUBLISHED, 1U, cube_size, 1U, &published
+    ));
+    CHECK(meiso_composition_edge_app_snapshot(edge, &snapshot) &&
+          snapshot.blob_published_count == 1U &&
+          snapshot.blob_published_bytes == cube_size &&
+          snapshot.blob_transfer_id_high_water == 1U);
+
+    memcpy(corrupt, cube, cube_size);
+    corrupt[cube_size - 1U] ^= UINT8_C(0x01);
+    CHECK(drive_blob_transfer(
+        edge, host, (MeisoByteView){corrupt, cube_size}, &cube_content_id,
+        MEISO_RUNTIME_BLOB_RESULT_INTEGRITY_FAILED, 1U, cube_size, 2U,
+        &rejected
+    ) && published.transfer_id == 1U && rejected.transfer_id == 2U);
+    for (step = 0U; step < 512U; ++step) {
+        MeisoCompositionDebugPeerPumpResult host_result;
+        MeisoCompositionDebugPeerPumpStatus host_status;
+        MeisoCompositionEdgeAppPumpResult edge_result;
+        const MeisoCompositionEdgeAppIoReady io = {
+            true, true, false, false, false,
+            {77U, UINT64_C(60000000000) + (uint64_t)step}
+        };
+
+        memset(&host_result, 0, sizeof(host_result));
+        host_status = meiso_composition_debug_peer_pump(
+            host, true, true, &host_result
+        );
+        CHECK(benign_host_status(host_status));
+        if (host_result.event_present &&
+            host_result.event.type == MEISO_RUNTIME_EVENT_BLOB_RESULT) {
+            ++result_events_after_terminal;
+        }
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK(benign_edge_status(
+            meiso_composition_edge_app_pump(edge, &io, &edge_result)
+        ));
+    }
+    CHECK(result_events_after_terminal == 0U &&
+          meiso_composition_edge_app_snapshot(edge, &snapshot) &&
+          !snapshot.blob_transfer_active && !snapshot.blob_result_pending &&
+          !snapshot.blob_result_queued &&
+          snapshot.blob_published_count == 1U &&
+          snapshot.blob_published_bytes == cube_size &&
+          snapshot.blob_transfer_id_high_water == 2U);
+    *out_cube_content_id = cube_content_id;
+    *out_cube_size = cube_size;
+    *out_resident_mesh_bytes =
+        (uint64_t)cube_view.vertex_records.size +
+        (uint64_t)cube_view.index_records.size;
+    return true;
+}
+
 static bool encode_wifi_desired(
     MeisoWifiTelemetryFieldMask selected_fields,
     uint32_t sample_period_ms,
@@ -2539,11 +2890,15 @@ static bool drive_empty_scene_world_swaps_and_disable(
     MeisoCompositionEdgeApp *edge,
     MeisoCompositionDebugPeer *host,
     const CatalogStorage *catalog,
+    const MeisoContentId *cube_content_id,
+    size_t cube_blob_size,
+    uint64_t cube_resident_mesh_bytes,
     uint8_t expected_media_slot,
     uint8_t expected_media_slots_consumed
 )
 {
     MeisoCompositionSceneDesired scene = empty_scene_value(1U);
+    MeisoCompositionSceneObject *cube = &scene.objects[0];
     MeisoCompositionScenePresentationPlan plan = test_presentation_plan();
     MeisoCompositionEdgeAppSnapshot snapshot;
     MeisoCompositionEdgeAppSnapshot active_snapshot;
@@ -2558,7 +2913,22 @@ static bool drive_empty_scene_world_swaps_and_disable(
     uint64_t desired_version;
     uint64_t now_base = UINT64_C(100000000000);
 
+    scene.camera.position[2] = -3.0F;
+    scene.object_count = 1U;
+    cube->id = (MeisoCompositionSceneObjectId){1U, 1U};
+    if (cube_content_id != NULL) {
+        cube->mesh_content_id = *cube_content_id;
+    }
+    cube->space = MEISO_COMPOSITION_SCENE_SPACE_WORLD;
+    cube->space_epoch = scene.camera.space_epoch;
+    cube->transform.orientation_xyzw[3] = 1.0F;
+    cube->transform.scale[0] = 1.0F;
+    cube->transform.scale[1] = 1.0F;
+    cube->transform.scale[2] = 1.0F;
+    cube->flags = MEISO_COMPOSITION_SCENE_OBJECT_VISIBLE;
     CHECK(edge != NULL && host != NULL && catalog != NULL &&
+          cube_content_id != NULL && cube_blob_size != 0U &&
+          cube_resident_mesh_bytes != 0U &&
           plan.plan_generation == 1U && plan.capability_generation == 1U &&
           meiso_composition_scene_desired_encode(
               &scene,
@@ -2597,9 +2967,20 @@ static bool drive_empty_scene_world_swaps_and_disable(
               edge, host, catalog, false, true, 2U,
               (MeisoByteView){plan_suffix, plan_suffix_size},
               COMPOSITION_DESIRED_PLAN_ACTIVE, now_base, &active_snapshot
-          ) && active_snapshot.active_world_present &&
+          ));
+    CHECK(active_snapshot.active_world_present &&
           active_snapshot.active_world.desired_state_version == 1U &&
           active_snapshot.active_world.plan_generation == 1U &&
+          active_snapshot.scene_status_present &&
+          active_snapshot.scene_status.reason ==
+              MEISO_COMPOSITION_SCENE_REASON_READY &&
+          active_snapshot.scene_status.active_object_count == 1U &&
+          active_snapshot.scene_status.unique_mesh_count == 1U &&
+          active_snapshot.scene_status.published_blob_count == 1U &&
+          active_snapshot.scene_status.published_blob_bytes ==
+              cube_blob_size &&
+          active_snapshot.scene_status.resident_mesh_bytes ==
+              cube_resident_mesh_bytes &&
           active_snapshot.presentation_status.active_plan_generation == 1U &&
           active_snapshot.media.bound &&
           active_snapshot.media.slot_index == expected_media_slot &&
@@ -3195,6 +3576,9 @@ static bool test_init_and_control_bootstrap(void)
     MediaPreacceptGate preaccept;
     HostMediaFixture host_media;
     MeisoCompositionEdgeAppMediaBindReceipt media_receipt;
+    MeisoContentId cube_content_id;
+    size_t cube_blob_size = 0U;
+    uint64_t cube_resident_mesh_bytes = 0U;
     uint64_t camera_epoch = 0U;
     size_t step;
     bool ready = false;
@@ -3304,6 +3688,10 @@ static bool test_init_and_control_bootstrap(void)
     CHECK_GOTO(drive_wifi_desired_actual(
           edge, host, &fixture.catalog
         ), cleanup);
+    CHECK_GOTO(drive_blob_carriage(
+          edge, host, &cube_content_id, &cube_blob_size,
+          &cube_resident_mesh_bytes
+        ), cleanup);
     CHECK_GOTO(drive_wifi_back_to_back_replacement(
           edge, host, &fixture.catalog
         ), cleanup);
@@ -3398,7 +3786,8 @@ static bool test_init_and_control_bootstrap(void)
               &fixture.camera, UINT64_C(2200000001), 3U
           ), cleanup);
     CHECK_GOTO(drive_empty_scene_world_swaps_and_disable(
-          edge, host, &fixture.catalog, 2U, 3U
+          edge, host, &fixture.catalog, &cube_content_id, cube_blob_size,
+          cube_resident_mesh_bytes, 2U, 3U
         ), cleanup);
     CHECK_GOTO(trigger_active_media_transport_loss(
           edge, &media_host_fd, media_edge_fd

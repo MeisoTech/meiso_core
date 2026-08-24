@@ -283,6 +283,19 @@ typedef struct {
     uint32_t blob_published_count;
     uint64_t blob_published_bytes;
     uint64_t blob_transfer_id_high_water;
+    /*
+     * While result_pending this is the exact deep-copied pending RESULT
+     * reference; otherwise it is the active receive reference. next_offset
+     * belongs to the active receive and becomes zero after its terminal
+     * RESULT completion. No Blob payload borrow escapes the pump call.
+     */
+    MeisoRuntimeBlobTransferRef blob_transfer;
+    uint64_t blob_next_offset;
+    MeisoRuntimeBlobOperation blob_result_operation;
+    bool blob_transfer_active;
+    bool blob_begin_ready;
+    bool blob_result_pending;
+    bool blob_result_queued;
     uint64_t next_thermal_request_id;
     bool thermal_request_pending;
     uint8_t media_slots_consumed;
