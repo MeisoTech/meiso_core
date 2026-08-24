@@ -454,6 +454,18 @@ static bool cleanup_ledger_clear(
         snapshot.mapped_bytes == 0U;
 }
 
+static bool frame_ref_equal(
+    MeisoCameraV4l2FrameRef lhs,
+    MeisoCameraV4l2FrameRef rhs
+)
+{
+    return lhs.run_generation == rhs.run_generation &&
+        lhs.borrow_serial == rhs.borrow_serial &&
+        lhs.buffer_index == rhs.buffer_index &&
+        lhs.driver_sequence == rhs.driver_sequence &&
+        lhs.sequence_provenance == rhs.sequence_provenance;
+}
+
 int meiso_camera_v4l2_capture_once_run(
     FILE *output,
     FILE *error_output,
@@ -573,9 +585,8 @@ int meiso_camera_v4l2_capture_once_run(
         if (!meiso_camera_v4l2_snapshot(adapter, &snapshot) ||
             snapshot.phase != MEISO_CAMERA_V4L2_PHASE_RUNNING ||
             !snapshot.stream_on || !snapshot.frame_borrowed ||
-            memcmp(
-                &snapshot.borrowed_frame, &frame.ref, sizeof(frame.ref)
-            ) != 0 || snapshot.mapped_buffer_count !=
+            !frame_ref_equal(snapshot.borrowed_frame, frame.ref) ||
+            snapshot.mapped_buffer_count !=
                 MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
             snapshot.queued_buffer_count + 1U !=
                 MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
