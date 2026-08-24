@@ -104,6 +104,34 @@ target_link_libraries(
 meiso_enable_warnings(meiso_composition_session_v2_profile)
 
 add_library(
+    meiso_device_telemetry_profile
+    profiles/device-telemetry-v0/device_telemetry.c
+)
+target_include_directories(
+    meiso_device_telemetry_profile
+    PUBLIC profiles/device-telemetry-v0
+)
+target_link_libraries(meiso_device_telemetry_profile PUBLIC meiso_runtime)
+meiso_enable_warnings(meiso_device_telemetry_profile)
+
+add_library(
+    meiso_composition_session_v3_profile
+    profiles/composition-scene-lab-v0/composition_session_v3.c
+)
+target_include_directories(
+    meiso_composition_session_v3_profile
+    PUBLIC profiles/composition-scene-lab-v0
+)
+target_link_libraries(
+    meiso_composition_session_v3_profile
+    PUBLIC
+        meiso_composition_scene_profile
+        meiso_wifi_telemetry_profile
+        meiso_device_telemetry_profile
+)
+meiso_enable_warnings(meiso_composition_session_v3_profile)
+
+add_library(
     meiso_four_kind_lab_protocol
     profiles/four-kind-lab-v0/lab_protocol.c
 )
@@ -323,6 +351,23 @@ target_link_libraries(
 )
 meiso_enable_warnings(meiso_composition_tx_scheduler_test)
 
+add_executable(
+    meiso_composition_media_wire_test
+    tests/test_composition_media_wire.c
+)
+target_link_libraries(
+    meiso_composition_media_wire_test
+    PRIVATE meiso_composition_session_v3_profile
+)
+meiso_enable_warnings(meiso_composition_media_wire_test)
+
+add_executable(meiso_runtime_v4_test tests/test_runtime_v4.c)
+target_link_libraries(
+    meiso_runtime_v4_test
+    PRIVATE meiso_composition_session_v3_profile
+)
+meiso_enable_warnings(meiso_runtime_v4_test)
+
 if(TARGET meiso_posix_tcp_adapter)
     add_executable(meiso_posix_tcp_test tests/test_posix_tcp.c)
     target_link_libraries(
@@ -535,6 +580,11 @@ add_test(
     NAME meiso_composition_tx_scheduler_test
     COMMAND meiso_composition_tx_scheduler_test
 )
+add_test(
+    NAME meiso_composition_media_wire_test
+    COMMAND meiso_composition_media_wire_test
+)
+add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)
 if(TARGET meiso_posix_tcp_test)
     add_test(NAME meiso_posix_tcp_test COMMAND meiso_posix_tcp_test)
 endif()

@@ -16,6 +16,7 @@ extern "C" {
 
 #define MEISO_RUNTIME_WIRE_VERSION_V2 2U
 #define MEISO_RUNTIME_WIRE_VERSION_V3 3U
+#define MEISO_RUNTIME_WIRE_VERSION_V4 4U
 /* Compatibility name: the original initializer and wire remain v2. */
 #define MEISO_RUNTIME_WIRE_VERSION MEISO_RUNTIME_WIRE_VERSION_V2
 #define MEISO_RUNTIME_WIRE_HEADER_SIZE 12U
@@ -28,6 +29,7 @@ extern "C" {
 #define MEISO_RUNTIME_V3_BLOB_COMMIT_WIRE_SIZE 120U
 #define MEISO_RUNTIME_V3_BLOB_ABORT_WIRE_SIZE 84U
 #define MEISO_RUNTIME_V3_BLOB_RESULT_WIRE_SIZE 96U
+#define MEISO_RUNTIME_V4_ROUTE_RECORD_WIRE_SIZE 80U
 
 /*
  * MRT0 v3 Blob bodies begin after the common 12-byte header. All integers are
@@ -77,6 +79,18 @@ typedef struct {
     MeisoRuntimeFacet facet;
 } MeisoRuntimeRouteDescriptor;
 
+typedef uint8_t MeisoRuntimeDeliveryClass;
+enum {
+    MEISO_RUNTIME_DELIVERY_INLINE = 1,
+    MEISO_RUNTIME_DELIVERY_EXTERNAL_MEDIA = 2
+};
+
+/* MRT0 v4 preserves the v2/v3 descriptor and adds catalog delivery truth. */
+typedef struct {
+    MeisoRuntimeRouteDescriptor route;
+    MeisoRuntimeDeliveryClass delivery;
+} MeisoRuntimeV4RouteDescriptor;
+
 /* Complete identity of a route in the currently active catalog. */
 typedef struct {
     uint64_t catalog_generation;
@@ -107,6 +121,16 @@ typedef struct {
     MeisoRuntimeConfig base;
     uint32_t max_blob_transfer_bytes;
 } MeisoRuntimeV3Config;
+
+/*
+ * v4 retains v3 Blob carriage. Delivery sidecars are reserved only by the
+ * v4 initializer, so v2/v3 memory_required results and arena layout remain
+ * byte-exact.
+ */
+typedef struct {
+    MeisoRuntimeConfig base;
+    uint32_t max_blob_transfer_bytes;
+} MeisoRuntimeV4Config;
 
 typedef uint8_t MeisoRuntimeInitStatus;
 enum {
@@ -147,7 +171,8 @@ enum {
     MEISO_RUNTIME_WIRE_VERSION_MISMATCH = 24,
     MEISO_RUNTIME_BLOB_BUSY = 25,
     MEISO_RUNTIME_BLOB_NOT_ACTIVE = 26,
-    MEISO_RUNTIME_BLOB_INVALID = 27
+    MEISO_RUNTIME_BLOB_INVALID = 27,
+    MEISO_RUNTIME_DELIVERY_MISMATCH = 28
 };
 
 typedef uint16_t MeisoRuntimeProductionReason;
@@ -365,6 +390,19 @@ typedef struct {
 } MeisoRuntimeSnapshot;
 
 /*
+ * Immutable copy for an SDK media adapter. It is current only until the next
+ * non-const Runtime call; the exact Session/catalog/endpoint/production tuple
+ * must be re-queried after any mutation. media_stream_epoch and channel_nonce
+ * remain Profile actual-State truth and are intentionally not invented here.
+ */
+typedef struct {
+    MeisoSessionId session_id;
+    MeisoRuntimeRouteKey route;
+    MeisoResourceDescriptor resource;
+    uint64_t production_epoch;
+} MeisoRuntimeV4ExternalMediaBinding;
+
+/*
  * One owner must serialize every call on a Runtime and its bound Session.
  * Different Runtime/Session pairs are independent; this API provides no lock.
  * The Runtime arena, complete opaque Session arena, and every output object
@@ -404,6 +442,7 @@ bool meiso_runtime_actual_state_decode(
 size_t meiso_runtime_alignment_required(void);
 size_t meiso_runtime_memory_required(const MeisoRuntimeConfig *config);
 size_t meiso_runtime_v3_memory_required(const MeisoRuntimeV3Config *config);
+size_t meiso_runtime_v4_memory_required(const MeisoRuntimeV4Config *config);
 
 /* A handle is permanently bound to this READY SessionId and role. */
 MeisoRuntimeInitStatus meiso_runtime_init(
@@ -424,6 +463,21 @@ MeisoRuntimeInitStatus meiso_runtime_v3_init(
     void *arena,
     size_t arena_size,
     const MeisoRuntimeV3Config *config,
+    MeisoRuntime **out_runtime
+);
+
+/*
+ * Creates a strict MRT0 v4 handle. v2/v3 frames are rejected. The accepted
+ * catalog uses 80-byte route records: the old 72 bytes are unchanged,
+ * delivery is byte 72, and bytes 73..79 are zero. INLINE routes retain every
+ * existing Runtime payload limit. EXTERNAL_MEDIA is legal only for a nonzero
+ * maximum-unit Edge-owned Stream/DATA route and never authorizes inline
+ * STREAM_SAMPLE carriage.
+ */
+MeisoRuntimeInitStatus meiso_runtime_v4_init(
+    void *arena,
+    size_t arena_size,
+    const MeisoRuntimeV4Config *config,
     MeisoRuntime **out_runtime
 );
 
@@ -465,6 +519,20 @@ MeisoRuntimeStatus meiso_runtime_offer_catalog(
     size_t route_count
 );
 
+/*
+ * Edge-only MRT0 v4 catalog offer; failure is atomic as in the base API.
+ * Catalog replacement and bound-Session invalidation clear both delivery
+ * banks together with their route banks; no external binding survives.
+ */
+MeisoRuntimeStatus meiso_runtime_v4_offer_catalog(
+    MeisoRuntime *runtime,
+    uint64_t generation,
+    const MeisoRuntimeEndpointDescriptor *endpoints,
+    size_t endpoint_count,
+    const MeisoRuntimeV4RouteDescriptor *routes,
+    size_t route_count
+);
+
 /* Host only. A successful decision is queued before local catalog mutation. */
 MeisoRuntimeStatus meiso_runtime_accept_catalog(MeisoRuntime *runtime);
 MeisoRuntimeStatus meiso_runtime_reject_catalog(
@@ -496,6 +564,11 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
     uint64_t production_epoch,
     const MeisoStreamSample *sample
 );
+/*
+ * On a v4 EXTERNAL_MEDIA route this returns DELIVERY_MISMATCH and leaves the
+ * complete Runtime arena, bound Session arena, sample, and every caller output
+ * byte unchanged; the SDK media adapter uses external_media_binding instead.
+ */
 
 /*
  * MRT0 v3 Host-only Blob carriage. The exact active route must be a
@@ -624,7 +697,13 @@ bool meiso_runtime_blob_snapshot(
     MeisoRuntimeBlobSnapshot *out_snapshot
 );
 
-/* Catalog views borrow the Runtime arena until its next non-const call. */
+/*
+ * Endpoint capability byte views borrow the Runtime arena until its next
+ * non-const call. Route descriptors are scalar copies and contain no arena
+ * borrow. The base route_at/staged_route_at/find_route APIs intentionally
+ * fail with WIRE_VERSION_MISMATCH on a v4 handle because their result cannot
+ * represent delivery class; v4 callers must use the corresponding v4 API.
+ */
 MeisoRuntimeStatus meiso_runtime_endpoint_at(
     const MeisoRuntime *runtime,
     size_t index,
@@ -645,6 +724,16 @@ MeisoRuntimeStatus meiso_runtime_staged_route_at(
     size_t index,
     MeisoRuntimeRouteDescriptor *out_route
 );
+MeisoRuntimeStatus meiso_runtime_v4_route_at(
+    const MeisoRuntime *runtime,
+    size_t index,
+    MeisoRuntimeV4RouteDescriptor *out_route
+);
+MeisoRuntimeStatus meiso_runtime_v4_staged_route_at(
+    const MeisoRuntime *runtime,
+    size_t index,
+    MeisoRuntimeV4RouteDescriptor *out_route
+);
 MeisoRuntimeStatus meiso_runtime_find_endpoint(
     const MeisoRuntime *runtime,
     MeisoEndpointId endpoint_id,
@@ -654,6 +743,23 @@ MeisoRuntimeStatus meiso_runtime_find_route(
     const MeisoRuntime *runtime,
     MeisoResourceId resource_id,
     MeisoRuntimeRouteDescriptor *out_route
+);
+MeisoRuntimeStatus meiso_runtime_v4_find_route(
+    const MeisoRuntime *runtime,
+    MeisoResourceId resource_id,
+    MeisoRuntimeV4RouteDescriptor *out_route
+);
+
+/*
+ * Returns only an active EXTERNAL_MEDIA Edge-owned Stream/DATA route whose
+ * endpoint production gate is active. INLINE routes return
+ * DELIVERY_MISMATCH; inactive/stale routes fail without partial output.
+ * Catalog replacement or Session terminal makes the old query fail.
+ */
+MeisoRuntimeStatus meiso_runtime_v4_external_media_binding(
+    const MeisoRuntime *runtime,
+    MeisoResourceId resource_id,
+    MeisoRuntimeV4ExternalMediaBinding *out_binding
 );
 MeisoRuntimeStatus meiso_runtime_production_snapshot(
     const MeisoRuntime *runtime,
