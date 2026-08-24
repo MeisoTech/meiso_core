@@ -243,6 +243,16 @@ if(UNIX)
     )
     meiso_enable_warnings(meiso_composition_host_app)
 
+    add_executable(
+        meiso_composition_debug_host
+        devtools/macos/composition_debug_host.c
+    )
+    target_link_libraries(
+        meiso_composition_debug_host
+        PRIVATE meiso_composition_host_app
+    )
+    meiso_enable_warnings(meiso_composition_debug_host)
+
     add_library(
         meiso_composition_edge_app
         targets/k230d-linux/composition_edge_app.c
@@ -576,6 +586,22 @@ if(TARGET meiso_composition_host_app)
         PRIVATE meiso_composition_host_app
     )
     meiso_enable_warnings(meiso_composition_host_app_test)
+
+    find_package(Threads REQUIRED)
+    add_executable(
+        meiso_composition_debug_host_test
+        tests/test_composition_debug_host.c
+        devtools/macos/composition_debug_host.c
+    )
+    target_compile_definitions(
+        meiso_composition_debug_host_test
+        PRIVATE MEISO_COMPOSITION_DEBUG_HOST_NO_MAIN=1
+    )
+    target_link_libraries(
+        meiso_composition_debug_host_test
+        PRIVATE meiso_composition_host_app Threads::Threads
+    )
+    meiso_enable_warnings(meiso_composition_debug_host_test)
 endif()
 
 if(TARGET meiso_composition_edge_app)
@@ -878,6 +904,12 @@ if(TARGET meiso_composition_host_app_test)
     add_test(
         NAME meiso_composition_host_app_test
         COMMAND meiso_composition_host_app_test
+    )
+endif()
+if(TARGET meiso_composition_debug_host_test)
+    add_test(
+        NAME meiso_composition_debug_host_test
+        COMMAND meiso_composition_debug_host_test
     )
 endif()
 if(TARGET meiso_composition_edge_app_test)
