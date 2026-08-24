@@ -167,6 +167,25 @@ if(UNIX)
     meiso_enable_warnings(meiso_camera_v4l2_adapter)
 endif()
 
+if(UNIX)
+    add_library(
+        meiso_composition_debug_peer
+        devtools/composition_debug_peer.c
+    )
+    target_include_directories(
+        meiso_composition_debug_peer
+        PUBLIC devtools
+    )
+    target_link_libraries(
+        meiso_composition_debug_peer
+        PUBLIC
+            meiso_composition_session_v3_profile
+            meiso_posix_tcp_adapter
+            meiso_runtime_scheduler
+    )
+    meiso_enable_warnings(meiso_composition_debug_peer)
+endif()
+
 add_library(
     meiso_composition_media_transport
     profiles/composition-scene-lab-v0/composition_media_transport.c
@@ -445,6 +464,18 @@ if(TARGET meiso_camera_v4l2_adapter)
     meiso_enable_warnings(meiso_camera_v4l2_adapter_test)
 endif()
 
+if(TARGET meiso_composition_debug_peer)
+    add_executable(
+        meiso_composition_debug_peer_test
+        tests/test_composition_debug_peer.c
+    )
+    target_link_libraries(
+        meiso_composition_debug_peer_test
+        PRIVATE meiso_composition_debug_peer
+    )
+    meiso_enable_warnings(meiso_composition_debug_peer_test)
+endif()
+
 add_executable(meiso_runtime_v4_test tests/test_runtime_v4.c)
 target_link_libraries(
     meiso_runtime_v4_test
@@ -709,6 +740,12 @@ if(TARGET meiso_camera_v4l2_adapter_test)
     add_test(
         NAME meiso_camera_v4l2_adapter_test
         COMMAND meiso_camera_v4l2_adapter_test
+    )
+endif()
+if(TARGET meiso_composition_debug_peer_test)
+    add_test(
+        NAME meiso_composition_debug_peer_test
+        COMMAND meiso_composition_debug_peer_test
     )
 endif()
 add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)

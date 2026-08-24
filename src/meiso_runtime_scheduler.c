@@ -1186,6 +1186,8 @@ MeisoRuntimeSchedulerStatus meiso_runtime_scheduler_bind_source_route(
     SchedulerSource *source;
     const SchedulerSource *data;
     MeisoRuntimeRouteDescriptor active_route;
+    MeisoRuntimeV4RouteDescriptor active_route_v4;
+    MeisoRuntimeStatus route_status;
     uint16_t index;
 
     if (!scheduler_layout_valid(scheduler) || !route_valid(route)) {
@@ -1200,9 +1202,19 @@ MeisoRuntimeSchedulerStatus meiso_runtime_scheduler_bind_source_route(
         route.catalog_generation != scheduler->catalog_generation) {
         return MEISO_RUNTIME_SCHEDULER_INVALID_STATE;
     }
-    if (meiso_runtime_find_route(
+    if (scheduler->wire_version == MEISO_RUNTIME_WIRE_VERSION_V4) {
+        route_status = meiso_runtime_v4_find_route(
+            scheduler->runtime, route.resource_id, &active_route_v4
+        );
+        if (route_status == MEISO_RUNTIME_OK) {
+            active_route = active_route_v4.route;
+        }
+    } else {
+        route_status = meiso_runtime_find_route(
             scheduler->runtime, route.resource_id, &active_route
-        ) != MEISO_RUNTIME_OK || !meiso_endpoint_id_equal(
+        );
+    }
+    if (route_status != MEISO_RUNTIME_OK || !meiso_endpoint_id_equal(
             active_route.endpoint_id, route.endpoint_id
         ) || active_route.endpoint_incarnation !=
             route.endpoint_incarnation || !meiso_resource_id_equal(
