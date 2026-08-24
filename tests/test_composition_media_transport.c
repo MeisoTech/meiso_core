@@ -100,6 +100,8 @@ static MeisoCompositionMediaTransportConfig transport_config(
         meiso_composition_camera_media_resources(&camera_count);
     memset(&value, 0, sizeof(value));
     value.local_role = role;
+    value.active_route_mask =
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK;
     value.scope.session_id.host_nonce = (MeisoSessionNonce){11U, 12U};
     value.scope.session_id.edge_nonce = (MeisoSessionNonce){13U, 14U};
     value.scope.catalog_generation = 17U;
@@ -157,6 +159,24 @@ static MeisoCompositionMediaTransportConfig transport_config(
         MEISO_COMPOSITION_MEDIA_RECOVERY_REQUEST_KEY
     };
     return value;
+}
+
+static void make_route_capacity_only(
+    MeisoCompositionMediaRouteConfig *route,
+    size_t route_index
+)
+{
+    const uint32_t max_access_unit_bytes =
+        route->capability.max_access_unit_bytes;
+    const uint32_t max_fragment_payload_bytes =
+        route->capability.max_fragment_payload_bytes;
+    memset(route, 0, sizeof(*route));
+    route->capability.source = route_index == 0U ?
+        MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW :
+        MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA;
+    route->capability.max_access_unit_bytes = max_access_unit_bytes;
+    route->capability.max_fragment_payload_bytes =
+        max_fragment_payload_bytes;
 }
 
 static bool snapshot(
@@ -247,6 +267,55 @@ static bool initialize_pair(MediaPair *pair, bool handshake)
             ));
         }
     }
+    return true;
+}
+
+static bool initialize_mask_pair(
+    MediaPair *pair,
+    uint8_t host_mask,
+    uint8_t edge_mask
+)
+{
+    size_t alignment = 0U;
+    size_t route_index;
+    memset(pair, 0, sizeof(*pair));
+    pair->host_config = transport_config(MEISO_SESSION_ROLE_HOST);
+    pair->edge_config = transport_config(MEISO_SESSION_ROLE_EDGE);
+    pair->host_config.active_route_mask = host_mask;
+    pair->edge_config.active_route_mask = edge_mask;
+    for (route_index = 0U;
+         route_index < MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT;
+         ++route_index) {
+        const uint8_t route_mask = (uint8_t)(UINT8_C(1) << route_index);
+        if ((host_mask & route_mask) == 0U) {
+            make_route_capacity_only(
+                &pair->host_config.routes[route_index], route_index
+            );
+        }
+        if ((edge_mask & route_mask) == 0U) {
+            make_route_capacity_only(
+                &pair->edge_config.routes[route_index], route_index
+            );
+        }
+    }
+    CHECK(meiso_composition_media_transport_memory_required(
+              &pair->host_config, &pair->host_bytes, &alignment
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    CHECK(meiso_composition_media_transport_memory_required(
+              &pair->edge_config, &pair->edge_bytes, &alignment
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    CHECK(pair->host_bytes == pair->edge_bytes &&
+          pair->host_bytes <= TEST_ARENA_CAPACITY);
+    CHECK(meiso_composition_media_transport_init(
+              &pair->host_config,
+              (MeisoMutableBuffer){pair->host_arena.bytes, pair->host_bytes},
+              &pair->host
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    CHECK(meiso_composition_media_transport_init(
+              &pair->edge_config,
+              (MeisoMutableBuffer){pair->edge_arena.bytes, pair->edge_bytes},
+              &pair->edge
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
     return true;
 }
 
@@ -405,7 +474,9 @@ static bool test_memory_init_and_alias_contract(void)
     MeisoCompositionMediaTransportConfig config =
         transport_config(MEISO_SESSION_ROLE_HOST);
     MeisoCompositionMediaTransportConfig invalid = config;
+    MeisoCompositionMediaTransportConfig legacy = config;
     TestArena arena;
+    TestArena legacy_arena;
     TestArena before;
     size_t required = 0U;
     size_t alignment = 0U;
@@ -414,6 +485,8 @@ static bool test_memory_init_and_alias_contract(void)
     MeisoCompositionMediaTransport *transport =
         (MeisoCompositionMediaTransport *)(uintptr_t)0x1234U;
     MeisoCompositionMediaTransport *transport_before = transport;
+    MeisoCompositionMediaTransport *legacy_transport = NULL;
+    MeisoCompositionMediaTransportSnapshot legacy_snapshot;
     union {
         max_align_t alignment;
         MeisoCompositionMediaTransportConfig config;
@@ -435,6 +508,22 @@ static bool test_memory_init_and_alias_contract(void)
               &invalid, &size_sentinel, &alignment_sentinel
           ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
     CHECK(size_sentinel == 91U && alignment_sentinel == 92U);
+    invalid = config;
+    invalid.active_route_mask = UINT8_C(0x04);
+    CHECK(meiso_composition_media_transport_memory_required(
+              &invalid, &size_sentinel, &alignment_sentinel
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
+    CHECK(size_sentinel == 91U && alignment_sentinel == 92U);
+
+    legacy.active_route_mask = 0U;
+    CHECK(meiso_composition_media_transport_init(
+              &legacy,
+              (MeisoMutableBuffer){legacy_arena.bytes, required},
+              &legacy_transport
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    CHECK(snapshot(legacy_transport, &legacy_snapshot));
+    CHECK(legacy_snapshot.configured_active_route_mask ==
+          MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK);
     config_alias.config = config;
     alignment_sentinel = 92U;
     CHECK(meiso_composition_media_transport_memory_required(
@@ -573,6 +662,220 @@ static bool test_handshake_would_block_and_aliases(void)
               (MeisoCompositionMediaPacketRef *)(void *)pair.edge_arena.bytes
           ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_ARGUMENT);
     CHECK(memcmp(edge_before, pair.edge_arena.bytes, pair.edge_bytes) == 0);
+    return true;
+}
+
+static bool check_single_active_route(
+    uint8_t active_mask,
+    size_t active_route_index
+)
+{
+    static const uint8_t render[8] = {1U,2U,3U,4U,5U,6U,7U,8U};
+    static const uint8_t camera[6] = {9U,10U,11U,12U,13U,14U};
+    MediaPair pair;
+    const size_t inactive_route_index = active_route_index == 0U ? 1U : 0U;
+    const MeisoCompositionMediaTransportConfig full_host =
+        transport_config(MEISO_SESSION_ROLE_HOST);
+    const MeisoCompositionMediaTransportConfig full_edge =
+        transport_config(MEISO_SESSION_ROLE_EDGE);
+    const uint8_t *inactive_bytes = inactive_route_index == 0U ?
+        render : camera;
+    const size_t inactive_size = inactive_route_index == 0U ?
+        sizeof(render) : sizeof(camera);
+    const uint8_t *active_bytes = active_route_index == 0U ? render : camera;
+    const size_t active_size = active_route_index == 0U ?
+        sizeof(render) : sizeof(camera);
+    MeisoCompositionMediaTransportSnapshot host_snapshot;
+    MeisoCompositionMediaTransportSnapshot edge_snapshot;
+    MeisoCompositionMediaPacketView no_packet;
+    MeisoCompositionMediaPacketView no_packet_before;
+    MeisoCompositionMediaLatestView latest;
+    MeisoCompositionMediaLatestView latest_before;
+    MeisoCompositionMediaFrameRef frame_ref;
+    MeisoCompositionMediaFrame frame;
+    MeisoCompositionMediaUnit unit;
+    OwnedPacket packet;
+    uint8_t host_before[TEST_ARENA_CAPACITY];
+    uint8_t edge_before[TEST_ARENA_CAPACITY];
+    size_t packet_size = 0U;
+
+    CHECK(initialize_mask_pair(&pair, active_mask, active_mask));
+    CHECK(capture_packet(pair.host, &packet));
+    CHECK(packet.ref.kind == MEISO_COMPOSITION_MEDIA_PACKET_OPEN);
+    CHECK(complete_and_receive(
+        pair.host, pair.edge, &packet,
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_OK
+    ));
+    CHECK(capture_packet(pair.edge, &packet));
+    CHECK(packet.ref.kind == MEISO_COMPOSITION_MEDIA_PACKET_BIND);
+    CHECK(packet.ref.source ==
+          full_edge.routes[active_route_index].binding.source);
+    CHECK(complete_and_receive(
+        pair.edge, pair.host, &packet,
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_OK
+    ));
+    CHECK(snapshot(pair.host, &host_snapshot));
+    CHECK(snapshot(pair.edge, &edge_snapshot));
+    CHECK(host_snapshot.phase == MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE);
+    CHECK(edge_snapshot.phase == MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE);
+    CHECK(host_snapshot.configured_active_route_mask == active_mask &&
+          edge_snapshot.configured_active_route_mask == active_mask);
+    CHECK(host_snapshot.bound_route_mask == active_mask &&
+          edge_snapshot.bound_route_mask == active_mask);
+
+    memset(&no_packet, 0xa5, sizeof(no_packet));
+    no_packet_before = no_packet;
+    CHECK(meiso_composition_media_transport_next_outbound(
+              pair.edge, &no_packet
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_NO_PACKET);
+    CHECK(memcmp(&no_packet, &no_packet_before, sizeof(no_packet)) == 0);
+
+    unit = media_unit(&pair, active_route_index, 1U, 0U, active_bytes);
+    CHECK(meiso_composition_media_transport_submit(pair.edge, &unit) ==
+          MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    while (true) {
+        MeisoCompositionMediaPacketView pending;
+        const MeisoCompositionMediaTransportStatus status =
+            meiso_composition_media_transport_next_outbound(
+                pair.edge, &pending
+            );
+        if (status == MEISO_COMPOSITION_MEDIA_TRANSPORT_NO_PACKET) {
+            break;
+        }
+        CHECK(status == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+        CHECK(capture_packet(pair.edge, &packet));
+        CHECK(packet.ref.source ==
+              full_edge.routes[active_route_index].binding.source);
+        CHECK(complete_and_receive(
+            pair.edge, pair.host, &packet,
+            packet.ref.fragment_offset +
+                    (packet.ref.packet_bytes -
+                     MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE) ==
+                active_size ?
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_FRAME_PUBLISHED :
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_FRAGMENT_ACCEPTED
+        ));
+    }
+    CHECK(snapshot(pair.edge, &edge_snapshot));
+    CHECK(edge_snapshot.fragment_rr_cursor == active_route_index);
+    CHECK(edge_snapshot.routes[active_route_index]
+              .submitted_sequence_high_water == 1U);
+    CHECK(meiso_composition_media_transport_latest(
+              pair.host,
+              full_host.routes[active_route_index].binding.source,
+              &latest
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+    CHECK(latest.ref.frame_sequence == 1U &&
+          latest.unit.access_unit.size == active_size &&
+          memcmp(latest.unit.access_unit.data, active_bytes, active_size) == 0);
+    CHECK(meiso_composition_media_transport_release_latest(
+              pair.host, &latest.ref
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+
+    pair.host_config.routes[inactive_route_index] =
+        full_host.routes[inactive_route_index];
+    pair.edge_config.routes[inactive_route_index] =
+        full_edge.routes[inactive_route_index];
+    unit = media_unit(
+        &pair, inactive_route_index, 1U, 0U, inactive_bytes
+    );
+    memcpy(edge_before, pair.edge_arena.bytes, pair.edge_bytes);
+    CHECK(meiso_composition_media_transport_submit(pair.edge, &unit) ==
+          MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE);
+    CHECK(memcmp(edge_before, pair.edge_arena.bytes, pair.edge_bytes) == 0);
+
+    frame = media_frame(
+        &pair, inactive_route_index, 1U, 0U, 0U,
+        inactive_bytes, inactive_size
+    );
+    CHECK(encode_frame(&frame, &packet));
+    memcpy(host_before, pair.host_arena.bytes, pair.host_bytes);
+    CHECK(meiso_composition_media_transport_receive_packet(
+              pair.host, (MeisoByteView){packet.bytes, packet.size}
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE);
+    CHECK(memcmp(host_before, pair.host_arena.bytes, pair.host_bytes) == 0);
+
+    memset(&latest, 0xa5, sizeof(latest));
+    latest_before = latest;
+    CHECK(meiso_composition_media_transport_latest(
+              pair.host,
+              full_host.routes[inactive_route_index].binding.source,
+              &latest
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE);
+    CHECK(memcmp(&latest, &latest_before, sizeof(latest)) == 0);
+    CHECK(memcmp(host_before, pair.host_arena.bytes, pair.host_bytes) == 0);
+    frame_ref.binding = full_host.routes[inactive_route_index].binding;
+    frame_ref.frame_sequence = 1U;
+    CHECK(meiso_composition_media_transport_release_latest(
+              pair.host, &frame_ref
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE);
+    CHECK(memcmp(host_before, pair.host_arena.bytes, pair.host_bytes) == 0);
+
+    CHECK(meiso_composition_media_binding_encode(
+              &full_edge.routes[inactive_route_index].binding,
+              (MeisoMutableBuffer){packet.bytes, sizeof(packet.bytes)},
+              &packet_size
+          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    packet.size = packet_size;
+    CHECK(meiso_composition_media_transport_receive_packet(
+              pair.host, (MeisoByteView){packet.bytes, packet.size}
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH);
+    CHECK(memcmp(host_before, pair.host_arena.bytes, pair.host_bytes) == 0);
+    return true;
+}
+
+static bool test_active_route_masks(void)
+{
+    MediaPair mismatch;
+    MeisoCompositionMediaTransportSnapshot host_snapshot;
+    MeisoCompositionMediaTransportSnapshot edge_snapshot;
+    MeisoCompositionMediaTransportConfig invalid =
+        transport_config(MEISO_SESSION_ROLE_HOST);
+    OwnedPacket packet;
+    size_t size_sentinel = 71U;
+    size_t alignment_sentinel = 73U;
+
+    CHECK(check_single_active_route(
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK, 0U
+    ));
+    CHECK(check_single_active_route(
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_CAMERA_MASK, 1U
+    ));
+
+    invalid.active_route_mask =
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK;
+    make_route_capacity_only(&invalid.routes[1], 1U);
+    invalid.routes[1].capability.max_access_unit_bytes = 0U;
+    CHECK(meiso_composition_media_transport_memory_required(
+              &invalid, &size_sentinel, &alignment_sentinel
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
+    CHECK(size_sentinel == 71U && alignment_sentinel == 73U);
+
+    CHECK(initialize_mask_pair(
+        &mismatch,
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK,
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_CAMERA_MASK
+    ));
+    CHECK(capture_packet(mismatch.host, &packet));
+    CHECK(complete_and_receive(
+        mismatch.host, mismatch.edge, &packet,
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_OK
+    ));
+    CHECK(capture_packet(mismatch.edge, &packet));
+    CHECK(packet.ref.source == MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA);
+    CHECK(complete_and_receive(
+        mismatch.edge, mismatch.host, &packet,
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH
+    ));
+    CHECK(snapshot(mismatch.host, &host_snapshot));
+    CHECK(snapshot(mismatch.edge, &edge_snapshot));
+    CHECK(host_snapshot.phase ==
+          MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_WAIT_BIND);
+    CHECK(edge_snapshot.phase ==
+          MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE);
+    CHECK(host_snapshot.bound_route_mask == 0U);
+    CHECK(edge_snapshot.bound_route_mask ==
+          MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_CAMERA_MASK);
     return true;
 }
 
@@ -1018,6 +1321,7 @@ int main(void)
 {
     if (!test_memory_init_and_alias_contract() ||
         !test_handshake_would_block_and_aliases() ||
+        !test_active_route_masks() ||
         !test_edge_queue_replacement_and_fragment_rr() ||
         !test_host_reassembly_failures_and_latest() ||
         !test_complete_replacement_and_u64_sequence_boundary() ||

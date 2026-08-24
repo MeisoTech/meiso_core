@@ -20,6 +20,9 @@ extern "C" {
  */
 
 #define MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT 2U
+#define MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK UINT8_C(0x01)
+#define MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_CAMERA_MASK UINT8_C(0x02)
+#define MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK UINT8_C(0x03)
 #define MEISO_COMPOSITION_MEDIA_TRANSPORT_METADATA_BYTES 4096U
 #define MEISO_COMPOSITION_MEDIA_TRANSPORT_MAX_PACKET_BYTES \
     (MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE + \
@@ -89,6 +92,15 @@ typedef struct {
 typedef struct {
     MeisoSessionRole local_role;
     MeisoCompositionMediaOpen scope;
+    /*
+     * Explicit subset of ROUTE_ALL_MASK. New callers must pass render, camera
+     * or both. Zero is a deprecated source-compatibility alias for both and is
+     * normalized to ROUTE_ALL_MASK in the transport/snapshot. The active set
+     * is immutable for this lifetime; changing it requires terminate + init in
+     * a fresh arena. OPEN does not carry this mask: both peers must derive the
+     * same mask from the same current accepted control-plane actual truth.
+     */
+    uint8_t active_route_mask;
     /* Canonical order is render preview, then camera. */
     MeisoCompositionMediaRouteConfig
         routes[MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT];
@@ -167,6 +179,7 @@ typedef struct {
     MeisoCompositionMediaOpen scope;
     MeisoCompositionMediaTransportPhase phase;
     MeisoCompositionMediaTerminalReason terminal_reason;
+    uint8_t configured_active_route_mask;
     uint8_t bound_route_mask;
     uint8_t fragment_rr_cursor;
     bool outbound_packet_pending;
@@ -178,15 +191,21 @@ typedef struct {
 } MeisoCompositionMediaTransportSnapshot;
 
 /*
- * The config must select the exact Profile v3 render and camera external-data
- * routes, each with an exact accepted effective format. binding SessionId and
+ * active_route_mask must be render, camera or both. Deprecated zero is
+ * normalized to both for existing source callers; unknown bits are
+ * INVALID_CONFIG. Each active route must be the exact Profile v3 external-data
+ * route with an exact accepted effective format. Its binding SessionId and
  * catalog generation equal scope; production/media epochs and nonce are
- * nonzero. Route max access-unit and fragment sizes come from capability.
+ * nonzero. An inactive route's binding and effective fields are ignored and
+ * may be all zero. Its capability still has the canonical source and valid
+ * nonzero bounded max-access-unit/max-fragment sizes because the fixed arena
+ * reserves both route slot pairs. Other inactive capability fields are
+ * ignored. No API changes active_route_mask in place.
  *
  * For an aligned arena the exact required bytes are:
  *   4096 metadata
  *   + 2 * (render max access unit + camera max access unit)
- *   + 240 + max(selected route fragment payload).
+ *   + 240 + max(configured route capability fragment payload).
  * The two payload slots per route are in-flight+latest on Edge and
  * reassembly+latest on Host. No allocation occurs after init.
  * Failure leaves disjoint outputs unchanged.
@@ -212,13 +231,19 @@ MeisoCompositionMediaTransportStatus meiso_composition_media_transport_init(
 );
 
 /*
- * Host emits one OPEN. Edge accepts exact OPEN, emits one exact BIND for each
- * route, then both peers become ACTIVE. next_outbound is idempotent while a
- * packet is pending and returns an arena borrow stable until exact successful
- * completion or termination. A socket WOULD_BLOCK is represented by doing
- * nothing: no complete call, no cursor/offset/sequence/counter advance.
- * complete_outbound is the sole send-progress operation. NO_PACKET and every
- * other non-success status leave out_packet byte-exact unchanged.
+ * Host emits one unchanged Profile v3 OPEN. Edge accepts exact OPEN and emits
+ * one exact BIND for each selected route in canonical order, skipping inactive
+ * routes. Host waits only for the configured selected mask; both peers become
+ * ACTIVE when exactly that mask is bound. An inactive-route BIND is rejected
+ * with BINDING_MISMATCH and no state change. Since OPEN does not negotiate the
+ * mask, mismatched peer configs only fail closed and do not guarantee progress;
+ * the control-plane owner must terminate/rebuild them. next_outbound is
+ * idempotent while a packet is pending and returns an arena borrow stable until
+ * exact successful completion or termination. A socket WOULD_BLOCK is
+ * represented by doing nothing: no complete call, no cursor/offset/sequence/
+ * counter advance. complete_outbound is the sole send-progress operation.
+ * NO_PACKET and every other non-success status leave out_packet byte-exact
+ * unchanged.
  */
 MeisoCompositionMediaTransportStatus
 meiso_composition_media_transport_next_outbound(
@@ -232,9 +257,11 @@ meiso_composition_media_transport_complete_outbound(
 );
 
 /*
- * Edge-only full-unit submission copies bytes into its bounded slots. Exact
- * binding/epoch/nonce and strictly increasing per-route frame sequence are
- * required. If both slots are occupied, the old latest frame is atomically
+ * Edge-only full-unit submission copies bytes into its bounded slots. The
+ * source must be selected by active_route_mask; an inactive source returns
+ * INVALID_STATE with no mutation. Exact binding/epoch/nonce and strictly
+ * increasing per-route frame sequence are required. If both slots are
+ * occupied, the old latest frame is atomically
  * replaced, LATEST_REPLACED is returned and the whole-frame drop counter is
  * advanced without changing the in-flight frame. Two ready routes are chosen
  * by persistent round-robin at each successfully completed fragment.
@@ -246,9 +273,11 @@ meiso_composition_media_transport_submit(
 );
 
 /*
- * Receives one complete MOPN/MBND/MFRM codec packet. Truncated/malformed or
- * wrong binding/epoch/nonce packets publish no bytes and preserve an existing
- * valid reassembly. Same-frame gap/overlap drops that whole reassembly and
+ * Receives one complete MOPN/MBND/MFRM codec packet. An MFRM for an inactive
+ * source returns INVALID_STATE; it publishes no bytes and preserves all route
+ * state. Truncated/malformed or wrong binding/epoch/nonce packets publish no
+ * bytes and preserve an existing valid reassembly. Same-frame gap/overlap
+ * drops that whole reassembly and
  * returns DISCONTINUITY. A newer valid BEGIN may replace an incomplete older
  * frame and returns REASSEMBLY_REPLACED while it remains partial; if that
  * replacement is already a complete BEGIN|END unit, FRAME_PUBLISHED takes
@@ -265,11 +294,13 @@ meiso_composition_media_transport_receive_packet(
 );
 
 /*
- * Host-only latest query. On OK, unit.access_unit borrows the arena. The
- * borrow ends on exact release, a successful receive that publishes the same
- * route, or termination. release_latest is exact binding+sequence and is the
- * only explicit consumer acknowledgement. NO_FRAME and every other
- * non-success status leave out_latest byte-exact unchanged.
+ * Host-only latest query. An inactive source (or inactive expected binding for
+ * release) returns INVALID_STATE with no mutation/output change. On OK,
+ * unit.access_unit borrows the arena. The borrow ends on exact release, a
+ * successful receive that publishes the same route, or termination.
+ * release_latest is exact binding+sequence and is the only explicit consumer
+ * acknowledgement. NO_FRAME and every other non-success status leave
+ * out_latest byte-exact unchanged.
  */
 MeisoCompositionMediaTransportStatus
 meiso_composition_media_transport_latest(

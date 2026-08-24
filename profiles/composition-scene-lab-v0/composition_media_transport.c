@@ -57,6 +57,7 @@ struct MeisoCompositionMediaTransport {
     MeisoCompositionMediaTransportPhase phase;
     MeisoCompositionMediaTerminalReason terminal_reason;
     MeisoCompositionMediaOpen scope;
+    uint8_t active_route_mask;
     uint8_t bound_route_mask;
     uint8_t bind_send_index;
     uint8_t fragment_rr_cursor;
@@ -246,6 +247,9 @@ static bool terminal_reason_valid(MeisoCompositionMediaTerminalReason reason)
 static bool handle_valid(const MeisoCompositionMediaTransport *transport)
 {
     return transport != NULL && transport->magic == MEDIA_TRANSPORT_MAGIC &&
+        transport->active_route_mask != 0U &&
+        (transport->active_route_mask &
+         (uint8_t)~MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK) == 0U &&
         transport->arena_begin != NULL &&
         transport->required_bytes >=
             MEISO_COMPOSITION_MEDIA_TRANSPORT_METADATA_BYTES &&
@@ -337,6 +341,69 @@ static int route_index_for_source(MeisoCompositionMediaSource source)
     return -1;
 }
 
+static uint8_t normalized_active_route_mask(uint8_t configured_mask)
+{
+    return configured_mask == 0U ?
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK : configured_mask;
+}
+
+static bool active_route_mask_valid(uint8_t configured_mask)
+{
+    return (configured_mask &
+            (uint8_t)~MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK) ==
+        0U;
+}
+
+static uint8_t route_bit(size_t route_index)
+{
+    return (uint8_t)(UINT8_C(1) << (uint8_t)route_index);
+}
+
+static bool route_selected(uint8_t active_route_mask, size_t route_index)
+{
+    return (active_route_mask & route_bit(route_index)) != 0U;
+}
+
+static bool next_selected_route(
+    uint8_t active_route_mask,
+    size_t start,
+    uint8_t *out_route_index
+)
+{
+    size_t route_index;
+    if (out_route_index == NULL) {
+        return false;
+    }
+    for (route_index = start;
+         route_index < MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT;
+         ++route_index) {
+        if (route_selected(active_route_mask, route_index)) {
+            *out_route_index = (uint8_t)route_index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool inactive_route_capacity_valid(
+    const MeisoCompositionMediaRouteConfig *route,
+    size_t route_index
+)
+{
+    const MeisoCompositionMediaSource expected_source = route_index == 0U ?
+        MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW :
+        MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA;
+    const uint32_t max_access_unit_bytes = route_index == 0U ?
+        MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES :
+        MEISO_COMPOSITION_CAMERA_MEDIA_MAX_ACCESS_UNIT_BYTES;
+    return route->capability.source == expected_source &&
+        route->capability.max_access_unit_bytes != 0U &&
+        route->capability.max_access_unit_bytes <= max_access_unit_bytes &&
+        route->capability.max_fragment_payload_bytes != 0U &&
+        route->capability.max_fragment_payload_bytes <=
+            MEISO_COMPOSITION_MEDIA_MAX_FRAGMENT_PAYLOAD_SIZE;
+}
+
 static bool route_config_valid(
     const MeisoCompositionMediaOpen *scope,
     const MeisoCompositionMediaRouteConfig *route,
@@ -401,10 +468,12 @@ static bool route_config_valid(
 static bool config_valid(const MeisoCompositionMediaTransportConfig *config)
 {
     uint8_t open_wire[MEISO_COMPOSITION_MEDIA_OPEN_WIRE_SIZE];
+    uint8_t active_route_mask;
     size_t wire_size = 0U;
     if (config == NULL ||
         (config->local_role != MEISO_SESSION_ROLE_HOST &&
          config->local_role != MEISO_SESSION_ROLE_EDGE) ||
+        !active_route_mask_valid(config->active_route_mask) ||
         meiso_composition_media_open_encode(
             &config->scope,
             (MeisoMutableBuffer){open_wire, sizeof(open_wire)}, &wire_size
@@ -412,8 +481,15 @@ static bool config_valid(const MeisoCompositionMediaTransportConfig *config)
         wire_size != sizeof(open_wire)) {
         return false;
     }
-    return route_config_valid(&config->scope, &config->routes[0], 0U) &&
-        route_config_valid(&config->scope, &config->routes[1], 1U);
+    active_route_mask = normalized_active_route_mask(
+        config->active_route_mask
+    );
+    return (route_selected(active_route_mask, 0U) ?
+            route_config_valid(&config->scope, &config->routes[0], 0U) :
+            inactive_route_capacity_valid(&config->routes[0], 0U)) &&
+        (route_selected(active_route_mask, 1U) ?
+            route_config_valid(&config->scope, &config->routes[1], 1U) :
+            inactive_route_capacity_valid(&config->routes[1], 1U));
 }
 
 static bool calculate_required(
@@ -522,6 +598,9 @@ MeisoCompositionMediaTransportStatus meiso_composition_media_transport_init(
         MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_OPEN_PENDING :
         MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_WAIT_OPEN;
     value.scope = config->scope;
+    value.active_route_mask = normalized_active_route_mask(
+        config->active_route_mask
+    );
     value.arena_begin = arena.data;
     value.arena_extent = arena.capacity;
     value.required_bytes = required;
@@ -756,7 +835,10 @@ meiso_composition_media_transport_next_outbound(
         MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_BINDING) {
         const MediaRouteState *route;
         if (transport->bind_send_index >=
-            MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT) {
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT ||
+            !route_selected(
+                transport->active_route_mask, transport->bind_send_index
+            )) {
             return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
         }
         route = &transport->routes[transport->bind_send_index];
@@ -790,7 +872,8 @@ meiso_composition_media_transport_next_outbound(
         MeisoCompositionMediaFrame frame;
         uint32_t remaining;
         uint32_t fragment_size;
-        if (!route->primary.occupied) {
+        if (!route_selected(transport->active_route_mask, route_index) ||
+            !route->primary.occupied) {
             continue;
         }
         if (route->primary_offset >=
@@ -870,20 +953,32 @@ meiso_composition_media_transport_complete_outbound(
             MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_WAIT_BIND;
     } else if (expected_packet->kind ==
                MEISO_COMPOSITION_MEDIA_PACKET_BIND) {
+        uint8_t next_route_index;
         if (transport->phase !=
                 MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_BINDING ||
             transport->bind_send_index >=
                 MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT ||
+            !route_selected(
+                transport->active_route_mask, transport->bind_send_index
+            ) ||
             transport->routes[transport->bind_send_index]
                     .config.binding.source != expected_packet->source) {
             return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
         }
-        ++transport->bind_send_index;
-        if (transport->bind_send_index ==
-            MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT) {
+        transport->bound_route_mask |= route_bit(
+            transport->bind_send_index
+        );
+        if (next_selected_route(
+                transport->active_route_mask,
+                (size_t)transport->bind_send_index + 1U,
+                &next_route_index
+            )) {
+            transport->bind_send_index = next_route_index;
+        } else {
+            transport->bind_send_index =
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT;
             transport->phase =
                 MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE;
-            transport->bound_route_mask = UINT8_C(0x03);
         }
     } else if (expected_packet->kind ==
                MEISO_COMPOSITION_MEDIA_PACKET_FRAME) {
@@ -895,6 +990,9 @@ meiso_composition_media_transport_complete_outbound(
         if (transport->phase !=
                 MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE ||
             route_index < 0 ||
+            !route_selected(
+                transport->active_route_mask, (size_t)route_index
+            ) ||
             expected_packet->packet_bytes <=
                 MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE) {
             return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
@@ -913,9 +1011,18 @@ meiso_composition_media_transport_complete_outbound(
         if (next_offset == route->primary.metadata.access_unit_bytes) {
             promote_latest_to_primary(route);
         }
-        transport->fragment_rr_cursor = (uint8_t)
-            (((size_t)route_index + 1U) %
-             MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT);
+        if (!next_selected_route(
+                transport->active_route_mask,
+                ((size_t)route_index + 1U) %
+                    MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT,
+                &transport->fragment_rr_cursor
+            ) &&
+            !next_selected_route(
+                transport->active_route_mask, 0U,
+                &transport->fragment_rr_cursor
+            )) {
+            return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
+        }
     } else {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
     }
@@ -957,6 +1064,11 @@ meiso_composition_media_transport_submit(
     if (transport->local_role != MEISO_SESSION_ROLE_EDGE ||
         transport->phase != MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE ||
         route_index < 0) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
+    }
+    if (!route_selected(
+            transport->active_route_mask, (size_t)route_index
+        )) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
     }
     route = &transport->routes[(size_t)route_index];
@@ -1043,6 +1155,12 @@ static MeisoCompositionMediaTransportStatus receive_open(
     if (!open_equal(&transport->scope, &open)) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH;
     }
+    if (!next_selected_route(
+            transport->active_route_mask, 0U,
+            &transport->bind_send_index
+        )) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
+    }
     transport->phase = MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_BINDING;
     return MEISO_COMPOSITION_MEDIA_TRANSPORT_OK;
 }
@@ -1058,16 +1176,22 @@ static MeisoCompositionMediaTransportStatus receive_bind(
     MeisoCompositionMediaTransportStatus binding_status;
     const int route_index = codec_status == MEISO_COMPOSITION_SESSION_V3_OK ?
         route_index_for_source(binding.source) : -1;
-    uint8_t route_bit;
+    uint8_t route_mask_bit;
     if (codec_status == MEISO_COMPOSITION_SESSION_V3_TRUNCATED) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_TRUNCATED;
     }
     if (codec_status != MEISO_COMPOSITION_SESSION_V3_OK) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_MALFORMED;
     }
-    if (transport->local_role != MEISO_SESSION_ROLE_HOST ||
-        transport->phase != MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_WAIT_BIND ||
-        route_index < 0) {
+    if (transport->local_role != MEISO_SESSION_ROLE_HOST || route_index < 0) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
+    }
+    route_mask_bit = route_bit((size_t)route_index);
+    if ((transport->active_route_mask & route_mask_bit) == 0U) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH;
+    }
+    if (transport->phase !=
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_WAIT_BIND) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
     }
     binding_status = binding_difference(
@@ -1076,12 +1200,11 @@ static MeisoCompositionMediaTransportStatus receive_bind(
     if (binding_status != MEISO_COMPOSITION_MEDIA_TRANSPORT_OK) {
         return binding_status;
     }
-    route_bit = (uint8_t)(UINT8_C(1) << (uint8_t)route_index);
-    if ((transport->bound_route_mask & route_bit) != 0U) {
+    if ((transport->bound_route_mask & route_mask_bit) != 0U) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_CONFLICT;
     }
-    transport->bound_route_mask |= route_bit;
-    if (transport->bound_route_mask == UINT8_C(0x03)) {
+    transport->bound_route_mask |= route_mask_bit;
+    if (transport->bound_route_mask == transport->active_route_mask) {
         transport->phase = MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE;
     }
     return MEISO_COMPOSITION_MEDIA_TRANSPORT_OK;
@@ -1161,6 +1284,11 @@ static MeisoCompositionMediaTransportStatus receive_frame(
     route_index = route_index_for_source(frame.binding.source);
     if (route_index < 0) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_BINDING_MISMATCH;
+    }
+    if (!route_selected(
+            transport->active_route_mask, (size_t)route_index
+        )) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
     }
     route = &transport->routes[(size_t)route_index];
     binding_status = binding_difference(&route->config.binding, &frame.binding);
@@ -1329,6 +1457,11 @@ meiso_composition_media_transport_latest(
     if (transport->local_role != MEISO_SESSION_ROLE_HOST || route_index < 0) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
     }
+    if (!route_selected(
+            transport->active_route_mask, (size_t)route_index
+        )) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
+    }
     route = &transport->routes[(size_t)route_index];
     if (!route->latest.occupied) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_NO_FRAME;
@@ -1363,6 +1496,11 @@ meiso_composition_media_transport_release_latest(
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_TERMINAL;
     }
     if (transport->local_role != MEISO_SESSION_ROLE_HOST || route_index < 0) {
+        return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
+    }
+    if (!route_selected(
+            transport->active_route_mask, (size_t)route_index
+        )) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_STATE;
     }
     route = &transport->routes[(size_t)route_index];
@@ -1446,6 +1584,7 @@ meiso_composition_media_transport_snapshot(
     snapshot.scope = transport->scope;
     snapshot.phase = transport->phase;
     snapshot.terminal_reason = transport->terminal_reason;
+    snapshot.configured_active_route_mask = transport->active_route_mask;
     snapshot.bound_route_mask = transport->bound_route_mask;
     snapshot.fragment_rr_cursor = transport->fragment_rr_cursor;
     snapshot.outbound_packet_pending = transport->outbound_packet_pending;
@@ -1457,7 +1596,9 @@ meiso_composition_media_transport_snapshot(
     for (i = 0U; i < MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_COUNT; ++i) {
         const MediaRouteState *route = &transport->routes[i];
         MeisoCompositionMediaRouteSnapshot *out_route = &snapshot.routes[i];
-        out_route->source = route->config.binding.source;
+        out_route->source = i == 0U ?
+            MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW :
+            MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA;
         out_route->send_in_flight =
             transport->local_role == MEISO_SESSION_ROLE_EDGE &&
             route->primary.occupied;
