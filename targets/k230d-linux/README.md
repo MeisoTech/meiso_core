@@ -1,5 +1,31 @@
 # K230D Linux targets
 
+## V4L2 camera capture source（THREE_FRAME_CAPTURE_RECEIPT）
+
+当前bounded adapter固定progressive NV12 `320x240`、stride `320`、sizeimage `115200`，要求至少4个
+single-planar MMAP buffer，并保持一个dequeued borrow直至exact QBUF release。准确K230D上的一次受控
+probe在既有GC2093 camera server存活时取得3帧，每帧`bytes_used=115200`。driver raw field为ANY，
+但adapter只在`G_FMT`已确认progressive后按format-inherited接受；raw driver sequence均为0且标为
+absent，effective sequence因此由adapter synthetic为`1/2/3`，producer drop均为0。
+
+三帧SHA-256依次为：
+
+- `c67befc577d44d7518e927b49dd54c65c3b5fdd8c6409ac915c96b0e475776cc`
+- `ee89441206693ee78516165413658dae3a55522cfc9e5fa10583756ea6a7f9ad`
+- `e7ee27ee8fefa008622e14c4444556e36d037f67b8bc1beca7e3c7ef9711f104`
+
+probe `rc=0`、未超时、stderr为空且server仍存活；最终phase为`STOPPED`，mapped/queued均为0。cross
+ELF SHA-256为`eda3eb1d8eeb94832e8867197a7c5e1a54241e29c0d87a6b1901723d8b90d4df`，结构化stdout
+receipt SHA-256为`86de6baf0b2797713217113035e5bd28cc963504b38c8f17e4867cb0a18eef33`。
+
+public commits `c301f73`与`1cdb584`分别完成native metadata/probe与portable receipt校验；Actions run
+`32707593568`四个job全部success。independent media-route mask提交`e2dbee4`另有Actions run
+`32707744553`四个job全部success，但该Host CI不扩大本节board evidence。
+
+状态只为single-adapter physical capture `BOARD_VERIFIED`。它没有经过CameraMedia transport、combined
+Host/Edge service或浏览器，也不证明desired/actual闭环、encoder、性能、长稳、自动恢复或E2E；更不
+改变下节Composition offscreen candidate的`TARGET_NOT_RUN`。
+
 ## Composition offscreen candidate（TARGET_BUILD_VERIFIED / TARGET_NOT_RUN）
 
 public commit `c3b4770` 的portable synthetic reference renderer已在Host得到

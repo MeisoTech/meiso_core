@@ -502,6 +502,19 @@ candidate ELF（SHA-256 `05accb66e621c0bef981e78312fae851a8f0cb8b233e1a9c89e4d64
 故build为`TARGET_BUILD_VERIFIED`；没有board identity或target NDJSON receipt，runtime仍为
 `TARGET_NOT_RUN`。`offline_lease_ms`只随Plan验证/保留，没有Session-loss执行。
 
+### K1-camera — K230D physical capture source（完成的独立 slice）
+
+K230D Linux V4L2 adapter已在准确板上产生`THREE_FRAME_CAPTURE_RECEIPT`：既有GC2093 server保持
+存活，4个MMAP buffer取得3帧progressive NV12 `320x240/stride320/115200 bytes`。raw field ANY只在
+`G_FMT`确认progressive后继承；driver sequence 0标为absent，adapter使用synthetic effective sequence
+`1/2/3`且drop为0。退出时phase为`STOPPED`，mapped/queued ledger均为0。artifact/receipt SHA-256分别为
+`eda3eb1d8eeb94832e8867197a7c5e1a54241e29c0d87a6b1901723d8b90d4df`与
+`86de6baf0b2797713217113035e5bd28cc963504b38c8f17e4867cb0a18eef33`。
+
+该slice只证明camera source的bounded physical capture，不经过MediaTransport、Runtime desired/actual、
+combined Session或Host UI；也不证明encoder、render media、吞吐、长稳或E2E。它不能提升上述K1a
+offscreen candidate的`TARGET_NOT_RUN`，也不是physical presentation evidence。
+
 ### K2 — Physical present 与完整 media（后置）
 
 - 只有 K1 稳定后才接 DRM/display boundary、安全层、vblank 与物理 panel evidence；

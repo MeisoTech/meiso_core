@@ -510,10 +510,27 @@ control line 也未知。因此证据不声明运行时 autostart absence、完�
 reset；静态 image inspection 只证明 Meiso target 没有新增 startup hook。操作者报告板体缓慢
 升温且可接受，但没有校准数值、环境条件、功耗或 soak，所以这不是 thermal validation。
 
-当前公开 evidence 尚未证明该板实例的 camera module、display panel、touch、microphone、
-IMU、codec/KPU workload、clock quality、usable memory budget、持续温度、功耗或任何产品
-Profile。上面的 Wi-Fi lab 只证明一个固定 plain-TCP 数据路径，不证明产品 network stack；
-firmware 中包含 driver/API 也不等于物理 endpoint 存在。
+该板实例的camera source已有一次独立的`THREE_FRAME_CAPTURE_RECEIPT`。在既有GC2093 camera server
+保持存活的条件下，bounded Linux V4L2 adapter以4个MMAP buffer取得3帧progressive NV12：每帧
+`320x240`、stride `320`、`bytes_used=115200`。driver返回raw field ANY，但只在`G_FMT`已确认
+progressive后按format-inherited接受；raw driver sequence均为0且标为absent，adapter因此产生synthetic
+effective sequence `1/2/3`，producer drop均为0。三帧SHA-256依次为
+`c67befc577d44d7518e927b49dd54c65c3b5fdd8c6409ac915c96b0e475776cc`、
+`ee89441206693ee78516165413658dae3a55522cfc9e5fa10583756ea6a7f9ad`、
+`e7ee27ee8fefa008622e14c4444556e36d037f67b8bc1beca7e3c7ef9711f104`。probe进程`rc=0`且未超时，
+server仍存活；最终phase为`STOPPED`，mapped/queued均为0。cross ELF SHA-256为
+`eda3eb1d8eeb94832e8867197a7c5e1a54241e29c0d87a6b1901723d8b90d4df`，结构化stdout receipt SHA-256为
+`86de6baf0b2797713217113035e5bd28cc963504b38c8f17e4867cb0a18eef33`。
+
+public commits `c301f73`与`1cdb584`分别收口native metadata/probe及跨平台receipt校验；Actions run
+`32707593568`四个job全部success。后续independent media-route mask提交`e2dbee4`的Actions run
+`32707744553`也四个job全部success；该portable media CI不替代上述独立board receipt。
+
+该`BOARD_VERIFIED`只证明准确板上的bounded single-adapter physical capture；它不证明CameraMedia
+transport、codec/encoder、combined Host/Edge service、desired/actual控制闭环、浏览器显示、性能、
+长稳或E2E。当前公开evidence仍未证明display panel、touch、microphone、IMU、codec/KPU workload、
+clock quality、usable memory budget、持续温度或功耗。上面的Wi-Fi lab只证明一个固定plain-TCP数据
+路径，不证明产品network stack；firmware中包含driver/API也不等于相应物理endpoint已验证。
 
 系统通过通用 capability/endpoint discovery 表达这些组件，不为 K230D Zero 或某种 sensor
 建立 Core 特例。CanMV、native runtime、SDK sample 或其他镜像都可以用于后续实验；结果

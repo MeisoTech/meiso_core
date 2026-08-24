@@ -1,6 +1,7 @@
 # Composition scene lab v0
 
 > 状态：`C0 CODEC IMPLEMENTED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / R1 PORTABLE BLOB CARRIAGE VERIFIED / K1a HOST OFFSCREEN REFERENCE VERIFIED / TARGET BUILD VERIFIED / TARGET NOT RUN`。
+> Profile v3 camera source：`THREE_FRAME_CAPTURE_RECEIPT / BOARD_VERIFIED`；CameraMedia transport与E2E仍未验证。
 > 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
@@ -740,3 +741,17 @@ object sharing same mesh → delete first → scene disable`。cube publish只�
 到delete的每个scene snapshot步骤，Host收到新applied SceneDesired version和不同或按generator预期
 相同的result SHA-256/thumbnail；disable验证STOPPED且不再产生result。共享mesh不重复占published
 Blob slot。全过程同时保持Wi-Fi Stream，且没有跨endpoint gate、epoch或payload routing。
+
+## K230D CameraMedia source evidence（独立 slice）
+
+准确K230D上的bounded V4L2 adapter在既有GC2093 server存活时，用4个MMAP buffer取得3帧progressive
+NV12 `320x240/stride320/115200 bytes`，并输出`THREE_FRAME_CAPTURE_RECEIPT`。raw field ANY只在
+`G_FMT`已确认progressive后按format-inherited接受；raw driver sequence 0标为absent，effective sequence
+由adapter synthetic为`1/2/3`，producer drop为0。最终phase为`STOPPED`，mapped/queued均为0。
+cross ELF与receipt stdout SHA-256分别为
+`eda3eb1d8eeb94832e8867197a7c5e1a54241e29c0d87a6b1901723d8b90d4df`、
+`86de6baf0b2797713217113035e5bd28cc963504b38c8f17e4867cb0a18eef33`。
+
+该结果验证的是Profile v3所需camera source的单适配器物理采集前提，不是CameraMedia endpoint的
+desired/actual、external media binding、frame transport、Host display或combined E2E evidence；它也不
+改变K1a offscreen runner的`TARGET_NOT_RUN`。

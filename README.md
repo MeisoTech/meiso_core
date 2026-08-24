@@ -25,6 +25,7 @@ portable C11 参考实现和可重复实验。
 | Wi-Fi telemetry | macOS Host、K230D Linux Edge、direct-IP State/Stream 闭环与本地 dashboard | 已有受限 board evidence，不等于通用产品 Runtime |
 | Composition scene lab | codec、SceneStore、coordinator、fair scheduler，以及真实 TCP lifecycle、explicit same-process reconnect、分方向 backpressure 与 max-Blob 实验 | Host/loopback semantic、wire 与 transport evidence |
 | K1a reference renderer | bounded 320×240 synthetic offscreen renderer 与 offline runner | `HOST_OFFSCREEN_REFERENCE_VERIFIED`、`TARGET_BUILD_VERIFIED`、`TARGET_NOT_RUN`；不证明几何正确、driver、scanout 或物理显示 |
+| K230D camera capture | bounded Linux V4L2 four-buffer NV12 adapter 与一次三帧 target receipt | `BOARD_VERIFIED` 仅指单适配器物理采集；不证明 CameraMedia transport、combined service、性能或 E2E |
 
 逐版本提交、CI、资源账本和 target receipt 统一记录在
 [系统进展](docs/system-report.md)，不在首页重复维护。
@@ -74,6 +75,6 @@ ctest --preset windows-msvc-debug
 ## 尚未完成
 
 当前仓库不是 application-facing 完整产品：Virtual Edge/SDK、通用 probe/hotplug、
-MediaStream data path、认证与安全 transport 尚未完成。Composition 的 K230D candidate
+camera/render 的端到端 MediaStream data path、认证与安全 transport 尚未完成。Composition 的 K230D candidate
 只完成交叉构建；自动 reconnect/resume、fresh Edge、板端运行、真实 renderer backend、性能和
 physical presentation evidence 均未完成。
