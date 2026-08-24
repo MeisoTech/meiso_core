@@ -132,6 +132,20 @@ target_link_libraries(
 meiso_enable_warnings(meiso_composition_session_v3_profile)
 
 add_library(
+    meiso_composition_media_transport
+    profiles/composition-scene-lab-v0/composition_media_transport.c
+)
+target_include_directories(
+    meiso_composition_media_transport
+    PUBLIC profiles/composition-scene-lab-v0
+)
+target_link_libraries(
+    meiso_composition_media_transport
+    PUBLIC meiso_composition_session_v3_profile
+)
+meiso_enable_warnings(meiso_composition_media_transport)
+
+add_library(
     meiso_four_kind_lab_protocol
     profiles/four-kind-lab-v0/lab_protocol.c
 )
@@ -368,6 +382,33 @@ target_link_libraries(
 )
 meiso_enable_warnings(meiso_runtime_v4_test)
 
+add_executable(
+    meiso_composition_media_transport_test
+    tests/test_composition_media_transport.c
+)
+target_link_libraries(
+    meiso_composition_media_transport_test
+    PRIVATE meiso_composition_media_transport
+)
+meiso_enable_warnings(meiso_composition_media_transport_test)
+
+if(UNIX)
+    add_executable(
+        meiso_composition_media_posix_tcp_test
+        tests/test_composition_media_posix_tcp.c
+        profiles/composition-scene-lab-v0/composition_media_posix_tcp.c
+    )
+    target_compile_definitions(
+        meiso_composition_media_posix_tcp_test
+        PRIVATE send=meiso_test_send recv=meiso_test_recv
+    )
+    target_link_libraries(
+        meiso_composition_media_posix_tcp_test
+        PRIVATE meiso_composition_media_transport
+    )
+    meiso_enable_warnings(meiso_composition_media_posix_tcp_test)
+endif()
+
 if(TARGET meiso_posix_tcp_adapter)
     add_executable(meiso_posix_tcp_test tests/test_posix_tcp.c)
     target_link_libraries(
@@ -585,6 +626,16 @@ add_test(
     COMMAND meiso_composition_media_wire_test
 )
 add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)
+add_test(
+    NAME meiso_composition_media_transport_test
+    COMMAND meiso_composition_media_transport_test
+)
+if(TARGET meiso_composition_media_posix_tcp_test)
+    add_test(
+        NAME meiso_composition_media_posix_tcp_test
+        COMMAND meiso_composition_media_posix_tcp_test
+    )
+endif()
 if(TARGET meiso_posix_tcp_test)
     add_test(NAME meiso_posix_tcp_test COMMAND meiso_posix_tcp_test)
 endif()
