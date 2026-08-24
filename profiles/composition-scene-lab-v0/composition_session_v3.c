@@ -1550,10 +1550,12 @@ MeisoCompositionSessionV3Status meiso_composition_media_frame_decode(
         return MEISO_COMPOSITION_SESSION_V3_TRUNCATED;
     }
     fragment_size = get_u32(input.data + 200U);
+#if SIZE_MAX < UINT32_MAX
     if ((size_t)fragment_size >
             SIZE_MAX - MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE) {
         return MEISO_COMPOSITION_SESSION_V3_MALFORMED;
     }
+#endif
     if (input.size < MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE +
             (size_t)fragment_size) {
         return MEISO_COMPOSITION_SESSION_V3_TRUNCATED;
