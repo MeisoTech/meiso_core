@@ -460,6 +460,44 @@ static bool activate_catalog(RuntimePair *pair, uint64_t generation)
     return true;
 }
 
+static bool activate_catalog_v4(RuntimePair *pair, uint64_t generation)
+{
+    MeisoRuntimeEvent event = {0};
+
+    CHECK(meiso_runtime_v4_offer_catalog(
+        pair->edge_runtime,
+        generation,
+        pair->endpoints,
+        MEISO_COMPOSITION_SESSION_V2_ENDPOINT_COUNT,
+        pair->routes_v4,
+        MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair,
+        pair->edge_session,
+        pair->host_session,
+        pair->host_runtime,
+        &event,
+        NULL
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED &&
+          event.catalog_generation == generation);
+    CHECK(meiso_runtime_accept_catalog(pair->host_runtime) ==
+          MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair,
+        pair->host_session,
+        pair->edge_session,
+        pair->edge_runtime,
+        &event,
+        NULL
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED &&
+          event.catalog_generation == generation);
+    pair->catalog_generation = generation;
+    return true;
+}
+
 static MeisoRuntimeRouteKey route_key(
     const RuntimePair *pair,
     size_t index
@@ -2702,6 +2740,88 @@ static bool test_catalog_offer_wire_variant_dispatch(void)
     return true;
 }
 
+static bool test_v4_route_binding_replacement_and_terminal(void)
+{
+    RuntimePair pair;
+    SchedulerFixture fixture;
+    MeisoRuntimeSchedulerWork state_work;
+    MeisoRuntimeSchedulerStepResult result;
+    MeisoRuntimeSchedulerSnapshot snapshot;
+    MeisoRuntimeRouteKey old_route;
+    MeisoRuntimeRouteKey wrong_route;
+    TestSource *state;
+    SchedulerArena arena_before;
+
+    CHECK(initialize_pair_v4(&pair, 130U));
+    CHECK(activate_catalog_v4(&pair, 1U));
+    CHECK(scheduler_init_fixture(
+        &fixture, pair.edge_runtime, pair.edge_session, 1U, 1U
+    ));
+    old_route = route_key(&pair, 0U);
+    state_work = state_accept_work(old_route, HOST_OWNER, 1U);
+    CHECK(scheduler_add_source(
+        &fixture,
+        MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT,
+        &state_work,
+        &state
+    ));
+    state->poll_status = MEISO_RUNTIME_SCHEDULER_POLL_EMPTY;
+    CHECK(meiso_runtime_scheduler_seal(fixture.scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_REBIND_REQUIRED);
+    arena_before = fixture.arena;
+    wrong_route = old_route;
+    wrong_route.endpoint_id.high ^= UINT64_C(1);
+    CHECK(meiso_runtime_scheduler_bind_source_route(
+        fixture.scheduler, state->source_id, wrong_route
+    ) == MEISO_RUNTIME_SCHEDULER_INVALID_ARGUMENT);
+    CHECK(memcmp(
+        &arena_before, &fixture.arena, sizeof(arena_before)
+    ) == 0);
+    CHECK(meiso_runtime_scheduler_bind_source_route(
+        fixture.scheduler, state->source_id, old_route
+    ) == MEISO_RUNTIME_SCHEDULER_OK);
+    CHECK(meiso_runtime_scheduler_finish_rebind(fixture.scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_OK);
+    CHECK(meiso_runtime_scheduler_snapshot(fixture.scheduler, &snapshot) &&
+          snapshot.phase == MEISO_RUNTIME_SCHEDULER_PHASE_READY &&
+          snapshot.catalog_generation == 1U);
+
+    CHECK(activate_catalog_v4(&pair, 2U));
+    CHECK(meiso_runtime_scheduler_step(fixture.scheduler, &result) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_REBIND_REQUIRED);
+    CHECK(state->boundary_calls == 1U &&
+          state->last_boundary ==
+              MEISO_RUNTIME_SCHEDULER_BOUNDARY_CATALOG_CHANGED &&
+          state->last_boundary_catalog == 2U);
+    arena_before = fixture.arena;
+    CHECK(meiso_runtime_scheduler_bind_source_route(
+        fixture.scheduler, state->source_id, old_route
+    ) == MEISO_RUNTIME_SCHEDULER_INVALID_STATE);
+    CHECK(memcmp(
+        &arena_before, &fixture.arena, sizeof(arena_before)
+    ) == 0);
+    state->work.value.state_accept.route = route_key(&pair, 0U);
+    CHECK(meiso_runtime_scheduler_bind_source_route(
+        fixture.scheduler,
+        state->source_id,
+        state->work.value.state_accept.route
+    ) == MEISO_RUNTIME_SCHEDULER_OK);
+    CHECK(meiso_runtime_scheduler_finish_rebind(fixture.scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_OK);
+
+    meiso_session_transport_lost(pair.edge_session);
+    CHECK(meiso_runtime_scheduler_step(fixture.scheduler, &result) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_SESSION_TERMINAL);
+    CHECK(state->boundary_calls == 2U &&
+          state->last_boundary ==
+              MEISO_RUNTIME_SCHEDULER_BOUNDARY_SESSION_TERMINAL &&
+          state->last_boundary_catalog == 0U);
+    CHECK(meiso_runtime_scheduler_step(fixture.scheduler, &result) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_SESSION_TERMINAL &&
+          state->boundary_calls == 2U);
+    return true;
+}
+
 int main(void)
 {
     if (!test_composite_profile_catalog_builder() ||
@@ -2719,7 +2839,8 @@ int main(void)
         !test_blob_publish_obligation_and_result() ||
         !test_catalog_rebind_and_terminal_notify_once() ||
         !test_per_peer_independence_and_ticket_boundary() ||
-        !test_catalog_offer_wire_variant_dispatch()) {
+        !test_catalog_offer_wire_variant_dispatch() ||
+        !test_v4_route_binding_replacement_and_terminal()) {
         return 1;
     }
     (void)printf("composition TX scheduler tests passed\n");
