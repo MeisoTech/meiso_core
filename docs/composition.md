@@ -56,6 +56,23 @@ framebuffer 是 layer payload，不是 Composition 模型：结合视锥与 rend
 连续 projection frame 使用 [MediaStream](resource.md#mediastream)，不能伪装成必须完整送达
 的 Blob。Edge 本地安全层由 Edge 拥有，不依赖 Host plan 才能存在。
 
+### Debug preview 与 physical camera
+
+Profile可以另行声明Edge-owned `RenderPreviewMedia`，把已完成off-screen candidate作为有界
+MediaStream回传Host用于debug。它必须绑定applied scene State、active plan/world与独立production/
+stream epoch；它不是PresentationStatus、RenderResult小thumbnail、display scanout或physical capture，
+也不能设置未观察到的fence/commit/vblank/physical evidence。
+
+physical camera是独立Runtime endpoint，其desired/actual/MediaStream与render preview分别协商和启停。
+`SceneDesired.camera`只表示Edge-native renderer的viewpoint/projection，不声明physical camera、capture
+format或sensor availability。缺少camera capability时必须truthfully unavailable，不能用render frame或
+synthetic source替代。
+
+Composition scene Profile v3为本地editor/debug workload选择上述两种Edge->Host media endpoint，并
+保持Wi-Fi、device telemetry、Presentation、Scene与media route在同一原子catalog。control仍使用
+State/Blob/小Stream；持续frame通过独立但Session-bound的数据面，详见
+[Direct-IP MediaStream v0](media-stream-direct-ip-v0.md)。Profile v1/v2及其现有evidence不受此设计影响。
+
 ## 代际与激活
 
 - Edge 的 capability generation 变化后，Host 必须针对新能力重新声明 plan。

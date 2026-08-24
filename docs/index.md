@@ -32,6 +32,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [Direct-IP Wi-Fi Runtime v0 实装规则书](wifi-runtime-direct-ip-v0.md)：该 Profile 在 macOS
   Host Dev Tool 与 K230D Linux Edge target 上的 locator/config、catalog/State/Stream 顺序、
   lifecycle、操作步骤与严格 evidence 边界；不是产品规范；
+- [Direct-IP MediaStream v0 实装规则书](media-stream-direct-ip-v0.md)：Composition scene Profile v3
+  选定的DeviceTelemetry、RenderPreviewMedia、CameraMedia endpoint、独立numeric direct-IP media
+  transport、Session-bound lifecycle与验收门；当前为design，MRT0 v4/MediaStream/target均未实现；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator
@@ -69,7 +72,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   已验证Host上的bounded 320×240 synthetic renderer与`baseline_cube_once` offline receipt；它不执行
   Runtime/Session/State/Stream、offline lease、K230D driver或physical output。official cross-build已为
   `TARGET_BUILD_VERIFIED`，但ELF未执行，target runtime仍为`TARGET_NOT_RUN`。
-  Host editor、自动resume、fresh Edge与SCAP 16-slot aggregate仍未验证；
+  后续Profile v3已冻结DeviceTelemetry、RenderPreviewMedia、CameraMedia与direct-IP MediaStream
+  design，但没有codec、Runtime、Host editor、target或E2E evidence；自动resume、fresh Edge与
+  SCAP 16-slot aggregate仍未验证；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；
 - [K230D Linux target](../targets/k230d-linux/README.md)：正式 Wi-Fi Runtime Edge、固定four-kind fixture，

@@ -136,6 +136,30 @@ Host desired 的本地提交、Core delivery acceptance、Edge observed、adapte
 也不能把静默丢弃伪装成“未订阅”。MediaStream 可以使用专业化数据面，但仍共享相同 endpoint、
 desired/actual、production epoch、Session 与 failure 语义。
 
+### Inline 与 external media route
+
+能够选择外部数据面的catalog revision必须为route显式声明delivery class；MRT0 v2/v3没有该字段，
+其现有route按各自固定wire语义隐式为`INLINE_RUNTIME`：
+
+- `INLINE_RUNTIME` 由当前 Runtime/Session payload 搬运 State、普通 Stream 或 Blob。State/Stream
+  unit必须落在协商的Runtime frame上限内；Blob total可以更大，但只能通过Profile有界的
+  begin/chunk/commit FSM传递，每个wire chunk仍受frame上限约束；
+- `EXTERNAL_MEDIA` 只允许 Stream 的 MediaStream 专业化。完整 media unit 可以超过 Runtime
+  payload，但 catalog 必须另行声明 Profile-bounded maximum unit、format/codec、buffer/backpressure
+  与 transport arrangement；generic Runtime Stream send/receive 不得截断或分片冒充该 route。
+
+external route 仍由相同 accepted catalog、Resource/endpoint identity、desired/actual、production
+epoch 与 Session lifecycle约束。Profile-owned media binding必须验证exact SessionId、catalog generation、
+route、endpoint incarnation、production epoch与media stream epoch；任一边界变化先使旧bind失效，
+partial media payload不得对SDK可见。media transport failure必须通过control plane actual/failure变得
+可观察；control Session terminal则关闭media transport。IP/socket/native buffer只属于adapter，
+不会因此进入Runtime业务identity。
+
+Composition scene Profile v1/v2继续分别选择MRT0 v2/v3且byte-exact不变。Profile v3选择MRT0 v4，
+用新增catalog delivery class注册DeviceTelemetry、RenderPreviewMedia与CameraMedia；其选定的direct-IP
+media arrangement见[Direct-IP MediaStream v0](media-stream-direct-ip-v0.md)。这是规范选择，当前公开
+实现仍未提供MRT0 v4或MediaStream data path。
+
 ### Runtime--SDK outbound scheduler
 
 Core、Session wire 与 direct Runtime API 不拥有 route scheduling。集成层可以为本地 peer 的 exact
