@@ -37,6 +37,13 @@ typedef struct {
     size_t endpoint_count;
     const MeisoRuntimeRouteDescriptor *routes;
     size_t route_count;
+    /*
+     * Exactly one route array is present and it matches the Scheduler's
+     * bound Runtime wire version: routes for MRT0 v2/v3, routes_v4 for MRT0
+     * v4. A mismatched, both-present, or both-absent work item is rejected
+     * as INVALID_ARGUMENT without entering Runtime.
+     */
+    const MeisoRuntimeV4RouteDescriptor *routes_v4;
 } MeisoRuntimeSchedulerCatalogOffer;
 
 typedef struct {

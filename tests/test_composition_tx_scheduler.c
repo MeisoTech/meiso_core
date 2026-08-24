@@ -64,6 +64,9 @@ typedef struct {
     MeisoRuntimeRouteDescriptor routes[
         MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT
     ];
+    MeisoRuntimeV4RouteDescriptor routes_v4[
+        MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT
+    ];
     uint8_t wifi_capability[
         MEISO_COMPOSITION_SESSION_V2_WIFI_CAPABILITY_BYTES
     ];
@@ -220,6 +223,30 @@ static bool initialize_runtime(
     return true;
 }
 
+static bool initialize_runtime_v4(
+    RuntimeArena *arena,
+    MeisoSession *session,
+    MeisoRuntime **out_runtime
+)
+{
+    MeisoRuntimeV3Config v3;
+    MeisoRuntimeV4Config config;
+    size_t required;
+
+    CHECK(meiso_composition_session_v2_runtime_config(
+        session, &v3
+    ) == MEISO_COMPOSITION_SESSION_V2_OK);
+    memset(&config, 0, sizeof(config));
+    config.base = v3.base;
+    config.max_blob_transfer_bytes = v3.max_blob_transfer_bytes;
+    required = meiso_runtime_v4_memory_required(&config);
+    CHECK(required != 0U && required <= sizeof(arena->bytes));
+    CHECK(meiso_runtime_v4_init(
+        arena->bytes, required, &config, out_runtime
+    ) == MEISO_RUNTIME_INIT_OK);
+    return true;
+}
+
 static bool build_catalog(RuntimePair *pair)
 {
     const MeisoCompositionSessionV2CatalogConfig config = {
@@ -232,6 +259,8 @@ static bool build_catalog(RuntimePair *pair)
         }
     };
 
+    size_t index;
+
     CHECK(meiso_composition_session_v2_build_catalog(
         &config,
         (MeisoMutableBuffer){
@@ -242,6 +271,12 @@ static bool build_catalog(RuntimePair *pair)
         pair->routes,
         MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT
     ) == MEISO_COMPOSITION_SESSION_V2_OK);
+    for (index = 0U;
+         index < MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT;
+         ++index) {
+        pair->routes_v4[index].route = pair->routes[index];
+        pair->routes_v4[index].delivery = MEISO_RUNTIME_DELIVERY_INLINE;
+    }
     return true;
 }
 
@@ -277,6 +312,44 @@ static bool initialize_pair(RuntimePair *pair, uint64_t nonce_salt)
         &pair->host_runtime_arena, pair->host_session, &pair->host_runtime
     ));
     CHECK(initialize_runtime(
+        &pair->edge_runtime_arena, pair->edge_session, &pair->edge_runtime
+    ));
+    CHECK(build_catalog(pair));
+    return true;
+}
+
+static bool initialize_pair_v4(RuntimePair *pair, uint64_t nonce_salt)
+{
+    MeisoSessionConfig host = base_session_config(
+        MEISO_SESSION_ROLE_HOST, nonce_salt
+    );
+    MeisoSessionConfig edge = base_session_config(
+        MEISO_SESSION_ROLE_EDGE, nonce_salt
+    );
+
+    memset(pair, 0, sizeof(*pair));
+    CHECK(meiso_composition_session_v2_configure_session(&host) ==
+          MEISO_COMPOSITION_SESSION_V2_OK);
+    CHECK(meiso_composition_session_v2_configure_session(&edge) ==
+          MEISO_COMPOSITION_SESSION_V2_OK);
+    CHECK(init_session(
+        &pair->host_session_arena, &host, &pair->host_session
+    ));
+    CHECK(init_session(
+        &pair->edge_session_arena, &edge, &pair->edge_session
+    ));
+    CHECK(meiso_session_start(pair->edge_session) ==
+          MEISO_SESSION_START_STARTED);
+    CHECK(meiso_session_start(pair->host_session) ==
+          MEISO_SESSION_START_STARTED);
+    CHECK(handshake_one(pair->host_session, pair->edge_session));
+    CHECK(handshake_one(pair->edge_session, pair->host_session));
+    CHECK(handshake_one(pair->host_session, pair->edge_session));
+    CHECK(handshake_one(pair->edge_session, pair->host_session));
+    CHECK(initialize_runtime_v4(
+        &pair->host_runtime_arena, pair->host_session, &pair->host_runtime
+    ));
+    CHECK(initialize_runtime_v4(
         &pair->edge_runtime_arena, pair->edge_session, &pair->edge_runtime
     ));
     CHECK(build_catalog(pair));
@@ -2458,6 +2531,177 @@ static bool test_per_peer_independence_and_ticket_boundary(void)
     return true;
 }
 
+static bool catalog_shape_rejected_without_runtime_progress(
+    RuntimePair *pair,
+    SchedulerFixture *fixture,
+    TestSource *source,
+    size_t expected_completions
+)
+{
+    MeisoRuntimeSchedulerStepResult result;
+    MeisoRuntimeSnapshot runtime_before;
+    MeisoRuntimeSnapshot runtime_after;
+    MeisoSessionSnapshot session_before;
+    MeisoSessionSnapshot session_after;
+    const CompletionRecord *record;
+
+    memset(&runtime_before, 0, sizeof(runtime_before));
+    memset(&runtime_after, 0, sizeof(runtime_after));
+    memset(&session_before, 0, sizeof(session_before));
+    memset(&session_after, 0, sizeof(session_after));
+    CHECK(meiso_runtime_snapshot(pair->edge_runtime, &runtime_before));
+    CHECK(meiso_session_snapshot(pair->edge_session, &session_before));
+    memset(&result, 0xa5, sizeof(result));
+    CHECK(meiso_runtime_scheduler_step(fixture->scheduler, &result) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_SOURCE_INVALID);
+    CHECK(meiso_runtime_snapshot(pair->edge_runtime, &runtime_after));
+    CHECK(meiso_session_snapshot(pair->edge_session, &session_after));
+    CHECK(memcmp(
+        &runtime_before, &runtime_after, sizeof(runtime_before)
+    ) == 0);
+    CHECK(memcmp(
+        &session_before, &session_after, sizeof(session_before)
+    ) == 0);
+    CHECK(source->completions == expected_completions &&
+          fixture->log.count == expected_completions);
+    record = &fixture->log.entries[expected_completions - 1U];
+    CHECK(record->source_id == source->source_id &&
+          record->kind == MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER &&
+          record->code == MEISO_RUNTIME_SCHEDULER_COMPLETION_REJECTED &&
+          record->runtime_status == MEISO_RUNTIME_INVALID_ARGUMENT);
+    return true;
+}
+
+static bool test_catalog_offer_wire_variant_dispatch(void)
+{
+    RuntimePair pair;
+    SchedulerFixture fixture;
+    MeisoRuntimeSchedulerWork work;
+    MeisoRuntimeSchedulerStepResult result;
+    MeisoRuntimeV4RouteDescriptor staged_v4;
+    MeisoRuntimeBlobSnapshot blob;
+    MeisoRuntimeEvent event = {0};
+    TestSource *source;
+
+    /* MRT0 v4 rejects base-only/both-absent/both-present work locally. */
+    CHECK(initialize_pair_v4(&pair, 110U));
+    CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &blob) &&
+          blob.wire_version == MEISO_RUNTIME_WIRE_VERSION_V4);
+    CHECK(scheduler_init_fixture(
+        &fixture, pair.edge_runtime, pair.edge_session, 1U, 1U
+    ));
+    memset(&work, 0, sizeof(work));
+    work.ticket = 1U;
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER;
+    work.value.catalog_offer.generation = 1U;
+    work.value.catalog_offer.endpoints = pair.endpoints;
+    work.value.catalog_offer.endpoint_count =
+        MEISO_COMPOSITION_SESSION_V2_ENDPOINT_COUNT;
+    work.value.catalog_offer.routes = pair.routes;
+    work.value.catalog_offer.route_count =
+        MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT;
+    CHECK(scheduler_add_source(
+        &fixture,
+        MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER,
+        &work,
+        &source
+    ));
+    CHECK(meiso_runtime_scheduler_seal(fixture.scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_OK);
+    CHECK(catalog_shape_rejected_without_runtime_progress(
+        &pair, &fixture, source, 1U
+    ));
+    source->work.value.catalog_offer.routes = NULL;
+    CHECK(catalog_shape_rejected_without_runtime_progress(
+        &pair, &fixture, source, 2U
+    ));
+    source->work.value.catalog_offer.routes = pair.routes;
+    source->work.value.catalog_offer.routes_v4 = pair.routes_v4;
+    CHECK(catalog_shape_rejected_without_runtime_progress(
+        &pair, &fixture, source, 3U
+    ));
+    source->work.value.catalog_offer.routes = NULL;
+    source->clear_after_complete = true;
+    CHECK(meiso_runtime_scheduler_step(fixture.scheduler, &result) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_SENT);
+    CHECK(result.completion.source_id == source->source_id &&
+          result.completion.code ==
+              MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT &&
+          result.completion.runtime_status == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        &pair,
+        pair.edge_session,
+        pair.host_session,
+        pair.host_runtime,
+        &event,
+        NULL
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED &&
+          event.catalog_generation == 1U);
+    CHECK(meiso_runtime_v4_staged_route_at(
+        pair.host_runtime, 0U, &staged_v4
+    ) == MEISO_RUNTIME_OK);
+    CHECK(endpoint_equal(
+        staged_v4.route.endpoint_id,
+        pair.routes_v4[0].route.endpoint_id
+    ) && staged_v4.route.endpoint_incarnation ==
+        pair.routes_v4[0].route.endpoint_incarnation &&
+        meiso_resource_descriptor_equal(
+            &staged_v4.route.resource,
+            &pair.routes_v4[0].route.resource
+        ) && staged_v4.route.facet == pair.routes_v4[0].route.facet &&
+        staged_v4.delivery == pair.routes_v4[0].delivery);
+
+    /* MRT0 v3 likewise rejects v4-only/both-present, then sends base-only. */
+    CHECK(initialize_pair(&pair, 120U));
+    CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &blob) &&
+          blob.wire_version == MEISO_RUNTIME_WIRE_VERSION_V3);
+    CHECK(scheduler_init_fixture(
+        &fixture, pair.edge_runtime, pair.edge_session, 1U, 1U
+    ));
+    memset(&work, 0, sizeof(work));
+    work.ticket = 1U;
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER;
+    work.value.catalog_offer.generation = 1U;
+    work.value.catalog_offer.endpoints = pair.endpoints;
+    work.value.catalog_offer.endpoint_count =
+        MEISO_COMPOSITION_SESSION_V2_ENDPOINT_COUNT;
+    work.value.catalog_offer.routes_v4 = pair.routes_v4;
+    work.value.catalog_offer.route_count =
+        MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT;
+    CHECK(scheduler_add_source(
+        &fixture,
+        MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER,
+        &work,
+        &source
+    ));
+    CHECK(meiso_runtime_scheduler_seal(fixture.scheduler) ==
+          MEISO_RUNTIME_SCHEDULER_OK);
+    CHECK(catalog_shape_rejected_without_runtime_progress(
+        &pair, &fixture, source, 1U
+    ));
+    source->work.value.catalog_offer.routes = pair.routes;
+    CHECK(catalog_shape_rejected_without_runtime_progress(
+        &pair, &fixture, source, 2U
+    ));
+    source->work.value.catalog_offer.routes_v4 = NULL;
+    source->clear_after_complete = true;
+    CHECK(meiso_runtime_scheduler_step(fixture.scheduler, &result) ==
+          MEISO_RUNTIME_SCHEDULER_STEP_SENT);
+    CHECK(result.completion.runtime_status == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        &pair,
+        pair.edge_session,
+        pair.host_session,
+        pair.host_runtime,
+        &event,
+        NULL
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED &&
+          event.catalog_generation == 1U);
+    return true;
+}
+
 int main(void)
 {
     if (!test_composite_profile_catalog_builder() ||
@@ -2474,7 +2718,8 @@ int main(void)
         !test_rx_obligation_blocks_until_committed() ||
         !test_blob_publish_obligation_and_result() ||
         !test_catalog_rebind_and_terminal_notify_once() ||
-        !test_per_peer_independence_and_ticket_boundary()) {
+        !test_per_peer_independence_and_ticket_boundary() ||
+        !test_catalog_offer_wire_variant_dispatch()) {
         return 1;
     }
     (void)printf("composition TX scheduler tests passed\n");

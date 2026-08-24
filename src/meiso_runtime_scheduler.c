@@ -54,6 +54,7 @@ struct MeisoRuntimeScheduler {
     bool sealed;
     bool callback_active;
     bool data_probe_due;
+    uint8_t wire_version;
 };
 
 typedef struct {
@@ -213,7 +214,9 @@ static bool scheduler_layout_valid(const MeisoRuntimeScheduler *scheduler)
         scheduler->phase <=
             MEISO_RUNTIME_SCHEDULER_PHASE_SESSION_TERMINAL &&
         scheduler->rx_obligation <=
-            MEISO_RUNTIME_SCHEDULER_RX_BLOB_PUBLISH;
+            MEISO_RUNTIME_SCHEDULER_RX_BLOB_PUBLISH &&
+        scheduler->wire_version >= MEISO_RUNTIME_WIRE_VERSION_V2 &&
+        scheduler->wire_version <= MEISO_RUNTIME_WIRE_VERSION_V4;
 }
 
 static bool output_overlaps_scheduler(
@@ -352,6 +355,7 @@ static MeisoRuntimeSchedulerStatus refresh_boundary(
 )
 {
     MeisoRuntimeSnapshot runtime_snapshot;
+    MeisoRuntimeBlobSnapshot blob_snapshot;
     MeisoSessionSnapshot session_snapshot;
     MeisoRuntimeStatus runtime_status;
     uint64_t generation;
@@ -373,7 +377,9 @@ static MeisoRuntimeSchedulerStatus refresh_boundary(
             &session_snapshot
         ) || !meiso_session_id_equal(
             scheduler->session_id, session_snapshot.session_id
-        )) {
+        ) || !meiso_runtime_blob_snapshot(
+            scheduler->runtime, &blob_snapshot
+        ) || blob_snapshot.wire_version != scheduler->wire_version) {
         if (scheduler->phase !=
             MEISO_RUNTIME_SCHEDULER_PHASE_SESSION_TERMINAL) {
             clear_route_bindings(scheduler);
@@ -534,6 +540,15 @@ static bool work_valid_for_source(
         !work_class_valid(source->source_class, work->kind)) {
         return false;
     }
+    if (work->kind == MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER &&
+        ((scheduler->wire_version == MEISO_RUNTIME_WIRE_VERSION_V4 &&
+          (work->value.catalog_offer.routes != NULL ||
+           work->value.catalog_offer.routes_v4 == NULL)) ||
+         (scheduler->wire_version != MEISO_RUNTIME_WIRE_VERSION_V4 &&
+          (work->value.catalog_offer.routes == NULL ||
+           work->value.catalog_offer.routes_v4 != NULL)))) {
+        return false;
+    }
     has_route = work_route(work, &route);
     if (has_route && (!route_valid(route) ||
         !scheduler->active_catalog_present ||
@@ -558,6 +573,16 @@ static MeisoRuntimeStatus dispatch_work(
     memset(out_generated, 0, sizeof(*out_generated));
     switch (work->kind) {
     case MEISO_RUNTIME_SCHEDULER_WORK_CATALOG_OFFER:
+        if (scheduler->wire_version == MEISO_RUNTIME_WIRE_VERSION_V4) {
+            return meiso_runtime_v4_offer_catalog(
+                scheduler->runtime,
+                work->value.catalog_offer.generation,
+                work->value.catalog_offer.endpoints,
+                work->value.catalog_offer.endpoint_count,
+                work->value.catalog_offer.routes_v4,
+                work->value.catalog_offer.route_count
+            );
+        }
         return meiso_runtime_offer_catalog(
             scheduler->runtime,
             work->value.catalog_offer.generation,
@@ -1006,6 +1031,7 @@ MeisoRuntimeSchedulerInitStatus meiso_runtime_scheduler_init(
 {
     SchedulerLayout layout;
     MeisoRuntimeSnapshot runtime_snapshot;
+    MeisoRuntimeBlobSnapshot blob_snapshot;
     MeisoSessionSnapshot session_snapshot;
     MeisoRuntimeScheduler *scheduler;
 
@@ -1031,6 +1057,8 @@ MeisoRuntimeSchedulerInitStatus meiso_runtime_scheduler_init(
             config->session,
             &runtime_snapshot,
             &session_snapshot
+        ) || !meiso_runtime_blob_snapshot(
+            config->runtime, &blob_snapshot
         )) {
         return MEISO_RUNTIME_SCHEDULER_INIT_CORE_NOT_READY;
     }
@@ -1055,6 +1083,7 @@ MeisoRuntimeSchedulerInitStatus meiso_runtime_scheduler_init(
     scheduler->max_control_sources = config->max_control_sources;
     scheduler->max_data_sources = config->max_data_sources;
     scheduler->local_role = session_snapshot.local_role;
+    scheduler->wire_version = blob_snapshot.wire_version;
     scheduler->active_catalog_present =
         runtime_snapshot.active_catalog_present;
     scheduler->catalog_generation = runtime_snapshot.active_catalog_present ?
