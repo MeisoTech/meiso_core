@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "composition_debug_peer.h"
 #include "scene_store.h"
 
