@@ -56,6 +56,8 @@ enum {
     INPUT_BYTES = 65536,
     OUTPUT_BYTES = 131072,
     ERROR_BYTES = 4096,
+    MEDIA_SCENARIO_TIMEOUT_SECONDS = 20,
+    MEDIA_SCENARIO_MAX_PUMP_STEPS = 10000000,
     ROUTE_RENDER_DESIRED = 12,
     ROUTE_RENDER_ACTUAL = 13,
     ROUTE_RENDER_EXTERNAL = 14
@@ -183,7 +185,7 @@ static void *media_writer_main(void *context)
     bool active = false;
 
     if (!write_all(writer->fd, render_command, sizeof(render_command) - 1U) ||
-        !make_deadline(&deadline, 5)) {
+        !make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
         writer->error_number = errno == 0 ? EIO : errno;
         close_fd(&writer->fd);
         return NULL;
@@ -315,7 +317,7 @@ static int accept_nonblocking(int listener)
     struct pollfd item = {listener, POLLIN, 0};
     struct timespec deadline;
 
-    if (!make_deadline(&deadline, 5)) {
+    if (!make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
         return -1;
     }
     while (deadline_pending(&deadline)) {
@@ -579,6 +581,20 @@ static MeisoCompositionMediaDesired render_desired(void)
     };
 }
 
+static bool media_desired_equal(
+    const MeisoCompositionMediaDesired *lhs,
+    const MeisoCompositionMediaDesired *rhs
+)
+{
+    return lhs->pixel_format == rhs->pixel_format &&
+        lhs->codec == rhs->codec && lhs->width == rhs->width &&
+        lhs->height == rhs->height &&
+        lhs->fps_millihz == rhs->fps_millihz &&
+        lhs->bitrate_bps == rhs->bitrate_bps &&
+        lhs->gop_frames == rhs->gop_frames &&
+        lhs->recovery_flags == rhs->recovery_flags;
+}
+
 static bool initialize_edge_media(
     MediaScenario *scenario,
     const CatalogStorage *catalog,
@@ -716,6 +732,7 @@ static void *edge_media_main(void *context)
     bool media_initialized = false;
     bool ok = false;
     struct timespec pump_deadline;
+    size_t pump_steps = 0U;
 
     control_fd = accept_nonblocking(scenario->control_listener);
     if (control_fd < 0) {
@@ -775,10 +792,13 @@ static void *edge_media_main(void *context)
         goto done;
     }
 
-    if (!make_deadline(&pump_deadline, 5)) {
+    if (!make_deadline(
+            &pump_deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS
+        )) {
         goto done;
     }
-    while (deadline_pending(&pump_deadline)) {
+    while (deadline_pending(&pump_deadline) &&
+           pump_steps < MEDIA_SCENARIO_MAX_PUMP_STEPS) {
         MeisoCompositionDebugPeerPumpResult result;
         MeisoCompositionDebugPeerPumpStatus status;
         MeisoCompositionDebugPeerSnapshot peer_snapshot;
@@ -790,6 +810,8 @@ static void *edge_media_main(void *context)
             fd_ready_now(control_fd, POLLOUT), &result
         );
         if (!edge_pump_benign(status)) {
+            scenario->failure_stage = 201U;
+            scenario->failure_status = status;
             goto done;
         }
         if (result.event_present) {
@@ -803,6 +825,7 @@ static void *edge_media_main(void *context)
                     !meiso_composition_debug_peer_route_key(
                         peer, ROUTE_RENDER_DESIRED, &desired_route
                     ) || !route_equal(result.event.route, desired_route)) {
+                    scenario->failure_stage = 202U;
                     goto done;
                 }
                 receive = meiso_state_replica_receive(
@@ -821,11 +844,13 @@ static void *edge_media_main(void *context)
                     meiso_composition_media_desired_decode(
                         wrapper.profile, &decoded
                     ) != MEISO_COMPOSITION_SESSION_V3_OK ||
-                    memcmp(&decoded, &expected, sizeof(decoded)) != 0 ||
+                    !media_desired_equal(&decoded, &expected) ||
                     meiso_composition_debug_peer_commit_state_receive(
                         peer, result.event.route,
                         &result.event.state_offer, receive
                     ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                        scenario->failure_stage = 203U;
+                        scenario->failure_status = receive;
                         goto done;
                     }
                 }
@@ -840,6 +865,7 @@ static void *edge_media_main(void *context)
                 if (meiso_composition_debug_peer_queue_work(
                         peer, 13U, &accept
                     ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                    scenario->failure_stage = 204U;
                     goto done;
                 }
                 desired_received = true;
@@ -851,11 +877,14 @@ static void *edge_media_main(void *context)
                         result.event.state_accept_owner,
                         result.event.state_accept_version
                     ) != MEISO_STATE_ACCEPT_CONFIRMED) {
+                    scenario->failure_stage = 205U;
                     goto done;
                 }
                 actual_accepted = true;
             } else if (result.event.type !=
                        MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED) {
+                scenario->failure_stage = 206U;
+                scenario->failure_status = result.event.type;
                 goto done;
             }
         }
@@ -865,6 +894,8 @@ static void *edge_media_main(void *context)
             ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
             if (completion.kind != MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT ||
                 completion.code != MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
+                scenario->failure_stage = 207U;
+                scenario->failure_status = completion.code;
                 goto done;
             }
             desired_accept_sent = true;
@@ -875,6 +906,8 @@ static void *edge_media_main(void *context)
             ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
             if (completion.kind != MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER ||
                 completion.code != MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
+                scenario->failure_stage = 208U;
+                scenario->failure_status = completion.code;
                 goto done;
             }
             actual_offer_sent = true;
@@ -910,6 +943,7 @@ static void *edge_media_main(void *context)
                                          sizeof(actual_suffix)},
                     &suffix_size
                 ) != MEISO_COMPOSITION_SESSION_V3_OK) {
+                scenario->failure_stage = 209U;
                 goto done;
             }
             actual.profile = (MeisoByteView){actual_suffix, suffix_size};
@@ -928,6 +962,7 @@ static void *edge_media_main(void *context)
                 !meiso_composition_debug_peer_route_key(
                     peer, ROUTE_RENDER_ACTUAL, &actual_route
                 )) {
+                scenario->failure_stage = 210U;
                 goto done;
             }
             memset(&work, 0, sizeof(work));
@@ -936,6 +971,7 @@ static void *edge_media_main(void *context)
             work.value.state_offer.offer = actual_offer;
             if (meiso_composition_debug_peer_queue_work(peer, 14U, &work) !=
                 MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                scenario->failure_stage = 211U;
                 goto done;
             }
             actual_queued = true;
@@ -943,6 +979,7 @@ static void *edge_media_main(void *context)
         if (actual_accepted && actual_offer_sent && !media_initialized) {
             if (!meiso_composition_debug_peer_snapshot(peer, &peer_snapshot) ||
                 !peer_snapshot.session.session_id_known) {
+                scenario->failure_stage = 212U;
                 goto done;
             }
             media_fd = accept_nonblocking(scenario->media_listener);
@@ -951,6 +988,9 @@ static void *edge_media_main(void *context)
                     media_fd, &transport_arena, &transport,
                     &adapter_arena, &adapter
                 )) {
+                if (scenario->failure_stage == 0U) {
+                    scenario->failure_stage = 213U;
+                }
                 goto done;
             }
             media_initialized = true;
@@ -964,6 +1004,8 @@ static void *edge_media_main(void *context)
             );
             if (prepare != MEISO_COMPOSITION_MEDIA_POSIX_TCP_PREPARE_READY &&
                 prepare != MEISO_COMPOSITION_MEDIA_POSIX_TCP_PREPARE_IDLE) {
+                scenario->failure_stage = 214U;
+                scenario->failure_status = prepare;
                 goto done;
             }
             if (meiso_composition_media_posix_tcp_wants_write(adapter)) {
@@ -975,6 +1017,8 @@ static void *edge_media_main(void *context)
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_WRITE_PACKET_SENT &&
                     write_status !=
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_WRITE_WOULD_BLOCK) {
+                    scenario->failure_stage = 215U;
+                    scenario->failure_status = write_status;
                     goto done;
                 }
             }
@@ -986,12 +1030,15 @@ static void *edge_media_main(void *context)
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_READ_REASSEMBLY_REPLACED &&
                     read_status !=
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_READ_WOULD_BLOCK) {
+                    scenario->failure_stage = 216U;
+                    scenario->failure_status = read_status;
                     goto done;
                 }
             }
             if (meiso_composition_media_transport_snapshot(
                     transport, &snapshot
                 ) != MEISO_COMPOSITION_MEDIA_TRANSPORT_OK) {
+                scenario->failure_stage = 217U;
                 goto done;
             }
             if (snapshot.phase == MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE) {
@@ -1001,6 +1048,12 @@ static void *edge_media_main(void *context)
             }
         }
         (void)sched_yield();
+        ++pump_steps;
+    }
+    if (!ok && scenario->failure_stage == 0U) {
+        scenario->failure_stage = pump_steps ==
+            MEDIA_SCENARIO_MAX_PUMP_STEPS ? 106U : 107U;
+        scenario->failure_status = (uint32_t)pump_steps;
     }
 
 done:
@@ -1008,7 +1061,7 @@ done:
         scenario_signal(scenario, false, true);
     } else {
         struct timespec deadline;
-        if (make_deadline(&deadline, 5)) {
+        if (make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
             (void)pthread_mutex_lock(&scenario->mutex);
             while (!scenario->service_done) {
                 if (pthread_cond_timedwait(
