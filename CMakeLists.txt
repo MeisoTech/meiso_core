@@ -75,6 +75,22 @@ target_include_directories(
 target_link_libraries(meiso_wifi_telemetry_profile PUBLIC meiso_runtime)
 meiso_enable_warnings(meiso_wifi_telemetry_profile)
 
+if(UNIX)
+    add_library(
+        meiso_wifi_linux_adapter
+        targets/k230d-linux/wifi_linux_adapter.c
+    )
+    target_include_directories(
+        meiso_wifi_linux_adapter
+        PUBLIC targets/k230d-linux
+    )
+    target_link_libraries(
+        meiso_wifi_linux_adapter
+        PUBLIC meiso_wifi_telemetry_profile
+    )
+    meiso_enable_warnings(meiso_wifi_linux_adapter)
+endif()
+
 add_library(
     meiso_composition_scene_profile
     profiles/composition-scene-lab-v0/composition_scene.c
@@ -199,6 +215,34 @@ target_link_libraries(
     PUBLIC meiso_composition_session_v3_profile
 )
 meiso_enable_warnings(meiso_composition_media_transport)
+
+if(UNIX)
+    add_library(
+        meiso_composition_media_posix_tcp_adapter
+        profiles/composition-scene-lab-v0/composition_media_posix_tcp.c
+    )
+    target_link_libraries(
+        meiso_composition_media_posix_tcp_adapter
+        PUBLIC meiso_composition_media_transport
+    )
+    meiso_enable_warnings(meiso_composition_media_posix_tcp_adapter)
+
+    add_library(
+        meiso_composition_host_app
+        devtools/composition_host_app.c
+    )
+    target_include_directories(
+        meiso_composition_host_app
+        PUBLIC devtools
+    )
+    target_link_libraries(
+        meiso_composition_host_app
+        PUBLIC
+            meiso_composition_debug_peer
+            meiso_composition_media_posix_tcp_adapter
+    )
+    meiso_enable_warnings(meiso_composition_host_app)
+endif()
 
 add_library(
     meiso_four_kind_lab_protocol
@@ -452,6 +496,18 @@ if(TARGET meiso_device_telemetry_linux_adapter)
     meiso_enable_warnings(meiso_device_telemetry_linux_adapter_test)
 endif()
 
+if(TARGET meiso_wifi_linux_adapter)
+    add_executable(
+        meiso_wifi_linux_adapter_test
+        tests/test_wifi_linux_adapter.c
+    )
+    target_link_libraries(
+        meiso_wifi_linux_adapter_test
+        PRIVATE meiso_wifi_linux_adapter
+    )
+    meiso_enable_warnings(meiso_wifi_linux_adapter_test)
+endif()
+
 if(TARGET meiso_camera_v4l2_adapter)
     add_executable(
         meiso_camera_v4l2_adapter_test
@@ -489,6 +545,18 @@ if(TARGET meiso_composition_debug_peer)
         PRIVATE meiso_composition_debug_peer
     )
     meiso_enable_warnings(meiso_composition_debug_peer_test)
+endif()
+
+if(TARGET meiso_composition_host_app)
+    add_executable(
+        meiso_composition_host_app_test
+        tests/test_composition_host_app.c
+    )
+    target_link_libraries(
+        meiso_composition_host_app_test
+        PRIVATE meiso_composition_host_app
+    )
+    meiso_enable_warnings(meiso_composition_host_app_test)
 endif()
 
 add_executable(meiso_runtime_v4_test tests/test_runtime_v4.c)
@@ -751,6 +819,12 @@ if(TARGET meiso_device_telemetry_linux_adapter_test)
         COMMAND meiso_device_telemetry_linux_adapter_test
     )
 endif()
+if(TARGET meiso_wifi_linux_adapter_test)
+    add_test(
+        NAME meiso_wifi_linux_adapter_test
+        COMMAND meiso_wifi_linux_adapter_test
+    )
+endif()
 if(TARGET meiso_camera_v4l2_adapter_test)
     add_test(
         NAME meiso_camera_v4l2_adapter_test
@@ -767,6 +841,12 @@ if(TARGET meiso_composition_debug_peer_test)
     add_test(
         NAME meiso_composition_debug_peer_test
         COMMAND meiso_composition_debug_peer_test
+    )
+endif()
+if(TARGET meiso_composition_host_app_test)
+    add_test(
+        NAME meiso_composition_host_app_test
+        COMMAND meiso_composition_host_app_test
     )
 endif()
 add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)

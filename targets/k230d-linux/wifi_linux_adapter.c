@@ -14,9 +14,14 @@
 
 enum {
     WIFI_LINUX_ADAPTER_MAGIC = 0x574c4131U,
-    WIFI_LINUX_PATH_CAPACITY = 128,
-    WIFI_LINUX_LINE_CAPACITY = 256
+    WIFI_LINUX_PATH_CAPACITY = 256,
+    WIFI_LINUX_LINE_CAPACITY = 256,
+    WIFI_LINUX_WIRELESS_MAX_ROWS = 256,
+    WIFI_LINUX_WIRELESS_MAX_BYTES = 32768
 };
+
+static const char DEFAULT_SYS_CLASS_NET_ROOT[] = "/sys/class/net";
+static const char DEFAULT_PROC_NET_WIRELESS_PATH[] = "/proc/net/wireless";
 
 typedef struct {
     MeisoWifiTelemetryFieldMask field;
@@ -67,15 +72,20 @@ static const CounterField COUNTER_FIELDS[] = {
     }
 };
 
-static bool interface_name_valid(const char *value)
+static bool interface_name_length(const char *value, size_t *out_length)
 {
+    const char *end;
     size_t length;
     size_t index;
 
-    if (value == NULL) {
+    if (value == NULL || out_length == NULL) {
         return false;
     }
-    length = strlen(value);
+    end = memchr(value, '\0', MEISO_WIFI_LINUX_INTERFACE_NAME_CAPACITY);
+    if (end == NULL) {
+        return false;
+    }
+    length = (size_t)(end - value);
     if (length == 0U ||
         length >= MEISO_WIFI_LINUX_INTERFACE_NAME_CAPACITY ||
         strcmp(value, ".") == 0 || strcmp(value, "..") == 0) {
@@ -88,6 +98,69 @@ static bool interface_name_valid(const char *value)
             return false;
         }
     }
+    *out_length = length;
+    return true;
+}
+
+static bool interface_name_valid(const char *value)
+{
+    size_t length;
+    return interface_name_length(value, &length);
+}
+
+static bool ranges_overlap(
+    const void *lhs,
+    size_t lhs_size,
+    const void *rhs,
+    size_t rhs_size
+)
+{
+    const uintptr_t lhs_begin = (uintptr_t)lhs;
+    const uintptr_t rhs_begin = (uintptr_t)rhs;
+
+    if (lhs == NULL || rhs == NULL || lhs_size == 0U || rhs_size == 0U) {
+        return false;
+    }
+    if (lhs_begin > UINTPTR_MAX - lhs_size ||
+        rhs_begin > UINTPTR_MAX - rhs_size) {
+        return true;
+    }
+    return lhs_begin < rhs_begin + rhs_size &&
+        rhs_begin < lhs_begin + lhs_size;
+}
+
+static bool locator_length(const char *value, size_t *out_length)
+{
+    const char *end;
+
+    if (value == NULL || out_length == NULL) {
+        return false;
+    }
+    end = memchr(value, '\0', MEISO_WIFI_LINUX_LOCATOR_CAPACITY);
+    if (end == NULL || end <= value + 1 || value[0] != '/') {
+        return false;
+    }
+    *out_length = (size_t)(end - value);
+    return true;
+}
+
+static bool locator_valid(const char *value)
+{
+    size_t length;
+    return locator_length(value, &length);
+}
+
+static bool copy_locator(
+    char output[MEISO_WIFI_LINUX_LOCATOR_CAPACITY],
+    const char *input
+)
+{
+    size_t length;
+
+    if (!locator_length(input, &length)) {
+        return false;
+    }
+    memcpy(output, input, length + 1U);
     return true;
 }
 
@@ -102,7 +175,19 @@ static bool adapter_valid(const MeisoWifiLinuxAdapter *adapter)
 {
     return adapter != NULL && adapter->magic == WIFI_LINUX_ADAPTER_MAGIC &&
         interface_name_valid(adapter->interface_name) &&
-        field_mask_valid(adapter->allowed_fields);
+        field_mask_valid(adapter->allowed_fields) &&
+        locator_valid(adapter->sys_class_net_root) &&
+        locator_valid(adapter->proc_net_wireless_path);
+}
+
+static bool regular_source(const char *path)
+{
+    struct stat status;
+
+    return path != NULL && path[0] == '/' &&
+        memchr(path, '\0', WIFI_LINUX_PATH_CAPACITY) != NULL &&
+        stat(path, &status) == 0 &&
+        S_ISREG(status.st_mode);
 }
 
 static bool read_text_line(
@@ -116,6 +201,9 @@ static bool read_text_line(
 
     if (path == NULL || output == NULL || output_capacity < 2U ||
         output_capacity > (size_t)INT_MAX) {
+        return false;
+    }
+    if (!regular_source(path)) {
         return false;
     }
     file = fopen(path, "r");
@@ -175,7 +263,8 @@ static bool make_link_path(
     const int count = snprintf(
         output,
         WIFI_LINUX_PATH_CAPACITY,
-        "/sys/class/net/%s/%s",
+        "%s/%s/%s",
+        adapter->sys_class_net_root,
         adapter->interface_name,
         leaf
     );
@@ -191,7 +280,8 @@ static bool make_counter_path(
     const int count = snprintf(
         output,
         WIFI_LINUX_PATH_CAPACITY,
-        "/sys/class/net/%s/statistics/%s",
+        "%s/%s/statistics/%s",
+        adapter->sys_class_net_root,
         adapter->interface_name,
         file_name
     );
@@ -329,19 +419,36 @@ static bool read_signal_mbm(
     FILE *file;
     char line[WIFI_LINUX_LINE_CAPACITY];
     bool found = false;
+    size_t rows = 0U;
+    size_t total_bytes = 0U;
 
-    if (out_signal_mbm == NULL) {
+    if (out_signal_mbm == NULL ||
+        !regular_source(adapter->proc_net_wireless_path)) {
         return false;
     }
-    file = fopen("/proc/net/wireless", "r");
+    file = fopen(adapter->proc_net_wireless_path, "r");
     if (file == NULL) {
         return false;
     }
     while (fgets(line, (int)sizeof(line), file) != NULL) {
         const char *values;
+        const size_t line_bytes = strlen(line);
         unsigned int status;
         double link;
         double level;
+
+        if (line_bytes == sizeof(line) - 1U &&
+            line[line_bytes - 1U] != '\n' && !feof(file)) {
+            (void)fclose(file);
+            return false;
+        }
+        if (rows == WIFI_LINUX_WIRELESS_MAX_ROWS ||
+            line_bytes > WIFI_LINUX_WIRELESS_MAX_BYTES - total_bytes) {
+            (void)fclose(file);
+            return false;
+        }
+        ++rows;
+        total_bytes += line_bytes;
 
         if (!wireless_row_matches(
                 line, adapter->interface_name, &values
@@ -378,21 +485,58 @@ MeisoWifiLinuxAdapterStatus meiso_wifi_linux_adapter_init(
     const MeisoWifiLinuxAdapterConfig *config
 )
 {
+    MeisoWifiLinuxAdapter candidate;
+    const char *sys_class_net_root;
+    const char *proc_net_wireless_path;
+    size_t sys_class_net_root_length;
+    size_t proc_net_wireless_path_length;
+    size_t interface_name_length_value;
+
     if (adapter == NULL || config == NULL) {
         return MEISO_WIFI_LINUX_ADAPTER_INVALID_ARGUMENT;
     }
-    memset(adapter, 0, sizeof(*adapter));
-    if (!interface_name_valid(config->interface_name) ||
-        !field_mask_valid(config->allowed_fields)) {
+    if (ranges_overlap(adapter, sizeof(*adapter), config, sizeof(*config))) {
+        return MEISO_WIFI_LINUX_ADAPTER_INVALID_ARGUMENT;
+    }
+    sys_class_net_root = config->sys_class_net_root != NULL ?
+        config->sys_class_net_root : DEFAULT_SYS_CLASS_NET_ROOT;
+    proc_net_wireless_path = config->proc_net_wireless_path != NULL ?
+        config->proc_net_wireless_path : DEFAULT_PROC_NET_WIRELESS_PATH;
+    if (!interface_name_length(
+            config->interface_name, &interface_name_length_value
+        ) ||
+        !field_mask_valid(config->allowed_fields) ||
+        !locator_length(
+            sys_class_net_root, &sys_class_net_root_length
+        ) || !locator_length(
+            proc_net_wireless_path, &proc_net_wireless_path_length
+        )) {
         return MEISO_WIFI_LINUX_ADAPTER_INVALID_CONFIG;
     }
+    if (ranges_overlap(
+            adapter, sizeof(*adapter), sys_class_net_root,
+            sys_class_net_root_length + 1U
+        ) || ranges_overlap(
+            adapter, sizeof(*adapter), proc_net_wireless_path,
+            proc_net_wireless_path_length + 1U
+        )) {
+        return MEISO_WIFI_LINUX_ADAPTER_INVALID_ARGUMENT;
+    }
+    memset(&candidate, 0, sizeof(candidate));
     memmove(
-        adapter->interface_name,
+        candidate.interface_name,
         config->interface_name,
-        strlen(config->interface_name) + 1U
+        interface_name_length_value + 1U
     );
-    adapter->allowed_fields = config->allowed_fields;
-    adapter->magic = WIFI_LINUX_ADAPTER_MAGIC;
+    if (!copy_locator(candidate.sys_class_net_root, sys_class_net_root) ||
+        !copy_locator(
+            candidate.proc_net_wireless_path, proc_net_wireless_path
+        )) {
+        return MEISO_WIFI_LINUX_ADAPTER_INVALID_CONFIG;
+    }
+    candidate.allowed_fields = config->allowed_fields;
+    candidate.magic = WIFI_LINUX_ADAPTER_MAGIC;
+    *adapter = candidate;
     return MEISO_WIFI_LINUX_ADAPTER_OK;
 }
 
@@ -406,10 +550,13 @@ MeisoWifiLinuxAdapterStatus meiso_wifi_linux_adapter_probe(
     int32_t signal;
     size_t index;
 
-    if (!adapter_valid(adapter) || out_supported_fields == NULL) {
+    if (!adapter_valid(adapter) || out_supported_fields == NULL ||
+        ranges_overlap(
+            adapter, sizeof(*adapter), out_supported_fields,
+            sizeof(*out_supported_fields)
+        )) {
         return MEISO_WIFI_LINUX_ADAPTER_INVALID_ARGUMENT;
     }
-    *out_supported_fields = 0U;
     if (!configured_interface_is_wireless(adapter)) {
         return MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE;
     }
@@ -430,9 +577,11 @@ MeisoWifiLinuxAdapterStatus meiso_wifi_linux_adapter_probe(
             supported |= COUNTER_FIELDS[index].field;
         }
     }
+    if (supported == 0U) {
+        return MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE;
+    }
     *out_supported_fields = supported;
-    return supported != 0U ? MEISO_WIFI_LINUX_ADAPTER_OK :
-        MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE;
+    return MEISO_WIFI_LINUX_ADAPTER_OK;
 }
 
 MeisoWifiLinuxAdapterStatus meiso_wifi_linux_adapter_sample(
@@ -441,30 +590,33 @@ MeisoWifiLinuxAdapterStatus meiso_wifi_linux_adapter_sample(
     MeisoWifiTelemetrySample *out_sample
 )
 {
+    MeisoWifiTelemetrySample candidate;
     size_t index;
     bool source_observed = false;
 
     if (!adapter_valid(adapter) || out_sample == NULL ||
         !field_mask_valid(selected_fields) ||
         (selected_fields & (MeisoWifiTelemetryFieldMask)
-            ~adapter->allowed_fields) != 0U) {
+            ~adapter->allowed_fields) != 0U || ranges_overlap(
+                adapter, sizeof(*adapter), out_sample, sizeof(*out_sample)
+            )) {
         return MEISO_WIFI_LINUX_ADAPTER_INVALID_ARGUMENT;
     }
-    memset(out_sample, 0, sizeof(*out_sample));
-    out_sample->selected_fields = selected_fields;
+    memset(&candidate, 0, sizeof(candidate));
+    candidate.selected_fields = selected_fields;
     if (!configured_interface_is_wireless(adapter)) {
         return MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE;
     }
 
     if ((selected_fields & MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE) != 0U &&
-        read_link_state(adapter, &out_sample->link_state)) {
-        out_sample->present_fields |=
+        read_link_state(adapter, &candidate.link_state)) {
+        candidate.present_fields |=
             MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE;
         source_observed = true;
     }
     if ((selected_fields & MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM) != 0U &&
-        read_signal_mbm(adapter, &out_sample->signal_mbm)) {
-        out_sample->present_fields |= MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM;
+        read_signal_mbm(adapter, &candidate.signal_mbm)) {
+        candidate.present_fields |= MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM;
         source_observed = true;
     }
     for (index = 0U;
@@ -478,16 +630,20 @@ MeisoWifiLinuxAdapterStatus meiso_wifi_linux_adapter_sample(
             continue;
         }
         destination = (uint64_t *)(void *)(
-            (uint8_t *)(void *)out_sample + COUNTER_FIELDS[index].value_offset
+            (uint8_t *)(void *)&candidate +
+                COUNTER_FIELDS[index].value_offset
         );
         *destination = value;
-        out_sample->present_fields |= COUNTER_FIELDS[index].field;
+        candidate.present_fields |= COUNTER_FIELDS[index].field;
         source_observed = true;
     }
     if (!source_observed) {
         bool ignored_link_state;
         source_observed = read_link_state(adapter, &ignored_link_state);
     }
-    return source_observed ? MEISO_WIFI_LINUX_ADAPTER_OK :
-        MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE;
+    if (!source_observed) {
+        return MEISO_WIFI_LINUX_ADAPTER_UNAVAILABLE;
+    }
+    *out_sample = candidate;
+    return MEISO_WIFI_LINUX_ADAPTER_OK;
 }
