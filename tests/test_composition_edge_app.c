@@ -737,6 +737,8 @@ static bool fixture_shape_create(EdgeFixtureShape *fixture, uint64_t salt)
     MeisoWifiTelemetryFieldMask wifi_fields = 0U;
     MeisoDeviceTelemetryLinuxAdapter device;
     MeisoDeviceTelemetryCapability device_capability;
+    size_t buffer_index;
+    size_t byte_index;
 
     memset(fixture, 0, sizeof(*fixture));
     fixture->host_fd = -1;
@@ -767,6 +769,16 @@ static bool fixture_shape_create(EdgeFixtureShape *fixture, uint64_t salt)
     fixture->camera.dequeue.field_provenance =
         MEISO_CAMERA_V4L2_FIELD_EXPLICIT_PROGRESSIVE;
     CHECK(fixture->camera.storage != NULL);
+    for (buffer_index = 0U;
+         buffer_index < MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT;
+         ++buffer_index) {
+        for (byte_index = 0U; byte_index < MEISO_CAMERA_V4L2_SIZE_IMAGE;
+             ++byte_index) {
+            fixture->camera.storage[
+                buffer_index * MEISO_CAMERA_V4L2_SIZE_IMAGE + byte_index
+            ] = (uint8_t)(byte_index * 37U + 11U);
+        }
+    }
     fixture->host_fd_flags = fcntl(fixture->host_fd, F_GETFL, 0);
     fixture->edge_fd_flags = fcntl(fixture->edge_fd, F_GETFL, 0);
     CHECK(fixture->host_fd_flags >= 0 && fixture->edge_fd_flags >= 0);
@@ -1658,11 +1670,34 @@ static bool drive_composition_desired_actual(
                 (void)fprintf(
                     stderr,
                     "composition edge status=%u scene=%u v=%llu step=%zu "
-                    "phase=%u terminal=%u\n",
+                    "phase=%u terminal=%u media=%u/%u mask=%u slot=%u "
+                    "render=%u/%llu camera=%u/%llu camera_phase=%u "
+                    "render_seq=%llu camera_seq=%llu\n",
                     (unsigned)edge_status, scene ? 1U : 0U,
                     (unsigned long long)desired_version, step,
                     (unsigned)out_snapshot->phase,
-                    (unsigned)out_snapshot->terminal_reason
+                    (unsigned)out_snapshot->terminal_reason,
+                    out_snapshot->media.bound ? 1U : 0U,
+                    (unsigned)out_snapshot->media.transport_phase,
+                    (unsigned)out_snapshot->media.active_route_mask,
+                    (unsigned)out_snapshot->media.slot_index,
+                    (unsigned)out_snapshot->actual[
+                        MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA
+                    ].production_status,
+                    (unsigned long long)out_snapshot->actual[
+                        MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA
+                    ].production_epoch,
+                    (unsigned)out_snapshot->actual[
+                        MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA
+                    ].production_status,
+                    (unsigned long long)out_snapshot->actual[
+                        MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA
+                    ].production_epoch,
+                    (unsigned)out_snapshot->camera.phase,
+                    (unsigned long long)out_snapshot->media
+                        .render_submitted_sequence,
+                    (unsigned long long)out_snapshot->media
+                        .camera_submitted_sequence
                 );
             }
             CHECK_GOTO(benign_edge_status(edge_status) &&
@@ -2047,10 +2082,6 @@ static bool drive_media_desired_actual(
                           host, event->route, &event->state_offer, receive
                       ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
                       cleanup);
-                if (preaccept != NULL && !preaccept->checked) {
-                    CHECK_GOTO(check_media_preaccept_gate(edge, preaccept),
-                               cleanup);
-                }
                 memset(&work, 0, sizeof(work));
                 work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
                 work.value.state_accept.route = event->route;
@@ -2076,6 +2107,12 @@ static bool drive_media_desired_actual(
               edge, &io, &edge_result
             )) && meiso_composition_edge_app_snapshot(edge, &snapshot),
             cleanup);
+        if (preaccept != NULL && !preaccept->checked && actual_offer_seen &&
+            !snapshot.media.bound &&
+            snapshot.actual[actual_index].delivery_pending &&
+            !snapshot.actual[actual_index].delivery_accepted) {
+            CHECK_GOTO(check_media_preaccept_gate(edge, preaccept), cleanup);
+        }
         if (edge_result.event_present && edge_result.event ==
                 MEISO_COMPOSITION_EDGE_APP_PUMP_ACTUAL_DELIVERY &&
             edge_result.actual_channel_present &&
@@ -2142,6 +2179,7 @@ static bool initialize_host_media(
     const EdgeFixtureShape *fixture,
     const MeisoCompositionEdgeAppSnapshot *edge_snapshot,
     int media_host_fd,
+    uint8_t active_route_mask,
     const MediaActualResult *render,
     const MediaActualResult *camera,
     HostMediaFixture *media
@@ -2155,11 +2193,16 @@ static bool initialize_host_media(
     size_t index;
 
     CHECK(fixture != NULL && edge_snapshot != NULL && media_host_fd >= 0 &&
-          render != NULL && camera != NULL && media != NULL);
+          media != NULL && active_route_mask != 0U &&
+          (active_route_mask &
+           (uint8_t)~MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL) == 0U &&
+          ((active_route_mask & MEISO_COMPOSITION_EDGE_APP_MEDIA_RENDER) ==
+               0U || render != NULL) &&
+          ((active_route_mask & MEISO_COMPOSITION_EDGE_APP_MEDIA_CAMERA) ==
+               0U || camera != NULL));
     memset(media, 0, sizeof(*media));
     media->config.local_role = MEISO_SESSION_ROLE_HOST;
-    media->config.active_route_mask =
-        MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL;
+    media->config.active_route_mask = active_route_mask;
     media->config.scope.session_id = edge_snapshot->control_session_id;
     media->config.scope.catalog_generation =
         edge_snapshot->active_catalog_generation;
@@ -2172,6 +2215,9 @@ static bool initialize_host_media(
         route->capability = index == 0U ?
             fixture->host_config.catalog.render_media_capability :
             fixture->host_config.catalog.camera_media_capability;
+        if ((active_route_mask & (uint8_t)(UINT8_C(1) << index)) == 0U) {
+            continue;
+        }
         route->binding.session_id = edge_snapshot->control_session_id;
         route->binding.catalog_generation =
             edge_snapshot->active_catalog_generation;
@@ -2256,7 +2302,7 @@ static bool host_media_step(HostMediaFixture *media, int media_host_fd)
     return true;
 }
 
-static bool drive_both_media_active(
+static bool drive_media_active(
     MeisoCompositionEdgeApp *edge,
     void *edge_arena,
     size_t edge_bytes,
@@ -2264,6 +2310,7 @@ static bool drive_both_media_active(
     int media_host_fd,
     HostMediaFixture *host_media,
     uint8_t expected_slot,
+    uint8_t expected_mask,
     MeisoCompositionEdgeAppMediaBindReceipt *out_receipt
 )
 {
@@ -2272,13 +2319,15 @@ static bool drive_both_media_active(
 
     CHECK(edge != NULL && edge_arena != NULL && edge_bytes != 0U &&
           media_edge_fd >= 0 && media_host_fd >= 0 && host_media != NULL &&
-          out_receipt != NULL);
+          out_receipt != NULL && expected_mask != 0U &&
+          (expected_mask &
+           (uint8_t)~MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL) == 0U);
     memset(&receipt, 0, sizeof(receipt));
     CHECK(meiso_composition_edge_app_bind_media_fd(
               edge, media_edge_fd, &receipt
           ) == MEISO_COMPOSITION_EDGE_APP_OK &&
           receipt.slot_index == expected_slot &&
-          receipt.active_route_mask == MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL);
+          receipt.active_route_mask == expected_mask);
     for (step = 0U; step < 30000U; ++step) {
         MeisoCompositionEdgeAppIoReady ready;
         MeisoCompositionEdgeAppPumpResult result;
@@ -2325,7 +2374,7 @@ static bool drive_both_media_active(
             host_snapshot.phase ==
                 MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE) {
             CHECK(edge_snapshot.media.active_route_mask ==
-                      MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL &&
+                      expected_mask &&
                   edge_snapshot.media_slots_consumed ==
                       (uint8_t)(expected_slot + 1U));
             *out_receipt = receipt;
@@ -2396,6 +2445,7 @@ static bool drive_camera_start_failure(
     size_t step;
     size_t index;
     bool success = false;
+    uint64_t failed_actual_versions[2] = {0U, 0U};
 
     CHECK(edge != NULL && host != NULL && catalog != NULL && camera != NULL);
     for (index = 0U; index < 2U; ++index) {
@@ -2566,6 +2616,10 @@ static bool drive_camera_start_failure(
                       .production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
                   snapshot.wifi_effective_present,
                   cleanup);
+            failed_actual_versions[0] =
+                snapshot.actual[actual_indices[0]].actual_state_version;
+            failed_actual_versions[1] =
+                snapshot.actual[actual_indices[1]].actual_state_version;
             success = true;
             break;
         }
@@ -2586,6 +2640,89 @@ static bool drive_camera_start_failure(
             (unsigned long long)camera->open_calls,
             snapshot.media.bound ? 1U : 0U, (unsigned)snapshot.phase
         );
+    } else {
+        const uint64_t wifi_samples_before = snapshot.inline_streams[
+            MEISO_COMPOSITION_EDGE_APP_INLINE_WIFI
+        ].samples_materialized;
+
+        success = false;
+        for (step = 0U; step < 512U; ++step) {
+            MeisoCompositionDebugPeerPumpResult host_result;
+            MeisoCompositionEdgeAppPumpResult edge_result;
+            const MeisoCompositionEdgeAppIoReady ready = {
+                true, true, false, false, false,
+                {77U, UINT64_C(1700000000000) +
+                          (uint64_t)step * UINT64_C(1000000000)}
+            };
+
+            memset(&host_result, 0, sizeof(host_result));
+            CHECK_GOTO(benign_host_status(
+                  meiso_composition_debug_peer_pump(
+                      host, true, true, &host_result
+                  )
+                ), cleanup);
+            if (host_result.completed_source_present) {
+                MeisoRuntimeSchedulerCompletion completion;
+
+                memset(&completion, 0, sizeof(completion));
+                CHECK_GOTO(meiso_composition_debug_peer_take_completion(
+                      host, host_result.completed_source_index, &completion
+                    ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                      completion.code ==
+                          MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT &&
+                      host_result.completed_source_index != accept_sources[0] &&
+                      host_result.completed_source_index != accept_sources[1],
+                      cleanup);
+            }
+            if (host_result.event_present && host_result.event.type ==
+                    MEISO_RUNTIME_EVENT_STATE_OFFER) {
+                bool failure_route = false;
+
+                for (index = 0U; index < 2U; ++index) {
+                    MeisoRuntimeRouteKey route;
+
+                    CHECK_GOTO(meiso_composition_debug_peer_route_key(
+                          host, route_indices[index], &route
+                        ), cleanup);
+                    failure_route = failure_route || route_key_equal(
+                        host_result.event.route, route
+                    );
+                }
+                CHECK_GOTO(!failure_route &&
+                      resolve_unrelated_actual_offer(
+                          host, &host_result.event
+                      ), cleanup);
+            }
+            memset(&edge_result, 0, sizeof(edge_result));
+            CHECK_GOTO(benign_edge_status(
+                  meiso_composition_edge_app_pump(edge, &ready, &edge_result)
+                ), cleanup);
+        }
+        CHECK_GOTO(meiso_composition_edge_app_snapshot(edge, &snapshot) &&
+              snapshot.phase == MEISO_COMPOSITION_EDGE_APP_PHASE_READY &&
+              snapshot.control_ready && !snapshot.media.bound &&
+              snapshot.actual[actual_indices[0]].actual_state_version ==
+                  failed_actual_versions[0] &&
+              snapshot.actual[actual_indices[1]].actual_state_version ==
+                  failed_actual_versions[1] &&
+              snapshot.actual[actual_indices[0]].production_status ==
+                  ((expected_failure_mask &
+                    MEISO_COMPOSITION_EDGE_APP_MEDIA_RENDER) != 0U ?
+                       MEISO_RUNTIME_PRODUCTION_FAILED :
+                       MEISO_RUNTIME_PRODUCTION_RUNNING) &&
+              snapshot.actual[actual_indices[1]].production_status ==
+                  ((expected_failure_mask &
+                    MEISO_COMPOSITION_EDGE_APP_MEDIA_CAMERA) != 0U ?
+                       MEISO_RUNTIME_PRODUCTION_FAILED :
+                       MEISO_RUNTIME_PRODUCTION_RUNNING) &&
+              snapshot.inline_streams[MEISO_COMPOSITION_EDGE_APP_INLINE_WIFI]
+                      .samples_materialized > wifi_samples_before &&
+              snapshot.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_WIFI]
+                      .production_status ==
+                  MEISO_RUNTIME_PRODUCTION_RUNNING &&
+              snapshot.wifi_effective_present,
+              cleanup);
+        success = true;
     }
 
 cleanup:
@@ -2622,12 +2759,219 @@ static bool pump_edge_media_once(
     return true;
 }
 
+static bool drive_host_latest_frame(
+    MeisoCompositionEdgeApp *edge,
+    MeisoCompositionDebugPeer *host,
+    HostMediaFixture *host_media,
+    int media_edge_fd,
+    int media_host_fd,
+    MeisoCompositionMediaSource source,
+    MeisoCompositionMediaPixelFormat pixel_format,
+    size_t expected_access_unit_bytes,
+    MeisoByteView expected_access_unit,
+    uint64_t now_base
+)
+{
+    MeisoCompositionMediaLatestView latest;
+    MeisoCompositionSceneRenderResult render_result;
+    MeisoRuntimeRouteKey render_route;
+    uint64_t render_result_sequence = 0U;
+    uint64_t last_frame_dependency_sequence = 0U;
+    uint64_t last_frame_world_generation = 0U;
+    uint64_t released_unmatched_frames = 0U;
+    bool render_result_seen = false;
+    size_t step;
+
+    CHECK(edge != NULL && host != NULL && host_media != NULL &&
+          media_edge_fd >= 0 && media_host_fd >= 0 &&
+          expected_access_unit_bytes != 0U &&
+          (expected_access_unit.size == 0U ||
+           (expected_access_unit.data != NULL &&
+            expected_access_unit.size == expected_access_unit_bytes)) &&
+          meiso_composition_debug_peer_route_key(
+              host, ROUTE_RENDER_RESULT, &render_route
+          ));
+    memset(&render_result, 0, sizeof(render_result));
+    for (step = 0U; step < 120000U; ++step) {
+        MeisoCompositionDebugPeerPumpResult host_result;
+        MeisoCompositionMediaTransportStatus latest_status;
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK(benign_host_status(meiso_composition_debug_peer_pump(
+            host, true, true, &host_result
+        )));
+        if (host_result.completed_source_present) {
+            MeisoRuntimeSchedulerCompletion completion;
+
+            memset(&completion, 0, sizeof(completion));
+            CHECK(meiso_composition_debug_peer_take_completion(
+                      host, host_result.completed_source_index, &completion
+                  ) == MEISO_COMPOSITION_DEBUG_PEER_OK &&
+                  completion.code ==
+                      MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT);
+        }
+        if (host_result.event_present) {
+            const MeisoRuntimeEvent *event = &host_result.event;
+
+            if (event->type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE &&
+                route_key_equal(event->route, render_route)) {
+                CHECK(meiso_composition_scene_render_result_decode(
+                          event->stream_sample.payload, &render_result
+                      ) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+                render_result_sequence = event->stream_sample.key.sequence;
+                render_result_seen = true;
+            } else if (event->type == MEISO_RUNTIME_EVENT_STATE_OFFER) {
+                CHECK(resolve_unrelated_actual_offer(host, event));
+            }
+        }
+        CHECK(pump_edge_media_once(
+            edge, host_media, media_edge_fd, media_host_fd,
+            now_base + (uint64_t)step, false
+        ));
+        memset(&latest, 0, sizeof(latest));
+        latest_status = meiso_composition_media_transport_latest(
+            host_media->transport, source, &latest
+        );
+        CHECK(latest_status == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK ||
+              latest_status == MEISO_COMPOSITION_MEDIA_TRANSPORT_NO_FRAME);
+        if (latest_status == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK) {
+            MeisoContentId expected_digest;
+
+            memset(&expected_digest, 0, sizeof(expected_digest));
+            CHECK(latest.ref.frame_sequence != 0U &&
+                  latest.unit.binding.source == source &&
+                  latest.unit.frame_sequence == latest.ref.frame_sequence &&
+                  latest.unit.pixel_format == pixel_format &&
+                  latest.unit.codec == MEISO_COMPOSITION_MEDIA_CODEC_RAW &&
+                  latest.unit.width == 320U && latest.unit.height == 240U &&
+                  latest.unit.flags == MEISO_COMPOSITION_MEDIA_FRAME_KEY &&
+                  latest.unit.access_unit.data != NULL &&
+                  latest.unit.access_unit.size == expected_access_unit_bytes);
+            if (source ==
+                MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW) {
+                const bool result_matches = render_result_seen &&
+                    render_result_sequence != 0U &&
+                    latest.unit.applied_scene_owner.role ==
+                        MEISO_OWNER_ROLE_HOST &&
+                    latest.unit.applied_scene_owner.incarnation ==
+                        render_result.applied_scene_owner_incarnation &&
+                    latest.unit.applied_scene_state_version ==
+                        render_result.applied_scene_state_version &&
+                    latest.unit.active_plan_generation ==
+                        render_result.active_plan_generation &&
+                    latest.unit.world_generation ==
+                        render_result.world_generation;
+
+                if (!result_matches) {
+                    last_frame_dependency_sequence =
+                        latest.unit.dependency_sequence;
+                    last_frame_world_generation = latest.unit.world_generation;
+                    ++released_unmatched_frames;
+                    CHECK(meiso_composition_media_transport_release_latest(
+                              host_media->transport, &latest.ref
+                          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+                    continue;
+                }
+                expected_digest.algorithm = MEISO_CONTENT_ALGORITHM_SHA256;
+                expected_digest.digest_size = MEISO_SHA256_DIGEST_SIZE;
+                memcpy(
+                    expected_digest.digest,
+                    render_result.full_target_sha256,
+                    sizeof(render_result.full_target_sha256)
+                );
+                CHECK(meiso_runtime_blob_sha256_verify(
+                          &expected_digest, latest.unit.access_unit, NULL
+                      ));
+            } else {
+                CHECK(source == MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA &&
+                      expected_access_unit.data != NULL &&
+                      expected_access_unit.size ==
+                          latest.unit.access_unit.size &&
+                      memcmp(
+                          latest.unit.access_unit.data,
+                          expected_access_unit.data,
+                          expected_access_unit.size
+                      ) == 0);
+            }
+            CHECK(
+                  meiso_composition_media_transport_release_latest(
+                      host_media->transport, &latest.ref
+                  ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+            return true;
+        }
+    }
+    (void)fprintf(
+        stderr,
+        "latest frame timeout source=%u render_seen=%u render_seq=%llu "
+        "render_world=%llu last_dep=%llu last_world=%llu released=%llu\n",
+        (unsigned)source, render_result_seen ? 1U : 0U,
+        (unsigned long long)render_result_sequence,
+        (unsigned long long)render_result.world_generation,
+        (unsigned long long)last_frame_dependency_sequence,
+        (unsigned long long)last_frame_world_generation,
+        (unsigned long long)released_unmatched_frames
+    );
+    return false;
+}
+
+static bool retire_unbound_stale_candidate(
+    MeisoCompositionEdgeApp *edge,
+    int *media_host_fd,
+    int *media_edge_fd,
+    uint8_t expected_slots_consumed
+)
+{
+    MeisoCompositionEdgeAppSnapshot before;
+    MeisoCompositionEdgeAppSnapshot after;
+    struct pollfd item;
+    uint8_t byte = 0U;
+    ssize_t received;
+
+    CHECK(edge != NULL && media_host_fd != NULL && media_edge_fd != NULL &&
+          *media_host_fd >= 0 && *media_edge_fd >= 0 &&
+          meiso_composition_edge_app_snapshot(edge, &before) &&
+          !before.media.bound &&
+          before.media_slots_consumed == expected_slots_consumed);
+    close_fd(media_host_fd);
+    memset(&item, 0, sizeof(item));
+    item.fd = *media_edge_fd;
+    item.events = POLLIN;
+    CHECK(poll(&item, 1U, 1000) == 1 &&
+          (item.revents & (POLLIN | POLLHUP | POLLERR)) != 0);
+    do {
+        received = recv(*media_edge_fd, &byte, sizeof(byte), MSG_PEEK);
+    } while (received < 0 && errno == EINTR);
+    CHECK(received == 0);
+    close_fd(media_edge_fd);
+    CHECK(meiso_composition_edge_app_snapshot(edge, &after) &&
+          !after.media.bound &&
+          after.media_slots_consumed == before.media_slots_consumed &&
+          after.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA]
+                  .actual_state_version ==
+              before.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA]
+                  .actual_state_version &&
+          after.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA]
+                  .production_status ==
+              before.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA]
+                  .production_status &&
+          after.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA]
+                  .actual_state_version ==
+              before.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA]
+                  .actual_state_version &&
+          after.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA]
+                  .production_status ==
+              before.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA]
+                  .production_status);
+    return true;
+}
+
 static bool drive_camera_fixed_point_cadence(
     MeisoCompositionEdgeApp *edge,
     HostMediaFixture *host_media,
     int media_edge_fd,
     int media_host_fd,
-    FakeCamera *camera
+    FakeCamera *camera,
+    uint64_t expected_open_calls
 )
 {
     const uint64_t first_time = UINT64_C(2000000000);
@@ -2647,7 +2991,7 @@ static bool drive_camera_fixed_point_cadence(
             break;
         }
     }
-    CHECK(step < 200U && camera->open_calls == 2U &&
+    CHECK(step < 200U && camera->open_calls == expected_open_calls &&
           snapshot.camera.phase == MEISO_CAMERA_V4L2_PHASE_RUNNING &&
           camera->dequeue_calls == 0U);
     for (step = 0U; step < 200U && camera->dequeue_calls == 0U; ++step) {
@@ -2721,6 +3065,8 @@ static bool drive_camera_next_due(
     size_t step;
 
     CHECK(expected_sequence == before_calls + 1U);
+    CHECK(expected_sequence <= UINT32_MAX &&
+          (expected_sequence - 1U) <= (uint64_t)(INT32_MAX / 100000));
     for (step = 0U; step < 64U; ++step) {
         CHECK(pump_edge_media_once(
             edge, host_media, media_edge_fd, media_host_fd, early_ns, true
@@ -2729,9 +3075,9 @@ static bool drive_camera_next_due(
     CHECK(camera->dequeue_calls == before_calls);
     camera->dequeue.index = (uint32_t)(expected_sequence %
         MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT);
-    camera->dequeue.driver_sequence = expected_sequence;
+    camera->dequeue.driver_sequence = (uint32_t)expected_sequence;
     camera->dequeue.timestamp_microseconds =
-        (int64_t)((expected_sequence - 1U) * UINT64_C(100000));
+        (int32_t)((expected_sequence - 1U) * UINT64_C(100000));
     for (step = 0U; step < 200U &&
          camera->dequeue_calls == before_calls; ++step) {
         CHECK(pump_edge_media_once(
@@ -2811,11 +3157,13 @@ static bool drive_camera_epoch_reset_first_due(
     CHECK(step < 200U && camera->open_calls == expected_open_calls &&
           camera->dequeue_calls == before_dequeues &&
           snapshot.media.camera_submitted_sequence == 0U);
+    CHECK(before_dequeues < UINT32_MAX &&
+          before_dequeues <= (uint64_t)(INT32_MAX / 100000));
     camera->dequeue.index = (uint32_t)(before_dequeues %
         MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT);
-    camera->dequeue.driver_sequence = before_dequeues + 1U;
+    camera->dequeue.driver_sequence = (uint32_t)(before_dequeues + 1U);
     camera->dequeue.timestamp_microseconds =
-        (int64_t)(before_dequeues * UINT64_C(100000));
+        (int32_t)(before_dequeues * UINT64_C(100000));
     for (step = 0U; step < 200U &&
          camera->dequeue_calls == before_dequeues; ++step) {
         CHECK(pump_edge_media_once(
@@ -2886,7 +3234,7 @@ static MeisoCompositionScenePresentationPlan test_presentation_plan(void)
     return plan;
 }
 
-static bool drive_empty_scene_world_swaps_and_disable(
+static bool drive_empty_scene_world_swaps(
     MeisoCompositionEdgeApp *edge,
     MeisoCompositionDebugPeer *host,
     const CatalogStorage *catalog,
@@ -3025,7 +3373,20 @@ static bool drive_empty_scene_world_swaps_and_disable(
               ].production_epoch == camera_epoch);
         prior_world_generation = snapshot.active_world.world_generation;
     }
-    now_base += UINT64_C(100000000000);
+    return true;
+}
+
+static bool drive_presentation_disable(
+    MeisoCompositionEdgeApp *edge,
+    MeisoCompositionDebugPeer *host,
+    const CatalogStorage *catalog,
+    uint64_t now_base,
+    uint8_t expected_media_slot,
+    uint8_t expected_media_slots_consumed
+)
+{
+    MeisoCompositionEdgeAppSnapshot snapshot;
+
     CHECK(drive_composition_desired_actual(
               edge, host, catalog, false, false, 3U,
               (MeisoByteView){NULL, 0U},
@@ -3560,6 +3921,162 @@ cleanup:
     return success;
 }
 
+static bool drive_control_ready(
+    MeisoCompositionEdgeApp *edge,
+    MeisoCompositionDebugPeer *host,
+    MeisoCompositionEdgeAppSnapshot *out_edge_snapshot,
+    MeisoCompositionDebugPeerSnapshot *out_host_snapshot
+)
+{
+    size_t step;
+
+    CHECK(edge != NULL && host != NULL && out_edge_snapshot != NULL &&
+          out_host_snapshot != NULL);
+    for (step = 0U; step < 20000U; ++step) {
+        MeisoCompositionDebugPeerPumpResult host_result;
+        MeisoCompositionEdgeAppPumpResult edge_result;
+        const MeisoCompositionEdgeAppIoReady ready = {
+            true, true, false, false, false, {77U, step + 1U}
+        };
+
+        memset(&host_result, 0, sizeof(host_result));
+        CHECK(benign_host_status(meiso_composition_debug_peer_pump(
+            host, true, true, &host_result
+        )));
+        memset(&edge_result, 0, sizeof(edge_result));
+        CHECK(benign_edge_status(meiso_composition_edge_app_pump(
+                  edge, &ready, &edge_result
+              )) &&
+              meiso_composition_edge_app_snapshot(edge, out_edge_snapshot) &&
+              meiso_composition_debug_peer_snapshot(host, out_host_snapshot));
+        if (out_edge_snapshot->phase ==
+                MEISO_COMPOSITION_EDGE_APP_PHASE_READY &&
+            out_host_snapshot->phase ==
+                MEISO_COMPOSITION_DEBUG_PEER_PHASE_READY) {
+            CHECK(out_edge_snapshot->control_ready &&
+                  out_edge_snapshot->control_session_state ==
+                      MEISO_SESSION_STATE_READY &&
+                  out_edge_snapshot->active_catalog_generation == 1U &&
+                  out_host_snapshot->session.state == MEISO_SESSION_STATE_READY &&
+                  out_host_snapshot->runtime.active_catalog_present &&
+                  out_host_snapshot->runtime.active_catalog_generation == 1U &&
+                  out_host_snapshot->runtime.active_endpoint_count == 6U &&
+                  out_host_snapshot->runtime.active_route_count == 18U);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool test_camera_start_failure_recovery(void)
+{
+    EdgeFixtureShape fixture;
+    MeisoCompositionEdgeApp *edge = NULL;
+    MeisoCompositionDebugPeer *host = NULL;
+    MeisoCompositionEdgeAppSnapshot edge_snapshot;
+    MeisoCompositionDebugPeerSnapshot host_snapshot;
+    MediaActualResult render_media;
+    MediaActualResult camera_media;
+    HostMediaFixture host_media;
+    MeisoCompositionEdgeAppMediaBindReceipt receipt;
+    void *edge_arena = NULL;
+    void *host_arena = NULL;
+    int media_host_fd = -1;
+    int media_edge_fd = -1;
+    bool success = false;
+
+    memset(&fixture, 0, sizeof(fixture));
+    fixture.host_fd = -1;
+    fixture.edge_fd = -1;
+    memset(&host_media, 0, sizeof(host_media));
+    CHECK(fixture_shape_create(&fixture, UINT64_C(0x4000)));
+    edge_arena = calloc(1U, fixture.edge_bytes);
+    host_arena = calloc(1U, fixture.host_bytes);
+    CHECK_GOTO(edge_arena != NULL && host_arena != NULL &&
+          meiso_composition_debug_peer_init(
+              host_arena, fixture.host_bytes, &fixture.host_config, &host
+          ) == MEISO_COMPOSITION_DEBUG_PEER_INIT_OK &&
+          meiso_composition_edge_app_init(
+              edge_arena, fixture.edge_bytes, &fixture.edge_config, &edge
+          ) == MEISO_COMPOSITION_EDGE_APP_INIT_OK &&
+          drive_control_ready(
+              edge, host, &edge_snapshot, &host_snapshot
+          ) && drive_wifi_desired_actual(edge, host, &fixture.catalog) &&
+          drive_media_desired_actual(
+              edge, host, &fixture.catalog, true, 1U, 10000U,
+              NULL, &render_media
+          ) && drive_media_desired_actual(
+              edge, host, &fixture.catalog, false, 1U, 10000U,
+              NULL, &camera_media
+          ) && make_tcp_pair(&media_host_fd, &media_edge_fd) &&
+          meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
+          initialize_host_media(
+              &fixture, &edge_snapshot, media_host_fd,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL,
+              &render_media, &camera_media, &host_media
+          ) && drive_media_active(
+              edge, edge_arena, fixture.edge_bytes,
+              media_edge_fd, media_host_fd, &host_media, 0U,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, &receipt
+          ) && drive_camera_start_failure(
+              edge, host, &fixture.catalog, &fixture.camera,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_CAMERA, 1U
+          ), cleanup);
+    destroy_host_media(&host_media);
+    close_fd(&media_host_fd);
+    close_fd(&media_edge_fd);
+    fixture.camera.succeed = true;
+    CHECK_GOTO(drive_media_desired_actual(
+          edge, host, &fixture.catalog, false, 2U, 10000U,
+          NULL, &camera_media
+        ) && make_tcp_pair(&media_host_fd, &media_edge_fd) &&
+          meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
+          initialize_host_media(
+              &fixture, &edge_snapshot, media_host_fd,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL,
+              &render_media, &camera_media, &host_media
+          ) && drive_media_active(
+              edge, edge_arena, fixture.edge_bytes,
+              media_edge_fd, media_host_fd, &host_media, 1U,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, &receipt
+          ) && drive_camera_fixed_point_cadence(
+              edge, &host_media, media_edge_fd, media_host_fd,
+              &fixture.camera, 2U
+          ) && meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
+          edge_snapshot.phase == MEISO_COMPOSITION_EDGE_APP_PHASE_READY &&
+          edge_snapshot.control_ready && edge_snapshot.media.bound &&
+          edge_snapshot.media.slot_index == 1U &&
+          edge_snapshot.media_slots_consumed == 2U &&
+          edge_snapshot.actual[
+              MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA
+          ].production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+          edge_snapshot.actual[
+              MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA
+          ].production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+          edge_snapshot.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_WIFI]
+              .production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+          edge_snapshot.wifi_effective_present,
+          cleanup);
+    success = true;
+
+cleanup:
+    destroy_host_media(&host_media);
+    close_fd(&media_host_fd);
+    close_fd(&media_edge_fd);
+    if (edge != NULL) {
+        (void)meiso_composition_edge_app_abort(
+            edge, MEISO_COMPOSITION_EDGE_APP_TERMINAL_LOCAL_ABORT, ECANCELED
+        );
+    }
+    if (host != NULL) {
+        meiso_composition_debug_peer_abort(host, ECANCELED);
+    }
+    free(host_arena);
+    free(edge_arena);
+    fixture_destroy(&fixture);
+    return success;
+}
+
 static bool test_init_and_control_bootstrap(void)
 {
     EdgeFixtureShape fixture;
@@ -3571,6 +4088,8 @@ static bool test_init_and_control_bootstrap(void)
     void *host_arena = NULL;
     int media_host_fd = -1;
     int media_edge_fd = -1;
+    int stale_media_host_fd = -1;
+    int stale_media_edge_fd = -1;
     MediaActualResult render_media;
     MediaActualResult camera_media;
     MediaPreacceptGate preaccept;
@@ -3695,15 +4214,49 @@ static bool test_init_and_control_bootstrap(void)
     CHECK_GOTO(drive_wifi_back_to_back_replacement(
           edge, host, &fixture.catalog
         ), cleanup);
-    CHECK_GOTO(make_tcp_pair(&media_host_fd, &media_edge_fd), cleanup);
-    CHECK_GOTO(drive_media_desired_actual(
-          edge, host, &fixture.catalog, true, 1U, 10000U,
-          NULL, &render_media
+    CHECK_GOTO(make_tcp_pair(
+          &stale_media_host_fd, &stale_media_edge_fd
         ), cleanup);
     memset(&preaccept, 0, sizeof(preaccept));
     preaccept.edge_arena = edge_arena;
     preaccept.edge_bytes = fixture.edge_bytes;
-    preaccept.media_edge_fd = media_edge_fd;
+    preaccept.media_edge_fd = stale_media_edge_fd;
+    CHECK_GOTO(drive_media_desired_actual(
+          edge, host, &fixture.catalog, true, 1U, 10000U,
+          &preaccept, &render_media
+        ) && preaccept.checked &&
+          retire_unbound_stale_candidate(
+              edge, &stale_media_host_fd, &stale_media_edge_fd, 0U
+          ) && make_tcp_pair(&media_host_fd, &media_edge_fd) &&
+          meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
+          initialize_host_media(
+              &fixture, &edge_snapshot, media_host_fd,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_RENDER,
+              &render_media, NULL, &host_media
+          ) && drive_media_active(
+              edge, edge_arena, fixture.edge_bytes,
+              media_edge_fd, media_host_fd, &host_media, 0U,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_RENDER, &media_receipt
+          ) && media_receipt.active_route_mask ==
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_RENDER,
+          cleanup);
+    CHECK_GOTO(drive_empty_scene_world_swaps(
+          edge, host, &fixture.catalog, &cube_content_id, cube_blob_size,
+          cube_resident_mesh_bytes, 0U, 1U
+        ) && drive_host_latest_frame(
+          edge, host, &host_media, media_edge_fd, media_host_fd,
+          MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+          MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888,
+          MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES,
+          (MeisoByteView){NULL, 0U}, UINT64_C(1300000000000)
+        ), cleanup);
+    CHECK_GOTO(make_tcp_pair(
+          &stale_media_host_fd, &stale_media_edge_fd
+        ), cleanup);
+    memset(&preaccept, 0, sizeof(preaccept));
+    preaccept.edge_arena = edge_arena;
+    preaccept.edge_bytes = fixture.edge_bytes;
+    preaccept.media_edge_fd = stale_media_edge_fd;
     CHECK_GOTO(drive_media_desired_actual(
           edge, host, &fixture.catalog, false, 1U, 10000U,
           &preaccept, &camera_media
@@ -3715,46 +4268,61 @@ static bool test_init_and_control_bootstrap(void)
           camera_media.actual.source ==
               MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA &&
           render_media.snapshot.production_epoch != 0U &&
-          camera_media.snapshot.production_epoch != 0U,
+          camera_media.snapshot.production_epoch != 0U &&
+          meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
+          edge_snapshot.phase == MEISO_COMPOSITION_EDGE_APP_PHASE_READY &&
+          edge_snapshot.control_ready && !edge_snapshot.media.bound &&
+          edge_snapshot.media_slots_consumed == 1U &&
+          edge_snapshot.actual[
+              MEISO_COMPOSITION_EDGE_APP_ACTUAL_RENDER_MEDIA
+          ].production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+          edge_snapshot.actual[
+              MEISO_COMPOSITION_EDGE_APP_ACTUAL_CAMERA_MEDIA
+          ].production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+          edge_snapshot.render_media_actual_present &&
+          edge_snapshot.camera_media_actual_present &&
+          edge_snapshot.actual[MEISO_COMPOSITION_EDGE_APP_ACTUAL_WIFI]
+              .production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+          edge_snapshot.wifi_effective_present,
           cleanup);
+    destroy_host_media(&host_media);
+    close_fd(&media_host_fd);
+    close_fd(&media_edge_fd);
+    CHECK_GOTO(retire_unbound_stale_candidate(
+          edge, &stale_media_host_fd, &stale_media_edge_fd, 1U
+        ), cleanup);
+    fixture.camera.succeed = true;
+    CHECK_GOTO(make_tcp_pair(&media_host_fd, &media_edge_fd), cleanup);
     CHECK_GOTO(meiso_composition_edge_app_snapshot(edge, &edge_snapshot),
                cleanup);
     CHECK_GOTO(initialize_host_media(
           &fixture, &edge_snapshot, media_host_fd,
+          MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL,
           &render_media, &camera_media, &host_media
         ), cleanup);
-    CHECK_GOTO(drive_both_media_active(
+    CHECK_GOTO(drive_media_active(
           edge, edge_arena, fixture.edge_bytes,
-          media_edge_fd, media_host_fd, &host_media, 0U, &media_receipt
+          media_edge_fd, media_host_fd, &host_media, 1U,
+          MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, &media_receipt
         ), cleanup);
     CHECK_GOTO(media_receipt.active_route_mask ==
           MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, cleanup);
-    CHECK_GOTO(drive_camera_start_failure(
-          edge, host, &fixture.catalog, &fixture.camera,
-          MEISO_COMPOSITION_EDGE_APP_MEDIA_CAMERA, 1U
+    CHECK_GOTO(drive_host_latest_frame(
+          edge, host, &host_media, media_edge_fd, media_host_fd,
+          MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+          MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888,
+          MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES,
+          (MeisoByteView){NULL, 0U}, UINT64_C(1400000000000)
         ), cleanup);
-    destroy_host_media(&host_media);
-    close_fd(&media_host_fd);
-    close_fd(&media_edge_fd);
-    fixture.camera.succeed = true;
-    CHECK_GOTO(make_tcp_pair(&media_host_fd, &media_edge_fd), cleanup);
-    CHECK_GOTO(drive_media_desired_actual(
-          edge, host, &fixture.catalog, false, 2U, 10000U,
-          NULL, &camera_media
-        ), cleanup);
-    CHECK_GOTO(camera_media.snapshot.production_epoch != 0U, cleanup);
-    CHECK_GOTO(meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
-          initialize_host_media(
-              &fixture, &edge_snapshot, media_host_fd,
-              &render_media, &camera_media, &host_media
-          ) &&
-          drive_both_media_active(
-              edge, edge_arena, fixture.edge_bytes,
-              media_edge_fd, media_host_fd, &host_media, 1U, &media_receipt
-          ) && media_receipt.slot_index == 1U,
-          cleanup);
     CHECK_GOTO(drive_camera_fixed_point_cadence(
-          edge, &host_media, media_edge_fd, media_host_fd, &fixture.camera
+          edge, &host_media, media_edge_fd, media_host_fd, &fixture.camera, 1U
+        ) && drive_host_latest_frame(
+          edge, host, &host_media, media_edge_fd, media_host_fd,
+          MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,
+          MEISO_COMPOSITION_MEDIA_PIXEL_NV12, MEISO_CAMERA_V4L2_SIZE_IMAGE,
+          (MeisoByteView){
+              fixture.camera.storage, MEISO_CAMERA_V4L2_SIZE_IMAGE
+          }, UINT64_C(1500000000000)
         ), cleanup);
     CHECK_GOTO(drive_camera_next_due(
           edge, &host_media, media_edge_fd, media_host_fd, &fixture.camera,
@@ -3762,7 +4330,7 @@ static bool test_init_and_control_bootstrap(void)
         ), cleanup);
     camera_epoch = camera_media.snapshot.production_epoch;
     CHECK_GOTO(drive_media_desired_actual(
-          edge, host, &fixture.catalog, false, 3U, 10000U,
+          edge, host, &fixture.catalog, false, 2U, 10000U,
           NULL, &camera_media
         ) && camera_media.snapshot.production_epoch != camera_epoch &&
           meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
@@ -3775,25 +4343,26 @@ static bool test_init_and_control_bootstrap(void)
     CHECK_GOTO(make_tcp_pair(&media_host_fd, &media_edge_fd) &&
           initialize_host_media(
               &fixture, &edge_snapshot, media_host_fd,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL,
               &render_media, &camera_media, &host_media
           ) &&
-          drive_both_media_active(
+          drive_media_active(
               edge, edge_arena, fixture.edge_bytes,
-              media_edge_fd, media_host_fd, &host_media, 2U, &media_receipt
+              media_edge_fd, media_host_fd, &host_media, 2U,
+              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, &media_receipt
           ) && media_receipt.slot_index == 2U &&
           drive_camera_epoch_reset_first_due(
               edge, &host_media, media_edge_fd, media_host_fd,
-              &fixture.camera, UINT64_C(2200000001), 3U
+              &fixture.camera, UINT64_C(2200000001), 2U
           ), cleanup);
-    CHECK_GOTO(drive_empty_scene_world_swaps_and_disable(
-          edge, host, &fixture.catalog, &cube_content_id, cube_blob_size,
-          cube_resident_mesh_bytes, 2U, 3U
+    CHECK_GOTO(drive_presentation_disable(
+          edge, host, &fixture.catalog, UINT64_C(1600000000000), 2U, 3U
         ), cleanup);
     CHECK_GOTO(trigger_active_media_transport_loss(
           edge, &media_host_fd, media_edge_fd
         ) && drive_camera_start_failure(
           edge, host, &fixture.catalog, &fixture.camera,
-          MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, 3U
+          MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, 2U
         ), cleanup);
     success = true;
 
@@ -3801,6 +4370,8 @@ cleanup:
     destroy_host_media(&host_media);
     close_fd(&media_host_fd);
     close_fd(&media_edge_fd);
+    close_fd(&stale_media_host_fd);
+    close_fd(&stale_media_edge_fd);
     if (edge != NULL) {
         (void)meiso_composition_edge_app_abort(
             edge, MEISO_COMPOSITION_EDGE_APP_TERMINAL_LOCAL_ABORT, ECANCELED
@@ -3841,6 +4412,7 @@ static bool test_fixture_shape_checkpoint(void)
 int main(void)
 {
     if (!test_fixture_shape_checkpoint() ||
+        !test_camera_start_failure_recovery() ||
         !test_init_and_control_bootstrap()) {
         return 1;
     }

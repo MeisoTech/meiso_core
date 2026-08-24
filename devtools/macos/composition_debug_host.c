@@ -2032,6 +2032,51 @@ static MeisoCompositionHostAppMediaRouteMask current_media_mask(
     return mask;
 }
 
+static bool media_desired_channels_converged(
+    const MeisoCompositionHostAppSnapshot *snapshot
+)
+{
+    static const size_t MEDIA_CHANNELS[
+        MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT
+    ] = {
+        MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA,
+        MEISO_COMPOSITION_HOST_APP_DESIRED_CAMERA_MEDIA
+    };
+    size_t media_index;
+
+    for (media_index = 0U;
+         media_index < MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT;
+         ++media_index) {
+        const size_t index = MEDIA_CHANNELS[media_index];
+        const MeisoCompositionHostAppDesiredSnapshot *desired =
+            &snapshot->desired[index];
+        const MeisoCompositionHostAppActualSnapshot *actual =
+            &snapshot->actual[index];
+
+        if (!desired->requested) {
+            if (actual->present) {
+                return false;
+            }
+            continue;
+        }
+        if (desired->inflight_present || desired->delivery_pending ||
+            !desired->delivery_accepted || desired->delivery_failed ||
+            !actual->present || !actual->observed_desired.present ||
+            !actual->applied_desired.present ||
+            actual->observed_desired.owner.role != desired->owner.role ||
+            actual->observed_desired.owner.incarnation !=
+                desired->owner.incarnation ||
+            actual->observed_desired.version != desired->state_version ||
+            actual->applied_desired.owner.role != desired->owner.role ||
+            actual->applied_desired.owner.incarnation !=
+                desired->owner.incarnation ||
+            actual->applied_desired.version != desired->state_version) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool reconcile_media(Service *service)
 {
     MeisoCompositionHostAppSnapshot snapshot;
@@ -2039,6 +2084,7 @@ static bool reconcile_media(Service *service)
     MeisoCompositionHostAppStatus status;
     int fd;
     bool connected;
+    bool desired_converged;
 
     if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
         return false;
@@ -2047,9 +2093,11 @@ static bool reconcile_media(Service *service)
         !snapshot.media_bound) {
         close_fd(&service->media_fd);
     }
+    desired_converged = media_desired_channels_converged(&snapshot);
     mask = current_media_mask(&snapshot);
     if (service->media_connecting) {
-        if (snapshot.phase != MEISO_COMPOSITION_HOST_APP_PHASE_READY ||
+        if (!desired_converged ||
+            snapshot.phase != MEISO_COMPOSITION_HOST_APP_PHASE_READY ||
             mask == 0U || mask != service->media_connect_mask ||
             time_reached(&service->media_connect_deadline)) {
             close_fd(&service->media_fd);
@@ -2063,7 +2111,7 @@ static bool reconcile_media(Service *service)
         snapshot.phase != MEISO_COMPOSITION_HOST_APP_PHASE_READY) {
         return true;
     }
-    if (mask == 0U ||
+    if (!desired_converged || mask == 0U ||
         snapshot.media_slots_consumed >= snapshot.media_slots_capacity ||
         !time_reached(&service->media_retry_after)) {
         return true;

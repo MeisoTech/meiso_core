@@ -614,6 +614,21 @@ if(TARGET meiso_composition_edge_app)
         PRIVATE meiso_composition_edge_app
     )
     meiso_enable_warnings(meiso_composition_edge_app_test)
+
+    find_package(Threads REQUIRED)
+    add_executable(
+        meiso_composition_debug_edge_lifecycle_test
+        targets/k230d-linux/composition_debug_edge.c
+    )
+    target_compile_definitions(
+        meiso_composition_debug_edge_lifecycle_test
+        PRIVATE MEISO_COMPOSITION_DEBUG_EDGE_HOSTED_LIFECYCLE_TEST=1
+    )
+    target_link_libraries(
+        meiso_composition_debug_edge_lifecycle_test
+        PRIVATE meiso_composition_edge_app Threads::Threads
+    )
+    meiso_enable_warnings(meiso_composition_debug_edge_lifecycle_test)
 endif()
 
 add_executable(meiso_runtime_v4_test tests/test_runtime_v4.c)
@@ -916,6 +931,13 @@ if(TARGET meiso_composition_edge_app_test)
     add_test(
         NAME meiso_composition_edge_app_test
         COMMAND meiso_composition_edge_app_test
+    )
+endif()
+if(TARGET meiso_composition_debug_edge_lifecycle_test)
+    add_test(
+        NAME meiso_composition_debug_edge_lifecycle_test
+        COMMAND meiso_composition_debug_edge_lifecycle_test
+                --lifecycle-self-test
     )
 endif()
 add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)

@@ -60,7 +60,10 @@ enum {
     MEDIA_SCENARIO_MAX_PUMP_STEPS = 10000000,
     ROUTE_RENDER_DESIRED = 12,
     ROUTE_RENDER_ACTUAL = 13,
-    ROUTE_RENDER_EXTERNAL = 14
+    ROUTE_RENDER_EXTERNAL = 14,
+    ROUTE_CAMERA_DESIRED = 15,
+    ROUTE_CAMERA_ACTUAL = 16,
+    ROUTE_CAMERA_EXTERNAL = 17
 };
 
 typedef struct {
@@ -76,7 +79,10 @@ typedef struct {
     int media_listener;
     pthread_mutex_t mutex;
     pthread_cond_t condition;
+    bool render_active;
     bool media_active;
+    uint32_t media_accept_count;
+    uint32_t stale_accept_count;
     bool service_done;
     bool failed;
     uint32_t failure_stage;
@@ -177,9 +183,15 @@ static void *media_writer_main(void *context)
         "\"fps_millihz\":10000,\"bitrate_bps\":0,"
         "\"gop_frames\":1,\"request_key\":true}\n";
     static const char snapshot_command[] =
-        "{\"command\":\"snapshot\",\"request_id\":2}\n";
+        "{\"command\":\"snapshot\",\"request_id\":3}\n";
+    static const char camera_command[] =
+        "{\"command\":\"set_camera_media\",\"request_id\":2,"
+        "\"enabled\":true,\"pixel_format\":\"nv12\","
+        "\"codec\":\"raw\",\"width\":320,\"height\":240,"
+        "\"fps_millihz\":10000,\"bitrate_bps\":0,"
+        "\"gop_frames\":1,\"request_key\":true}\n";
     static const char close_command[] =
-        "{\"command\":\"close\",\"request_id\":3}\n";
+        "{\"command\":\"close\",\"request_id\":4}\n";
     MediaWriter *writer = context;
     struct timespec deadline;
     bool active = false;
@@ -187,6 +199,25 @@ static void *media_writer_main(void *context)
     if (!write_all(writer->fd, render_command, sizeof(render_command) - 1U) ||
         !make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
         writer->error_number = errno == 0 ? EIO : errno;
+        close_fd(&writer->fd);
+        return NULL;
+    }
+    (void)pthread_mutex_lock(&writer->scenario->mutex);
+    while (!writer->scenario->render_active && !writer->scenario->failed) {
+        if (pthread_cond_timedwait(
+                &writer->scenario->condition, &writer->scenario->mutex,
+                &deadline
+            ) == ETIMEDOUT) {
+            break;
+        }
+    }
+    active = writer->scenario->render_active && !writer->scenario->failed;
+    (void)pthread_mutex_unlock(&writer->scenario->mutex);
+    if (!active ||
+        !write_all(
+            writer->fd, camera_command, sizeof(camera_command) - 1U
+        )) {
+        writer->error_number = errno == 0 ? ETIMEDOUT : errno;
         close_fd(&writer->fd);
         return NULL;
     }
@@ -548,10 +579,16 @@ static bool edge_pump_benign(MeisoCompositionDebugPeerPumpStatus status)
         status == MEISO_COMPOSITION_DEBUG_PEER_PUMP_REBIND_PROGRESS;
 }
 
-static void scenario_signal(MediaScenario *scenario, bool active, bool failed)
+static void scenario_signal(
+    MediaScenario *scenario,
+    bool render_active,
+    bool media_active,
+    bool failed
+)
 {
     (void)pthread_mutex_lock(&scenario->mutex);
-    scenario->media_active = scenario->media_active || active;
+    scenario->render_active = scenario->render_active || render_active;
+    scenario->media_active = scenario->media_active || media_active;
     scenario->failed = scenario->failed || failed;
     (void)pthread_cond_broadcast(&scenario->condition);
     (void)pthread_mutex_unlock(&scenario->mutex);
@@ -581,6 +618,16 @@ static MeisoCompositionMediaDesired render_desired(void)
     };
 }
 
+static MeisoCompositionMediaDesired camera_desired(void)
+{
+    return (MeisoCompositionMediaDesired){
+        MEISO_COMPOSITION_MEDIA_PIXEL_NV12,
+        MEISO_COMPOSITION_MEDIA_CODEC_RAW,
+        320U, 240U, 10000U, 0U, 1U,
+        MEISO_COMPOSITION_MEDIA_RECOVERY_REQUEST_KEY
+    };
+}
+
 static bool media_desired_equal(
     const MeisoCompositionMediaDesired *lhs,
     const MeisoCompositionMediaDesired *rhs
@@ -600,42 +647,63 @@ static bool initialize_edge_media(
     const CatalogStorage *catalog,
     MeisoSessionId session_id,
     int fd,
+    uint8_t active_route_mask,
     void **out_transport_arena,
     MeisoCompositionMediaTransport **out_transport,
     void **out_adapter_arena,
     MeisoCompositionMediaPosixTcp **out_adapter
 )
 {
-    const MeisoCompositionMediaDesired desired = render_desired();
+    const MeisoCompositionMediaDesired desired[2] = {
+        render_desired(), camera_desired()
+    };
+    const uint8_t route_indices[2] = {
+        ROUTE_RENDER_EXTERNAL, ROUTE_CAMERA_EXTERNAL
+    };
+    const MeisoCompositionMediaSource sources[2] = {
+        MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+        MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA
+    };
     MeisoCompositionMediaTransportConfig config;
-    MeisoCompositionMediaRouteConfig *route;
     size_t transport_bytes;
     size_t adapter_bytes;
     size_t alignment = 0U;
+    size_t index;
 
-    (void)scenario;
+    if (scenario == NULL || catalog == NULL || fd < 0 ||
+        active_route_mask == 0U ||
+        (active_route_mask &
+         (uint8_t)~MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK) != 0U) {
+        return false;
+    }
     memset(&config, 0, sizeof(config));
     config.local_role = MEISO_SESSION_ROLE_EDGE;
-    config.active_route_mask =
-        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK;
+    config.active_route_mask = active_route_mask;
     config.scope.session_id = session_id;
     config.scope.catalog_generation = 1U;
+    config.routes[0].capability = service_catalog().render_media_capability;
     config.routes[1].capability = service_catalog().camera_media_capability;
-    route = &config.routes[0];
-    route->capability = service_catalog().render_media_capability;
-    route->binding.session_id = session_id;
-    route->binding.catalog_generation = 1U;
-    route->binding.endpoint_id =
-        catalog->routes[ROUTE_RENDER_EXTERNAL].route.endpoint_id;
-    route->binding.endpoint_incarnation =
-        catalog->routes[ROUTE_RENDER_EXTERNAL].route.endpoint_incarnation;
-    route->binding.resource_id =
-        catalog->routes[ROUTE_RENDER_EXTERNAL].route.resource.id;
-    route->binding.source = MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW;
-    route->binding.production_epoch = 501U;
-    route->binding.media_stream_epoch = 601U;
-    route->binding.channel_nonce = (MeisoSessionNonce){701U, 711U};
-    route->effective = desired;
+    for (index = 0U; index < 2U; ++index) {
+        MeisoCompositionMediaRouteConfig *route = &config.routes[index];
+        if ((active_route_mask & (uint8_t)(UINT8_C(1) << index)) == 0U) {
+            continue;
+        }
+        route->binding.session_id = session_id;
+        route->binding.catalog_generation = 1U;
+        route->binding.endpoint_id =
+            catalog->routes[route_indices[index]].route.endpoint_id;
+        route->binding.endpoint_incarnation =
+            catalog->routes[route_indices[index]].route.endpoint_incarnation;
+        route->binding.resource_id =
+            catalog->routes[route_indices[index]].route.resource.id;
+        route->binding.source = sources[index];
+        route->binding.production_epoch = 501U + (uint64_t)index;
+        route->binding.media_stream_epoch = 601U + (uint64_t)index;
+        route->binding.channel_nonce = (MeisoSessionNonce){
+            701U + (uint64_t)index, 711U + (uint64_t)index
+        };
+        route->effective = desired[index];
+    }
     {
         MeisoCompositionMediaTransportStatus status =
             meiso_composition_media_transport_memory_required(
@@ -700,39 +768,54 @@ static void *edge_media_main(void *context)
     static const MeisoOwnerScope host_owner = {MEISO_OWNER_ROLE_HOST, 5U};
     static const MeisoOwnerScope edge_owner = {MEISO_OWNER_ROLE_EDGE, 41U};
     const MeisoStateConfig state_config = {MEISO_STATE_DELIVERY_CONVERGENT};
+    const uint8_t desired_routes[2] = {
+        ROUTE_RENDER_DESIRED, ROUTE_CAMERA_DESIRED
+    };
+    const uint8_t actual_routes[2] = {
+        ROUTE_RENDER_ACTUAL, ROUTE_CAMERA_ACTUAL
+    };
+    const uint8_t desired_sources[2] = {13U, 15U};
+    const uint8_t actual_sources[2] = {14U, 16U};
+    const MeisoCompositionMediaDesired desired_values[2] = {
+        render_desired(), camera_desired()
+    };
+    const MeisoCompositionMediaSource media_sources[2] = {
+        MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
+        MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA
+    };
     MediaScenario *scenario = context;
     MeisoCompositionDebugPeerConfig peer_config;
     CatalogStorage catalog;
     int control_fd = -1;
     int media_fd = -1;
     void *peer_arena = NULL;
-    void *replica_arena = NULL;
-    void *publisher_arena = NULL;
+    void *replica_arenas[2] = {NULL, NULL};
+    void *publisher_arenas[2] = {NULL, NULL};
     void *transport_arena = NULL;
     void *adapter_arena = NULL;
     MeisoCompositionDebugPeer *peer = NULL;
-    MeisoStateReplica *replica = NULL;
-    MeisoStatePublisher *publisher = NULL;
+    MeisoStateReplica *replicas[2] = {NULL, NULL};
+    MeisoStatePublisher *publishers[2] = {NULL, NULL};
     MeisoCompositionMediaTransport *transport = NULL;
     MeisoCompositionMediaPosixTcp *adapter = NULL;
     size_t peer_bytes;
-    size_t replica_bytes;
-    size_t publisher_bytes;
-    MeisoRuntimeRouteKey desired_route;
-    MeisoRuntimeRouteKey actual_route;
-    MeisoStateOffer actual_offer;
-    uint8_t actual_suffix[MEISO_COMPOSITION_MEDIA_ACTUAL_WIRE_SIZE];
-    uint8_t actual_wire[MEISO_COMPOSITION_MEDIA_ACTUAL_STATE_MAX_PAYLOAD_SIZE];
-    MeisoByteView actual_payload;
-    bool desired_received = false;
-    bool desired_accept_sent = false;
-    bool actual_queued = false;
-    bool actual_offer_sent = false;
-    bool actual_accepted = false;
+    size_t replica_bytes[2];
+    size_t publisher_bytes[2];
+    MeisoRuntimeRouteKey desired_route_keys[2];
+    MeisoRuntimeRouteKey actual_route_keys[2];
+    bool desired_received[2] = {false, false};
+    bool desired_accept_sent[2] = {false, false};
+    bool actual_queued[2] = {false, false};
+    bool actual_offer_sent[2] = {false, false};
+    bool actual_accepted[2] = {false, false};
     bool media_initialized = false;
+    uint8_t active_media_mask = 0U;
+    bool camera_delay_started = false;
+    uint32_t camera_delay_steps = 0U;
     bool ok = false;
     struct timespec pump_deadline;
     size_t pump_steps = 0U;
+    size_t index;
 
     control_fd = accept_nonblocking(scenario->control_listener);
     if (control_fd < 0) {
@@ -763,33 +846,38 @@ static void *edge_media_main(void *context)
         goto done;
     }
     peer_bytes = meiso_composition_debug_peer_memory_required(&peer_config);
-    replica_bytes = meiso_state_replica_memory_required(
-        &catalog.routes[ROUTE_RENDER_DESIRED].route.resource
-    );
-    publisher_bytes = meiso_state_publisher_memory_required(
-        &catalog.routes[ROUTE_RENDER_ACTUAL].route.resource, &state_config
-    );
     peer_arena = calloc(1U, peer_bytes);
-    replica_arena = calloc(1U, replica_bytes);
-    publisher_arena = calloc(1U, publisher_bytes);
-    if (peer_bytes == 0U || replica_bytes == 0U || publisher_bytes == 0U ||
-        peer_arena == NULL || replica_arena == NULL ||
-        publisher_arena == NULL ||
+    if (peer_bytes == 0U || peer_arena == NULL ||
         meiso_composition_debug_peer_init(
             peer_arena, peer_bytes, &peer_config, &peer
-        ) != MEISO_COMPOSITION_DEBUG_PEER_INIT_OK ||
-        meiso_state_replica_init(
-            replica_arena, replica_bytes,
-            &catalog.routes[ROUTE_RENDER_DESIRED].route.resource, &replica
-        ) != MEISO_STATE_INIT_OK ||
-        meiso_state_replica_begin_owner(replica, host_owner) !=
-            MEISO_STATE_OWNER_STARTED ||
-        meiso_state_publisher_init(
-            publisher_arena, publisher_bytes,
-            &catalog.routes[ROUTE_RENDER_ACTUAL].route.resource,
-            &state_config, &publisher
-        ) != MEISO_STATE_INIT_OK) {
+        ) != MEISO_COMPOSITION_DEBUG_PEER_INIT_OK) {
         goto done;
+    }
+    for (index = 0U; index < 2U; ++index) {
+        replica_bytes[index] = meiso_state_replica_memory_required(
+            &catalog.routes[desired_routes[index]].route.resource
+        );
+        publisher_bytes[index] = meiso_state_publisher_memory_required(
+            &catalog.routes[actual_routes[index]].route.resource, &state_config
+        );
+        replica_arenas[index] = calloc(1U, replica_bytes[index]);
+        publisher_arenas[index] = calloc(1U, publisher_bytes[index]);
+        if (replica_bytes[index] == 0U || publisher_bytes[index] == 0U ||
+            replica_arenas[index] == NULL || publisher_arenas[index] == NULL ||
+            meiso_state_replica_init(
+                replica_arenas[index], replica_bytes[index],
+                &catalog.routes[desired_routes[index]].route.resource,
+                &replicas[index]
+            ) != MEISO_STATE_INIT_OK ||
+            meiso_state_replica_begin_owner(replicas[index], host_owner) !=
+                MEISO_STATE_OWNER_STARTED ||
+            meiso_state_publisher_init(
+                publisher_arenas[index], publisher_bytes[index],
+                &catalog.routes[actual_routes[index]].route.resource,
+                &state_config, &publishers[index]
+            ) != MEISO_STATE_INIT_OK) {
+            goto done;
+        }
     }
 
     if (!make_deadline(
@@ -820,110 +908,210 @@ static void *edge_media_main(void *context)
                 MeisoCompositionMediaDesired decoded;
                 MeisoStateReceiveStatus receive;
                 MeisoRuntimeSchedulerWork accept;
+                bool matched = false;
 
-                if (desired_received ||
-                    !meiso_composition_debug_peer_route_key(
-                        peer, ROUTE_RENDER_DESIRED, &desired_route
-                    ) || !route_equal(result.event.route, desired_route)) {
-                    scenario->failure_stage = 202U;
-                    goto done;
-                }
-                receive = meiso_state_replica_receive(
-                    replica, result.event.state_offer.state.owner,
-                    result.event.state_offer.state.version,
-                    result.event.state_offer.state.payload
-                );
-                {
-                    const MeisoCompositionMediaDesired expected =
-                        render_desired();
+                for (index = 0U; index < 2U; ++index) {
+                    if (!meiso_composition_debug_peer_route_key(
+                            peer, desired_routes[index],
+                            &desired_route_keys[index]
+                        ) || !route_equal(
+                            result.event.route, desired_route_keys[index]
+                        )) {
+                        continue;
+                    }
+                    if (desired_received[index] ||
+                        (index == 1U && !scenario->render_active)) {
+                        scenario->failure_stage = 202U;
+                        goto done;
+                    }
+                    receive = meiso_state_replica_receive(
+                        replicas[index],
+                        result.event.state_offer.state.owner,
+                        result.event.state_offer.state.version,
+                        result.event.state_offer.state.payload
+                    );
                     if (receive != MEISO_STATE_RECEIVE_NEW ||
-                    result.event.state_offer.state.version != 1U ||
-                    !meiso_runtime_desired_state_decode(
-                        result.event.state_offer.state.payload, &wrapper
-                    ) || !wrapper.enabled ||
-                    meiso_composition_media_desired_decode(
-                        wrapper.profile, &decoded
-                    ) != MEISO_COMPOSITION_SESSION_V3_OK ||
-                    !media_desired_equal(&decoded, &expected) ||
-                    meiso_composition_debug_peer_commit_state_receive(
-                        peer, result.event.route,
-                        &result.event.state_offer, receive
-                    ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
-                        scenario->failure_stage = 203U;
+                        result.event.state_offer.state.version != 1U ||
+                        !meiso_runtime_desired_state_decode(
+                            result.event.state_offer.state.payload, &wrapper
+                        ) || !wrapper.enabled ||
+                        meiso_composition_media_desired_decode(
+                            wrapper.profile, &decoded
+                        ) != MEISO_COMPOSITION_SESSION_V3_OK ||
+                        !media_desired_equal(
+                            &decoded, &desired_values[index]
+                        ) ||
+                        meiso_composition_debug_peer_commit_state_receive(
+                            peer, result.event.route,
+                            &result.event.state_offer, receive
+                        ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                        scenario->failure_stage = 203U + (uint32_t)index;
                         scenario->failure_status = receive;
                         goto done;
                     }
+                    memset(&accept, 0, sizeof(accept));
+                    accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
+                    accept.value.state_accept.route = result.event.route;
+                    accept.value.state_accept.generation =
+                        result.event.state_offer.generation;
+                    accept.value.state_accept.owner =
+                        result.event.state_offer.state.owner;
+                    accept.value.state_accept.version = 1U;
+                    if (meiso_composition_debug_peer_queue_work(
+                            peer, desired_sources[index], &accept
+                        ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                        scenario->failure_stage = 205U + (uint32_t)index;
+                        goto done;
+                    }
+                    desired_received[index] = true;
+                    matched = true;
+                    break;
                 }
-                memset(&accept, 0, sizeof(accept));
-                accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
-                accept.value.state_accept.route = result.event.route;
-                accept.value.state_accept.generation =
-                    result.event.state_offer.generation;
-                accept.value.state_accept.owner =
-                    result.event.state_offer.state.owner;
-                accept.value.state_accept.version = 1U;
-                if (meiso_composition_debug_peer_queue_work(
-                        peer, 13U, &accept
-                    ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
-                    scenario->failure_stage = 204U;
+                if (!matched) {
+                    scenario->failure_stage = 207U;
                     goto done;
                 }
-                desired_received = true;
             } else if (result.event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT) {
-                if (!actual_queued ||
-                    meiso_state_publisher_mark_delivery_accepted(
-                        publisher,
-                        result.event.state_accept_generation,
-                        result.event.state_accept_owner,
-                        result.event.state_accept_version
-                    ) != MEISO_STATE_ACCEPT_CONFIRMED) {
-                    scenario->failure_stage = 205U;
+                bool matched = false;
+
+                for (index = 0U; index < 2U; ++index) {
+                    if (!meiso_composition_debug_peer_route_key(
+                            peer, actual_routes[index],
+                            &actual_route_keys[index]
+                        ) || !route_equal(
+                            result.event.route, actual_route_keys[index]
+                        )) {
+                        continue;
+                    }
+                    if (!actual_queued[index] || actual_accepted[index] ||
+                        meiso_state_publisher_mark_delivery_accepted(
+                            publishers[index],
+                            result.event.state_accept_generation,
+                            result.event.state_accept_owner,
+                            result.event.state_accept_version
+                        ) != MEISO_STATE_ACCEPT_CONFIRMED) {
+                        scenario->failure_stage = 208U + (uint32_t)index;
+                        goto done;
+                    }
+                    actual_accepted[index] = true;
+                    matched = true;
+                    break;
+                }
+                if (!matched) {
+                    scenario->failure_stage = 210U;
                     goto done;
                 }
-                actual_accepted = true;
             } else if (result.event.type !=
                        MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED) {
-                scenario->failure_stage = 206U;
+                scenario->failure_stage = 211U;
                 scenario->failure_status = result.event.type;
                 goto done;
             }
         }
-        memset(&completion, 0, sizeof(completion));
-        if (meiso_composition_debug_peer_take_completion(
-                peer, 13U, &completion
-            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
-            if (completion.kind != MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT ||
-                completion.code != MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
-                scenario->failure_stage = 207U;
-                scenario->failure_status = completion.code;
+        for (index = 0U; index < 2U; ++index) {
+            memset(&completion, 0, sizeof(completion));
+            if (meiso_composition_debug_peer_take_completion(
+                    peer, desired_sources[index], &completion
+                ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                if (completion.kind !=
+                        MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT ||
+                    completion.code !=
+                        MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
+                    scenario->failure_stage = 212U + (uint32_t)index;
+                    scenario->failure_status = completion.code;
+                    goto done;
+                }
+                desired_accept_sent[index] = true;
+            }
+            memset(&completion, 0, sizeof(completion));
+            if (meiso_composition_debug_peer_take_completion(
+                    peer, actual_sources[index], &completion
+                ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                if (completion.kind !=
+                        MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER ||
+                    completion.code !=
+                        MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
+                    scenario->failure_stage = 214U + (uint32_t)index;
+                    scenario->failure_status = completion.code;
+                    goto done;
+                }
+                actual_offer_sent[index] = true;
+            }
+        }
+        if (desired_accept_sent[1] && !actual_queued[1]) {
+            struct pollfd item = {scenario->media_listener, POLLIN, 0};
+            int poll_status;
+
+            if (!camera_delay_started) {
+                if (adapter != NULL) {
+                    (void)meiso_composition_media_posix_tcp_terminate(
+                        adapter,
+                        MEISO_COMPOSITION_MEDIA_TERMINAL_PRODUCTION_CHANGED,
+                        0
+                    );
+                }
+                close_fd(&media_fd);
+                free(adapter_arena);
+                free(transport_arena);
+                adapter_arena = NULL;
+                transport_arena = NULL;
+                adapter = NULL;
+                transport = NULL;
+                media_initialized = false;
+                active_media_mask = 0U;
+                camera_delay_started = true;
+            }
+            do {
+                poll_status = poll(&item, (nfds_t)1U, 1);
+            } while (poll_status < 0 && errno == EINTR);
+            if (poll_status < 0 || (item.revents & POLLNVAL) != 0) {
+                scenario->failure_stage = 216U;
                 goto done;
             }
-            desired_accept_sent = true;
-        }
-        memset(&completion, 0, sizeof(completion));
-        if (meiso_composition_debug_peer_take_completion(
-                peer, 14U, &completion
-            ) == MEISO_COMPOSITION_DEBUG_PEER_OK) {
-            if (completion.kind != MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER ||
-                completion.code != MEISO_RUNTIME_SCHEDULER_COMPLETION_SENT) {
-                scenario->failure_stage = 208U;
-                scenario->failure_status = completion.code;
-                goto done;
+            if (poll_status > 0 &&
+                (item.revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
+                int stale_fd;
+
+                do {
+                    stale_fd = accept(scenario->media_listener, NULL, NULL);
+                } while (stale_fd < 0 && errno == EINTR);
+                if (stale_fd >= 0) {
+                    ++scenario->media_accept_count;
+                    ++scenario->stale_accept_count;
+                    close_fd(&stale_fd);
+                } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    scenario->failure_stage = 217U;
+                    goto done;
+                }
             }
-            actual_offer_sent = true;
+            ++camera_delay_steps;
         }
-        if (desired_accept_sent && !actual_queued) {
-            const MeisoCompositionMediaDesired desired = render_desired();
+        for (index = 0U; index < 2U; ++index) {
+            const bool delay_complete = index == 0U ||
+                camera_delay_steps >= 1500U;
+
+            if (!desired_accept_sent[index] || actual_queued[index] ||
+                !delay_complete) {
+                continue;
+            }
             MeisoCompositionMediaActual media;
             MeisoRuntimeActualState actual;
             MeisoRuntimeSchedulerWork work;
+            MeisoStateOffer actual_offer;
+            uint8_t actual_suffix[MEISO_COMPOSITION_MEDIA_ACTUAL_WIRE_SIZE];
+            uint8_t actual_wire[
+                MEISO_COMPOSITION_MEDIA_ACTUAL_STATE_MAX_PAYLOAD_SIZE
+            ];
+            MeisoByteView actual_payload;
             size_t suffix_size = 0U;
 
             memset(&media, 0, sizeof(media));
-            media.source = MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW;
-            media.effective = desired;
-            media.media_stream_epoch = 601U;
-            media.channel_nonce = (MeisoSessionNonce){701U, 711U};
+            media.source = media_sources[index];
+            media.effective = desired_values[index];
+            media.media_stream_epoch = 601U + (uint64_t)index;
+            media.channel_nonce = (MeisoSessionNonce){
+                701U + (uint64_t)index, 711U + (uint64_t)index
+            };
             media.queue_depth = 2U;
             media.recovery_generation = 1U;
             memset(&actual, 0, sizeof(actual));
@@ -936,7 +1124,7 @@ static void *edge_media_main(void *context)
             actual.effective_enabled = true;
             actual.production_status = MEISO_RUNTIME_PRODUCTION_RUNNING;
             actual.reason = MEISO_RUNTIME_PRODUCTION_REASON_NONE;
-            actual.production_epoch = 501U;
+            actual.production_epoch = 501U + (uint64_t)index;
             if (meiso_composition_media_actual_encode(
                     &media,
                     (MeisoMutableBuffer){actual_suffix,
@@ -953,46 +1141,80 @@ static void *edge_media_main(void *context)
                     &actual_payload
                 ) ||
                 meiso_state_publisher_publish(
-                    publisher, edge_owner, 1U, actual_payload
+                    publishers[index], edge_owner, 1U, actual_payload
                 ) != MEISO_STATE_PUBLISH_NEW ||
                 meiso_state_publisher_begin_delivery(
-                    publisher, (MeisoDeliveryGeneration){301U}
+                    publishers[index],
+                    (MeisoDeliveryGeneration){301U + (uint64_t)index}
                 ) != MEISO_STATE_DELIVERY_STARTED ||
-                !meiso_state_publisher_next_offer(publisher, &actual_offer) ||
-                !meiso_composition_debug_peer_route_key(
-                    peer, ROUTE_RENDER_ACTUAL, &actual_route
+                !meiso_state_publisher_next_offer(
+                    publishers[index], &actual_offer
+                ) || !meiso_composition_debug_peer_route_key(
+                    peer, actual_routes[index], &actual_route_keys[index]
                 )) {
-                scenario->failure_stage = 210U;
+                scenario->failure_stage = 218U + (uint32_t)index;
                 goto done;
             }
             memset(&work, 0, sizeof(work));
             work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_OFFER;
-            work.value.state_offer.route = actual_route;
+            work.value.state_offer.route = actual_route_keys[index];
             work.value.state_offer.offer = actual_offer;
-            if (meiso_composition_debug_peer_queue_work(peer, 14U, &work) !=
-                MEISO_COMPOSITION_DEBUG_PEER_OK) {
-                scenario->failure_stage = 211U;
+            if (meiso_composition_debug_peer_queue_work(
+                    peer, actual_sources[index], &work
+                ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+                scenario->failure_stage = 220U + (uint32_t)index;
                 goto done;
             }
-            actual_queued = true;
+            actual_queued[index] = true;
         }
-        if (actual_accepted && actual_offer_sent && !media_initialized) {
+        if (actual_accepted[0] && actual_offer_sent[0] &&
+            !scenario->render_active && !media_initialized) {
             if (!meiso_composition_debug_peer_snapshot(peer, &peer_snapshot) ||
                 !peer_snapshot.session.session_id_known) {
-                scenario->failure_stage = 212U;
+                scenario->failure_stage = 222U;
                 goto done;
             }
             media_fd = accept_nonblocking(scenario->media_listener);
             if (media_fd < 0 || !initialize_edge_media(
                     scenario, &catalog, peer_snapshot.session.session_id,
-                    media_fd, &transport_arena, &transport,
+                    media_fd,
+                    MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK,
+                    &transport_arena, &transport,
                     &adapter_arena, &adapter
                 )) {
                 if (scenario->failure_stage == 0U) {
-                    scenario->failure_stage = 213U;
+                    scenario->failure_stage = 223U;
                 }
                 goto done;
             }
+            ++scenario->media_accept_count;
+            active_media_mask =
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK;
+            media_initialized = true;
+        } else if (actual_accepted[0] && actual_offer_sent[0] &&
+                   actual_accepted[1] && actual_offer_sent[1] &&
+                   scenario->render_active && !media_initialized) {
+            if (!meiso_composition_debug_peer_snapshot(peer, &peer_snapshot) ||
+                !peer_snapshot.session.session_id_known) {
+                scenario->failure_stage = 224U;
+                goto done;
+            }
+            media_fd = accept_nonblocking(scenario->media_listener);
+            if (media_fd < 0 || !initialize_edge_media(
+                    scenario, &catalog, peer_snapshot.session.session_id,
+                    media_fd,
+                    MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK,
+                    &transport_arena, &transport,
+                    &adapter_arena, &adapter
+                )) {
+                if (scenario->failure_stage == 0U) {
+                    scenario->failure_stage = 225U;
+                }
+                goto done;
+            }
+            ++scenario->media_accept_count;
+            active_media_mask =
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK;
             media_initialized = true;
         }
         if (media_initialized) {
@@ -1004,7 +1226,7 @@ static void *edge_media_main(void *context)
             );
             if (prepare != MEISO_COMPOSITION_MEDIA_POSIX_TCP_PREPARE_READY &&
                 prepare != MEISO_COMPOSITION_MEDIA_POSIX_TCP_PREPARE_IDLE) {
-                scenario->failure_stage = 214U;
+                scenario->failure_stage = 226U;
                 scenario->failure_status = prepare;
                 goto done;
             }
@@ -1017,7 +1239,7 @@ static void *edge_media_main(void *context)
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_WRITE_PACKET_SENT &&
                     write_status !=
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_WRITE_WOULD_BLOCK) {
-                    scenario->failure_stage = 215U;
+                    scenario->failure_stage = 227U;
                     scenario->failure_status = write_status;
                     goto done;
                 }
@@ -1030,7 +1252,7 @@ static void *edge_media_main(void *context)
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_READ_REASSEMBLY_REPLACED &&
                     read_status !=
                         MEISO_COMPOSITION_MEDIA_POSIX_TCP_READ_WOULD_BLOCK) {
-                    scenario->failure_stage = 216U;
+                    scenario->failure_stage = 228U;
                     scenario->failure_status = read_status;
                     goto done;
                 }
@@ -1038,13 +1260,19 @@ static void *edge_media_main(void *context)
             if (meiso_composition_media_transport_snapshot(
                     transport, &snapshot
                 ) != MEISO_COMPOSITION_MEDIA_TRANSPORT_OK) {
-                scenario->failure_stage = 217U;
+                scenario->failure_stage = 229U;
                 goto done;
             }
             if (snapshot.phase == MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE) {
-                scenario_signal(scenario, true, false);
-                ok = true;
-                break;
+                if (active_media_mask ==
+                    MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_RENDER_MASK) {
+                    scenario_signal(scenario, true, false, false);
+                } else if (active_media_mask ==
+                           MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK) {
+                    scenario_signal(scenario, true, true, false);
+                    ok = true;
+                    break;
+                }
             }
         }
         (void)sched_yield();
@@ -1058,7 +1286,7 @@ static void *edge_media_main(void *context)
 
 done:
     if (!ok) {
-        scenario_signal(scenario, false, true);
+        scenario_signal(scenario, false, false, true);
     } else {
         struct timespec deadline;
         if (make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
@@ -1077,8 +1305,10 @@ done:
     close_fd(&control_fd);
     free(adapter_arena);
     free(transport_arena);
-    free(publisher_arena);
-    free(replica_arena);
+    free(publisher_arenas[1]);
+    free(publisher_arenas[0]);
+    free(replica_arenas[1]);
+    free(replica_arenas[0]);
     free(peer_arena);
     return NULL;
 }
@@ -1636,7 +1866,7 @@ static bool test_sigpipe_restore(void)
     return true;
 }
 
-static bool test_render_only_media_no_frame(void)
+static bool test_media_reconnect_barrier_no_frame(void)
 {
     char config[CONFIG_BYTES];
     RunResult result;
@@ -1666,42 +1896,46 @@ static bool test_render_only_media_no_frame(void)
     condition_initialized = true;
     CHECK_GOTO(run_media_service(config, &scenario, &result), cleanup);
     if (result.exit_code != 0 || result.writer_error != 0 ||
-        result.error_size != 0U || !scenario.media_active ||
-        scenario.failed) {
+        result.error_size != 0U || !scenario.render_active ||
+        !scenario.media_active || scenario.media_accept_count != 2U ||
+        scenario.stale_accept_count != 0U || scenario.failed) {
         (void)fprintf(
             stderr,
             "media service result: exit=%d writer=%d active=%u failed=%u "
-            "stage=%u status=%u "
+            "accepts=%u stale=%u stage=%u status=%u "
             "stderr=%s stdout=%s\n",
             result.exit_code, result.writer_error,
             scenario.media_active ? 1U : 0U, scenario.failed ? 1U : 0U,
+            scenario.media_accept_count, scenario.stale_accept_count,
             scenario.failure_stage, scenario.failure_status,
             result.error, result.output
         );
     }
     CHECK_GOTO(result.exit_code == 0 && result.writer_error == 0 &&
-               result.error_size == 0U && scenario.media_active &&
-               !scenario.failed, cleanup);
-    CHECK_GOTO(strstr(
+               result.error_size == 0U && scenario.render_active &&
+               scenario.media_active && scenario.media_accept_count == 2U &&
+               scenario.stale_accept_count == 0U && !scenario.failed,
+               cleanup);
+    CHECK_GOTO(occurrence_count(
                    result.output,
                    "{\"type\":\"media.connected\","
                    "\"transport\":\"tcp\"}\n"
-               ) != NULL &&
+               ) == 2U &&
                strstr(
                    result.output,
                    "\"event\":\"media_progress\""
                ) != NULL &&
                strstr(
                    result.output,
-                   "{\"type\":\"snapshot\",\"request_id\":2,"
+                   "{\"type\":\"snapshot\",\"request_id\":3,"
                ) != NULL &&
                strstr(result.output, "\"media_bound\":true,") != NULL &&
-               strstr(result.output, "\"media_mask\":\"render\"") != NULL &&
+               strstr(result.output, "\"media_mask\":\"both\"") != NULL &&
                strstr(result.output, "\"render_frame\":false") != NULL &&
                strstr(result.output, "\"camera_frame\":false") != NULL &&
                strstr(
                    result.output,
-                   "{\"type\":\"closing\",\"request_id\":3}\n"
+                   "{\"type\":\"closing\",\"request_id\":4}\n"
                ) != NULL && output_is_closed_ndjson(result.output), cleanup);
     ok = true;
 
@@ -1722,7 +1956,8 @@ int main(void)
     if (!test_config_rejections() || !test_numeric_connect_failure() ||
         !test_pre_ready_commands_and_redaction() ||
         !test_large_hup_drain() || !test_partial_line_eof() ||
-        !test_sigpipe_restore() || !test_render_only_media_no_frame()) {
+        !test_sigpipe_restore() ||
+        !test_media_reconnect_barrier_no_frame()) {
         return 1;
     }
     (void)puts("composition debug host tests passed");

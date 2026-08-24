@@ -1229,6 +1229,49 @@ static bool media_binding_equal(
         lhs->channel_nonce.low == rhs->channel_nonce.low;
 }
 
+static bool media_desired_channels_converged(
+    const MeisoCompositionHostApp *app
+)
+{
+    static const size_t MEDIA_CHANNELS[
+        MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT
+    ] = {
+        MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA,
+        MEISO_COMPOSITION_HOST_APP_DESIRED_CAMERA_MEDIA
+    };
+    size_t media_index;
+    for (media_index = 0U;
+         media_index < MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT;
+         ++media_index) {
+        const size_t index = MEDIA_CHANNELS[media_index];
+        const MeisoCompositionHostAppDesiredSnapshot *desired =
+            &app->desired[index].snapshot;
+        const MeisoCompositionHostAppActualSnapshot *actual =
+            &app->actual[index].snapshot;
+        if (!desired->requested) {
+            if (actual->present) {
+                return false;
+            }
+            continue;
+        }
+        if (desired->inflight_present || desired->delivery_pending ||
+            !desired->delivery_accepted || desired->delivery_failed ||
+            !actual->present || !actual->observed_desired.present ||
+            !actual->applied_desired.present ||
+            actual->observed_desired.owner.role != desired->owner.role ||
+            actual->observed_desired.owner.incarnation !=
+                desired->owner.incarnation ||
+            actual->observed_desired.version != desired->state_version ||
+            actual->applied_desired.owner.role != desired->owner.role ||
+            actual->applied_desired.owner.incarnation !=
+                desired->owner.incarnation ||
+            actual->applied_desired.version != desired->state_version) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool media_route_config(
     const MeisoCompositionHostApp *app,
     const MeisoCompositionDebugPeerSnapshot *peer,
@@ -1343,6 +1386,9 @@ MeisoCompositionHostAppStatus meiso_composition_host_app_bind_media_fd(
     }
     if (connected_fd == app->config.control_connected_fd) {
         return MEISO_COMPOSITION_HOST_APP_INVALID_ARGUMENT;
+    }
+    if (!media_desired_channels_converged(app)) {
+        return MEISO_COMPOSITION_HOST_APP_NOT_READY;
     }
     if (app->active_media != NULL) {
         return MEISO_COMPOSITION_HOST_APP_BUSY;

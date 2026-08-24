@@ -510,6 +510,13 @@ MeisoCompositionHostAppStatus meiso_composition_host_app_set_camera_media(
  * borrows and never closes fd; a later bind consumes the next slot and
  * repeats OPEN/BIND. Any selected actual enable/disable, binding, production
  * epoch or catalog change automatically terminates the current media scope.
+ * Before inspecting or mutating the fd/slot, bind returns NOT_READY while
+ * either media Desired is in flight, pending/unaccepted/failed, or its latest
+ * exact owner/version has not been both observed and applied by the matching
+ * Actual. A channel never requested locally is converged only while no
+ * unsolicited Actual is present. Thus a mask is derived exactly once from
+ * settled two-channel truth, never from the transient interval between a rapid
+ * Desired and its Actual.
  * The caller must supply a fresh media TCP byte stream: it must not be the
  * control socket, a dup/alias of the control socket or any previously used
  * media stream. The app machine-rejects only numeric equality with its current

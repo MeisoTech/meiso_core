@@ -88,6 +88,12 @@ typedef struct {
     bool thermal_joined;
 } FinalLedger;
 
+typedef uint8_t PendingMediaCandidateStatus;
+enum {
+    PENDING_MEDIA_CANDIDATE_LIVE = 1,
+    PENDING_MEDIA_CANDIDATE_CLOSED = 2
+};
+
 static volatile sig_atomic_t g_stop_requested = 0;
 
 static void handle_stop_signal(int signal_number)
@@ -124,6 +130,36 @@ static bool set_nonblocking(int fd)
 {
     const int flags = fcntl(fd, F_GETFL);
     return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+/*
+ * A media peer may retire a speculative connection while this runner is
+ * waiting for the matching control-plane Actuals to become accepted.  Probe
+ * that caller-owned candidate without consuming OPEN bytes.  POLLHUP/POLLERR
+ * is terminal even when unread bytes remain; a positive MSG_PEEK is otherwise
+ * a live candidate, and EAGAIN/EINTR means that no terminal condition was
+ * observed.  The socket is nonblocking before it reaches this function.
+ */
+static PendingMediaCandidateStatus pending_media_candidate_status(
+    int fd,
+    short revents
+)
+{
+    uint8_t byte;
+    ssize_t received;
+
+    if (fd < 0 || (revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+        return PENDING_MEDIA_CANDIDATE_CLOSED;
+    }
+    received = recv(fd, &byte, sizeof(byte), MSG_PEEK);
+    if (received > 0) {
+        return PENDING_MEDIA_CANDIDATE_LIVE;
+    }
+    if (received == 0) {
+        return PENDING_MEDIA_CANDIDATE_CLOSED;
+    }
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR ?
+        PENDING_MEDIA_CANDIDATE_LIVE : PENDING_MEDIA_CANDIDATE_CLOSED;
 }
 
 static bool monotonic_now_ns(uint64_t *out_value)
@@ -660,6 +696,11 @@ static bool media_connection_step(Service *service)
         );
         (void)fflush(stdout);
     }
+    return true;
+}
+
+static bool media_candidate_bind_step(Service *service)
+{
     if (service->media_fd >= 0 && !service->media_bound) {
         MeisoCompositionEdgeAppMediaBindReceipt receipt;
         const MeisoCompositionEdgeAppStatus status =
@@ -723,13 +764,13 @@ static bool run_service(Service *service)
             descriptors[descriptor_count].events = POLLIN;
             ++descriptor_count;
         }
-        if (service->media_fd >= 0 && service->media_bound) {
+        if (service->media_fd >= 0) {
             media_index = (int)descriptor_count;
             descriptors[descriptor_count].fd = service->media_fd;
-            descriptors[descriptor_count].events = (short)(
-                (interest.media_read ? POLLIN : 0) |
-                (interest.media_write ? POLLOUT : 0)
-            );
+            descriptors[descriptor_count].events = service->media_bound ?
+                (short)((interest.media_read ? POLLIN : 0) |
+                        (interest.media_write ? POLLOUT : 0)) :
+                POLLIN;
             ++descriptor_count;
         }
         poll_status = poll(
@@ -761,9 +802,20 @@ static bool run_service(Service *service)
         if ((control_index >= 0 &&
              (descriptors[control_index].revents & POLLNVAL) != 0) ||
             (listener_index >= 0 &&
-             (descriptors[listener_index].revents & POLLNVAL) != 0) ||
-            (media_index >= 0 &&
-             (descriptors[media_index].revents & POLLNVAL) != 0)) {
+             (descriptors[listener_index].revents & POLLNVAL) != 0)) {
+            return false;
+        }
+        if (media_index >= 0 && !service->media_bound) {
+            if (pending_media_candidate_status(
+                    service->media_fd,
+                    descriptors[media_index].revents
+                ) == PENDING_MEDIA_CANDIDATE_CLOSED) {
+                close_fd(&service->media_fd);
+            } else if (!media_candidate_bind_step(service)) {
+                return false;
+            }
+        } else if (media_index >= 0 &&
+                   (descriptors[media_index].revents & POLLNVAL) != 0) {
             return false;
         }
         ready.control_readable = control_index >= 0 &&
@@ -771,10 +823,10 @@ static bool run_service(Service *service)
              (POLLIN | POLLHUP | POLLERR)) != 0;
         ready.control_writable = control_index >= 0 &&
             (descriptors[control_index].revents & POLLOUT) != 0;
-        ready.media_readable = media_index >= 0 &&
+        ready.media_readable = media_index >= 0 && service->media_bound &&
             (descriptors[media_index].revents &
              (POLLIN | POLLHUP | POLLERR)) != 0;
-        ready.media_writable = media_index >= 0 &&
+        ready.media_writable = media_index >= 0 && service->media_bound &&
             (descriptors[media_index].revents & POLLOUT) != 0;
         ready.camera_poll_allowed = interest.camera_poll_useful;
         ready.now = (MeisoTimePoint){service->edge_clock_epoch, now_ns};
@@ -812,10 +864,71 @@ static void usage(const char *program)
 }
 
 #if defined(MEISO_COMPOSITION_DEBUG_EDGE_HOSTED_LIFECYCLE_TEST)
+static bool pending_media_candidate_self_test(void)
+{
+    int pair[2] = {-1, -1};
+    struct pollfd descriptor;
+    uint8_t sent = UINT8_C(0x4d);
+    uint8_t received = 0U;
+    bool passed = false;
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0 ||
+        !set_nonblocking(pair[0]) || !set_nonblocking(pair[1]) ||
+        pending_media_candidate_status(pair[0], 0) !=
+            PENDING_MEDIA_CANDIDATE_LIVE ||
+        send(pair[1], &sent, sizeof(sent), 0) != (ssize_t)sizeof(sent)) {
+        goto cleanup;
+    }
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.fd = pair[0];
+    descriptor.events = POLLIN;
+    if (poll(&descriptor, 1U, 100) != 1 ||
+        pending_media_candidate_status(pair[0], descriptor.revents) !=
+            PENDING_MEDIA_CANDIDATE_LIVE ||
+        recv(pair[0], &received, sizeof(received), 0) !=
+            (ssize_t)sizeof(received) ||
+        received != sent) {
+        goto cleanup;
+    }
+    close_fd(&pair[1]);
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.fd = pair[0];
+    descriptor.events = POLLIN;
+    if (poll(&descriptor, 1U, 100) != 1 ||
+        pending_media_candidate_status(pair[0], descriptor.revents) !=
+            PENDING_MEDIA_CANDIDATE_CLOSED) {
+        goto cleanup;
+    }
+    close_fd(&pair[0]);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0 ||
+        !set_nonblocking(pair[0]) || !set_nonblocking(pair[1]) ||
+        send(pair[1], &sent, sizeof(sent), 0) != (ssize_t)sizeof(sent)) {
+        goto cleanup;
+    }
+    close_fd(&pair[1]);
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.fd = pair[0];
+    descriptor.events = POLLIN;
+    if (poll(&descriptor, 1U, 100) != 1 ||
+        pending_media_candidate_status(pair[0], descriptor.revents) !=
+            PENDING_MEDIA_CANDIDATE_CLOSED) {
+        goto cleanup;
+    }
+    passed = true;
+
+cleanup:
+    close_fd(&pair[1]);
+    close_fd(&pair[0]);
+    return passed;
+}
+
 static int run_hosted_lifecycle_test(void)
 {
     FinalLedger ledger;
 
+    if (!pending_media_candidate_self_test()) {
+        return 1;
+    }
     memset(&ledger, 0, sizeof(ledger));
     ledger.app_initialized = true;
     ledger.abort_status = MEISO_COMPOSITION_EDGE_APP_OK;
