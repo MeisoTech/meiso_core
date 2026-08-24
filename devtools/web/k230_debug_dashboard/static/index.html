@@ -22,8 +22,8 @@
   </header>
 
   <div class="truth-banner">
-    <strong>这是本地场景草稿，不是 K230 回传。</strong>
-    浏览器不创建 State version、ContentId、Session、epoch 或 sequence；native composite Host 接入前这些字段保持未分配。
+    <strong id="truth-title">这是本地场景草稿，不是 K230 回传。</strong>
+    <span id="truth-detail">浏览器不创建 State version、ContentId、Session、epoch 或 sequence；显式启动 native Host 前这些字段保持未分配。</span>
   </div>
 
   <main>
@@ -50,7 +50,7 @@
           <div>
             <span class="live-dot"></span>
             <strong>Local WebGL preview</strong>
-            <small>not RenderResult Stream</small>
+            <small>editor preview · never protocol truth</small>
           </div>
           <span id="viewport-label">Cube 1</span>
         </div>
@@ -108,15 +108,15 @@
         <label class="switch-row">Enabled <input name="enabled" type="checkbox"></label>
         <label>Requested max Hz<input name="rate" type="number" min="1" max="120"></label>
         <button class="secondary" type="submit">Save render intent</button>
-        <span class="binding offline">UNBOUND</span>
+        <span id="render-binding" class="binding offline">UNBOUND</span>
       </form>
 
       <form id="camera-intent" class="panel intent-card">
-        <div class="intent-title"><span class="intent-icon camera">C</span><div><h3>Camera stream</h3><small>future MediaStream capability</small></div></div>
+        <div class="intent-title"><span class="intent-icon camera">C</span><div><h3>Camera stream</h3><small>desired intent · native actual is read-only</small></div></div>
         <label class="switch-row">Enabled <input name="enabled" type="checkbox"></label>
         <label>Requested FPS<input name="rate" type="number" min="1" max="120"></label>
         <button class="secondary" type="submit">Save camera intent</button>
-        <span class="binding unsupported">UNSUPPORTED</span>
+        <span id="camera-binding" class="binding offline">UNBOUND</span>
       </form>
 
       <form id="telemetry-intent" class="panel intent-card">
@@ -125,13 +125,26 @@
         <label>Period ms<input name="period" type="number" min="100" max="10000" step="100"></label>
         <label>Field mask<input name="fields" type="number" min="1" max="1023"></label>
         <button class="secondary" type="submit">Save telemetry intent</button>
-        <span class="binding offline">DEVICE UNBOUND</span>
+        <span id="wifi-binding" class="binding offline">DEVICE UNBOUND</span>
+      </form>
+
+      <form id="device-intent" class="panel intent-card">
+        <div class="intent-title"><span class="intent-icon device">D</span><div><h3>Device telemetry</h3><small>temperature · CPU · memory intent</small></div></div>
+        <label class="switch-row">Enabled <input name="enabled" type="checkbox"></label>
+        <label>Period ms<input name="period" type="number" min="100" max="10000" step="100"></label>
+        <label>Field mask<input name="fields" type="number" min="1" max="1023"></label>
+        <button class="secondary" type="submit">Save device intent</button>
+        <span id="device-binding" class="binding offline">DEVICE UNBOUND</span>
       </form>
     </section>
 
     <section class="evidence-grid">
       <article class="panel">
-        <div class="panel-heading"><div><p class="eyebrow">PROTOCOL EVIDENCE</p><h2>Not allocated</h2></div><span class="badge offline">NO SESSION</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">PROTOCOL EVIDENCE</p><h2 id="evidence-title">Not allocated</h2></div><span id="evidence-badge" class="badge offline">NO SESSION</span></div>
+        <div id="native-frame-links" class="frame-links" hidden>
+          <a href="/api/v1/frames/render">Latest render CMFB</a>
+          <a href="/api/v1/frames/camera">Latest camera CMFB</a>
+        </div>
         <div id="evidence-list" class="evidence-list"></div>
       </article>
       <article class="panel">

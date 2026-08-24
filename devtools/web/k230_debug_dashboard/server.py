@@ -18,6 +18,13 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from native_bridge import (
+    NativeBridge,
+    NativeBridgeError,
+    bootstrap_commands,
+    commands_for_mutation,
+)
+
 
 LOOPBACK_ADDRESS = "127.0.0.1"
 DEFAULT_PORT = 50001
@@ -131,6 +138,29 @@ def _default_snapshot() -> dict[str, Any]:
                 "selected_fields": 3,
                 "status": "DEVICE_UNBOUND",
             },
+            "device": {
+                "enabled": False,
+                "sample_period_ms": 1000,
+                "selected_fields": 7,
+                "status": "DEVICE_UNBOUND",
+            },
+        },
+        "native_truth": {
+            "last_event": None,
+            "control_snapshot": None,
+            "actual": {},
+            "wifi_effective": None,
+            "device_effective": None,
+            "wifi_sample": None,
+            "device_sample": None,
+            "presentation_status": None,
+            "scene_status": None,
+            "render_result": None,
+            "media_actual": {},
+        },
+        "frames": {
+            "render": {"available": False},
+            "camera": {"available": False},
         },
     }
 
@@ -149,6 +179,7 @@ class DashboardState:
         self._next_event_id = 1
         self._next_draft_object = 2
         self._snapshot = _default_snapshot()
+        self._native_bridge: NativeBridge | None = None
         with self._condition:
             self._append_event_locked("bootstrap", "READY")
 
@@ -160,7 +191,12 @@ class DashboardState:
         with self._condition:
             return len(self._events)
 
-    def _append_event_locked(self, command: str, status: str) -> int:
+    def _append_event_locked(
+        self,
+        command: str,
+        status: str,
+        native_event: dict[str, Any] | None = None,
+    ) -> int:
         event_id = self._next_event_id
         self._next_event_id += 1
         event = {
@@ -169,6 +205,8 @@ class DashboardState:
             "status": status,
             "snapshot": copy.deepcopy(self._snapshot),
         }
+        if native_event is not None:
+            event["native_event"] = copy.deepcopy(native_event)
         self._events.append((event_id, event))
         self._condition.notify_all()
         return event_id
@@ -196,6 +234,8 @@ class DashboardState:
             raise CommandError("INVALID_COMMAND")
         name = command["command"]
         with self._condition:
+            snapshot_before = copy.deepcopy(self._snapshot)
+            next_draft_before = self._next_draft_object
             if name == "scene.object.add":
                 _exact_keys(command, {"command", "asset"})
                 if command["asset"] != "builtin:cube":
@@ -318,12 +358,218 @@ class DashboardState:
                     ),
                     selected_fields=_uint(command["selected_fields"], 1, 1023),
                 )
+            elif name == "intent.device.set":
+                _exact_keys(
+                    command,
+                    {
+                        "command",
+                        "enabled",
+                        "sample_period_ms",
+                        "selected_fields",
+                    },
+                )
+                self._snapshot["intents"]["device"].update(
+                    enabled=_boolean(command["enabled"]),
+                    sample_period_ms=_uint(
+                        command["sample_period_ms"], 100, 10000
+                    ),
+                    selected_fields=_uint(command["selected_fields"], 1, 1023),
+                )
             else:
                 raise CommandError("UNKNOWN_COMMAND")
 
-            self._snapshot["revision"] += 1
-            event_id = self._append_event_locked(name, "LOCAL_DRAFT_UPDATED")
+            next_revision = self._snapshot["revision"] + 1
+            native_commands: list[dict[str, Any]] = []
+            if self._native_bridge is not None:
+                try:
+                    native_commands = commands_for_mutation(name, self._snapshot)
+                    self._native_bridge.submit_batch(
+                        native_commands, origin=name, revision=next_revision
+                    )
+                except NativeBridgeError as error:
+                    self._snapshot = snapshot_before
+                    self._next_draft_object = next_draft_before
+                    raise CommandError(str(error)) from error
+            self._snapshot["revision"] = next_revision
+            event_id = self._append_event_locked(
+                name,
+                ("NATIVE_QUEUED" if native_commands else
+                 "LOCAL_SELECTION_UPDATED") if self._native_bridge is not None
+                else "LOCAL_DRAFT_UPDATED",
+            )
             return event_id, copy.deepcopy(self._snapshot)
+
+    def enable_native(self, executable: str, config: str) -> None:
+        with self._condition:
+            if self._native_bridge is not None:
+                raise NativeBridgeError("NATIVE_ALREADY_BOUND")
+            bridge = NativeBridge(
+                executable, config, self._native_event, self._native_frame
+            )
+            snapshot_before = copy.deepcopy(self._snapshot)
+            events_before = copy.deepcopy(list(self._events))
+            next_event_before = self._next_event_id
+            self._native_bridge = bridge
+            self._snapshot["backend"].update({
+                "mode": "NATIVE_HOST",
+                "native_host_bound": True,
+                "session_status": "STARTING",
+                "catalog_status": "PENDING",
+                "profile": "composition-v3",
+                "proof": "NATIVE_SERVICE_TYPED_ONLY",
+            })
+            self._snapshot["bindings"]["camera_media_stream"] = "UNBOUND"
+            candidate = copy.deepcopy(self._snapshot)
+        try:
+            bridge.start()
+            bridge.submit_batch(
+                bootstrap_commands(candidate), origin="native.bootstrap",
+                revision=candidate["revision"],
+            )
+        except Exception:
+            bridge.close()
+            with self._condition:
+                self._native_bridge = None
+                self._snapshot = snapshot_before
+                self._events.clear()
+                self._events.extend(events_before)
+                self._next_event_id = next_event_before
+            raise
+        with self._condition:
+            self._append_event_locked("native.start", "NATIVE_STARTING")
+
+    def close(self) -> None:
+        with self._condition:
+            bridge = self._native_bridge
+            self._native_bridge = None
+        if bridge is not None:
+            bridge.close()
+
+    def latest_frame(
+        self, source: str
+    ) -> tuple[bytes, dict[str, Any]] | None:
+        with self._condition:
+            bridge = self._native_bridge
+        return None if bridge is None else bridge.latest_frame(source)
+
+    def _native_event(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        with self._condition:
+            backend = self._snapshot["backend"]
+            truth = self._snapshot["native_truth"]
+            truth["last_event"] = copy.deepcopy(event)
+            if event_type == "service.ready":
+                backend["native_host_bound"] = True
+                backend["session_status"] = "CONNECTING"
+            elif event_type == "snapshot":
+                truth["control_snapshot"] = copy.deepcopy(event)
+                backend["device_connected"] = bool(event["control_ready"])
+                backend["session_status"] = (
+                    "READY" if event["control_ready"] else event["phase"].upper()
+                )
+                backend["catalog_status"] = (
+                    "ACTIVE" if event["catalog_generation"] else "PENDING"
+                )
+            elif event_type == "command.receipt":
+                if event["state_version"]:
+                    self._snapshot["protocol_evidence"]["state_version"] = (
+                        event["state_version"]
+                    )
+                if event["plan_generation"]:
+                    self._snapshot["protocol_evidence"]["plan_generation"] = (
+                        event["plan_generation"]
+                    )
+            elif event_type == "actual":
+                truth["actual"][event["channel"]] = copy.deepcopy(event)
+                self._snapshot["protocol_evidence"]["production_epoch"] = (
+                    event["production_epoch"]
+                )
+            elif event_type == "telemetry.wifi_effective":
+                truth["wifi_effective"] = copy.deepcopy(event)
+            elif event_type == "telemetry.device_effective":
+                truth["device_effective"] = copy.deepcopy(event)
+            elif event_type == "telemetry.wifi":
+                truth["wifi_sample"] = copy.deepcopy(event)
+                self._snapshot["bindings"]["wifi_telemetry"] = "BOUND"
+            elif event_type == "telemetry.device":
+                truth["device_sample"] = copy.deepcopy(event)
+            elif event_type == "presentation.status":
+                truth["presentation_status"] = copy.deepcopy(event)
+                self._snapshot["protocol_evidence"]["plan_generation"] = (
+                    event["active_plan_generation"]
+                )
+            elif event_type == "scene.status":
+                truth["scene_status"] = copy.deepcopy(event)
+                self._snapshot["protocol_evidence"]["world_generation"] = (
+                    event["world_generation"]
+                )
+            elif event_type == "render.result":
+                truth["render_result"] = copy.deepcopy(event)
+            elif event_type == "media.actual":
+                truth["media_actual"][event["source"]] = copy.deepcopy(event)
+            elif event_type in {
+                "terminal", "native.bridge_terminal", "native.process_error"
+            }:
+                backend["native_host_bound"] = False
+                backend["device_connected"] = False
+                backend["session_status"] = "FAILED"
+                truth["control_snapshot"] = None
+                self._snapshot["frames"] = {
+                    "render": {"available": False},
+                    "camera": {"available": False},
+                }
+            self._refresh_bindings_locked()
+            self._append_event_locked(
+                f"native:{event_type}", "NATIVE_EVENT", event
+            )
+
+    def _refresh_bindings_locked(self) -> None:
+        truth = self._snapshot["native_truth"]
+        control = truth["control_snapshot"]
+        actual = truth["actual"]
+        session_bound = bool(
+            self._snapshot["backend"]["native_host_bound"] and
+            self._snapshot["backend"]["device_connected"]
+        )
+        media_bound = bool(session_bound and control and control["media_bound"])
+        mask = control["media_mask"] if control else "none"
+        for channel, binding_key, selected in (
+            ("render_media", "render_result_stream",
+             mask in {"render", "both"}),
+            ("camera_media", "camera_media_stream",
+             mask in {"camera", "both"}),
+        ):
+            value = actual.get(channel)
+            bound = bool(
+                media_bound and selected and value and value["enabled"] and
+                value["availability"] == "present" and
+                value["production_status"] == "running"
+            )
+            self._snapshot["bindings"][binding_key] = (
+                "BOUND" if bound else "UNBOUND"
+            )
+        wifi = actual.get("wifi")
+        wifi_bound = bool(
+            session_bound and truth["wifi_sample"] and wifi and wifi["enabled"] and
+            wifi["availability"] == "present" and
+            wifi["production_status"] == "running"
+        )
+        self._snapshot["bindings"]["wifi_telemetry"] = (
+            "BOUND" if wifi_bound else "UNBOUND"
+        )
+
+    def _native_frame(self, source: str, metadata: dict[str, Any]) -> None:
+        event = {"type": "native.frame", **metadata}
+        with self._condition:
+            self._snapshot["frames"][source] = {
+                "available": True, **copy.deepcopy(metadata)
+            }
+            self._snapshot["protocol_evidence"]["stream_sequence"] = (
+                metadata["frame_sequence"]
+            )
+            self._append_event_locked(
+                f"native.frame:{source}", "NATIVE_FRAME", event
+            )
 
     def _find_object_locked(self, draft_object: int) -> dict[str, Any] | None:
         for item in self._snapshot["scene"]["objects"]:
@@ -346,6 +592,10 @@ class DashboardServer(ThreadingHTTPServer):
         if isinstance(error, (BrokenPipeError, ConnectionResetError)):
             return
         super().handle_error(request, client_address)
+
+    def server_close(self) -> None:
+        self.state.close()
+        super().server_close()
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -392,6 +642,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/v1/events":
             self._serve_events(parsed.query)
+            return
+        if parsed.path in {"/api/v1/frames/render", "/api/v1/frames/camera"}:
+            self._serve_frame(parsed.path.rsplit("/", 1)[1])
             return
         if parsed.path == "/":
             self._serve_index()
@@ -482,6 +735,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._headers(HTTPStatus.OK, allowed[name], len(content))
         self.wfile.write(content)
 
+    def _serve_frame(self, source: str) -> None:
+        value = self.server.state.latest_frame(source)
+        if value is None:
+            self._error(HTTPStatus.NOT_FOUND, "FRAME_UNAVAILABLE")
+            return
+        record, _metadata = value
+        self._headers(
+            HTTPStatus.OK, "application/vnd.meiso.cmfb", len(record)
+        )
+        self.wfile.write(record)
+
     def _serve_events(self, query: str) -> None:
         parameters = parse_qs(query, keep_blank_values=True)
         if set(parameters) - {"after"}:
@@ -519,10 +783,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def create_server(
-    *, port: int = 0, event_capacity: int = DEFAULT_EVENT_CAPACITY
+    *,
+    port: int = 0,
+    event_capacity: int = DEFAULT_EVENT_CAPACITY,
+    native_host: str | None = None,
+    native_config: str | None = None,
 ) -> tuple[DashboardServer, DashboardState]:
     state = DashboardState(event_capacity)
+    if (native_host is None) != (native_config is None):
+        raise NativeBridgeError("NATIVE_ARGUMENT_PAIR")
     server = DashboardServer((LOOPBACK_ADDRESS, port), state)
+    if native_host is not None and native_config is not None:
+        try:
+            state.enable_native(native_host, native_config)
+        except Exception:
+            server.server_close()
+            raise
     return server, state
 
 
@@ -531,12 +807,27 @@ def main() -> int:
         description="Loopback-only K230 recorded/local debug dashboard"
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--native-host")
+    parser.add_argument("--native-config")
     arguments = parser.parse_args()
     if arguments.port < 1 or arguments.port > 65535:
         parser.error("--port must be in 1..65535")
-    server, _state = create_server(port=arguments.port)
+    if (arguments.native_host is None) != (arguments.native_config is None):
+        parser.error("--native-host and --native-config must be supplied together")
+    try:
+        server, _state = create_server(
+            port=arguments.port,
+            native_host=arguments.native_host,
+            native_config=arguments.native_config,
+        )
+    except NativeBridgeError as error:
+        print(f"Native bridge failed: {error}", file=sys.stderr)
+        return 1
     print(f"K230 debug dashboard: http://{LOOPBACK_ADDRESS}:{server.server_port}/")
-    print("Backend: RECORDED_LOCAL; device/media are not connected.")
+    print(
+        "Backend: NATIVE_HOST (typed local bridge)." if arguments.native_host
+        else "Backend: RECORDED_LOCAL; device/media are not connected."
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

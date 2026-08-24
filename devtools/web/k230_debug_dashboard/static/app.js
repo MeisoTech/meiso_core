@@ -1,6 +1,7 @@
 import {
   cameraCommand,
   cameraIntentCommand,
+  deviceTelemetryIntentCommand,
   evidenceRows,
   objectTransformCommand,
   renderIntentCommand,
@@ -53,7 +54,11 @@ async function send(command) {
     showToast(body.error || `HTTP ${response.status}`, true);
     throw new Error(body.error || `HTTP ${response.status}`);
   }
-  showToast(`Local draft accepted · revision ${body.revision}`);
+  showToast(
+    snapshot?.backend?.mode === "NATIVE_HOST" ?
+      `Native command queued · revision ${body.revision}` :
+      `Local draft accepted · revision ${body.revision}`
+  );
   return body;
 }
 
@@ -91,6 +96,11 @@ function syncForms() {
   telemetryForm.namedItem("enabled").checked = telemetry.enabled;
   telemetryForm.namedItem("period").value = String(telemetry.sample_period_ms);
   telemetryForm.namedItem("fields").value = String(telemetry.selected_fields);
+  const device = snapshot.intents.device;
+  const deviceForm = node("device-intent").elements;
+  deviceForm.namedItem("enabled").checked = device.enabled;
+  deviceForm.namedItem("period").value = String(device.sample_period_ms);
+  deviceForm.namedItem("fields").value = String(device.selected_fields);
 }
 
 function renderObjectList() {
@@ -140,6 +150,22 @@ function renderSnapshot(next) {
   node("backend-badge").textContent = snapshot.backend.mode.replace("_", " / ");
   node("device-badge").textContent = snapshot.backend.device_connected ? "DEVICE CONNECTED" : "DEVICE NOT CONNECTED";
   node("media-badge").textContent = snapshot.bindings.render_result_stream === "BOUND" ? "MEDIA BOUND" : "MEDIA UNBOUND";
+  node("render-binding").textContent = snapshot.bindings.render_result_stream;
+  node("camera-binding").textContent = snapshot.bindings.camera_media_stream;
+  node("wifi-binding").textContent = snapshot.bindings.wifi_telemetry;
+  node("device-binding").textContent = snapshot.native_truth?.actual?.device ?
+    "ACTUAL RECEIVED" : "DEVICE UNBOUND";
+  const native = snapshot.backend.mode === "NATIVE_HOST";
+  node("truth-title").textContent = native ?
+    "Native Host typed bridge is active." :
+    "这是本地场景草稿，不是 K230 回传。";
+  node("truth-detail").textContent = native ?
+    "浏览器只提交编辑器意图；下方 generation、epoch、sequence 与 telemetry 是 native service 的只读投影。" :
+    "浏览器不创建 State version、ContentId、Session、epoch 或 sequence；显式启动 native Host 前这些字段保持未分配。";
+  node("native-frame-links").hidden = !native;
+  node("evidence-title").textContent = native ?
+    "Sanitized native truth" : "Not allocated";
+  node("evidence-badge").textContent = native ? "READ ONLY" : "NO SESSION";
   renderObjectList();
   renderEvidence();
   syncForms();
@@ -211,6 +237,10 @@ node("camera-intent").addEventListener("submit", (event) => {
 node("telemetry-intent").addEventListener("submit", (event) => {
   event.preventDefault();
   send(telemetryIntentCommand(event.currentTarget.elements)).catch(() => {});
+});
+node("device-intent").addEventListener("submit", (event) => {
+  event.preventDefault();
+  send(deviceTelemetryIntentCommand(event.currentTarget.elements)).catch(() => {});
 });
 
 function multiply(a, b) {

@@ -1,59 +1,86 @@
-# K230 debug dashboard — local draft MVP
+# K230 debug dashboard
 
-Loopback-only Python/vanilla WebGL Host devtool for editing a local scene draft
-before a native composite Host is available.
+Loopback-only Python/vanilla WebGL devtool. Its default mode remains a recorded
+local scene draft; an explicit option can start exactly one native
+`CompositionDebugHost` child and project that child's typed local API.
 
 ```text
-browser <- fixed JSON commands / SSE -> Python recorded-local backend
-                                         (no Meiso Session or K230 connection)
+default:
+browser <- fixed JSON commands / SSE -> Python RECORDED_LOCAL draft
+
+explicit native mode:
+browser <- editor intents / sanitized SSE -> Python bridge
+                                              | strict Host NDJSON
+                                              | CMFB/v1 socketpair
+                                              v
+                                      CompositionDebugHost -> K230
 ```
+
+The Python and browser layers never parse or emit Meiso wire.
 
 ## Truth boundary
 
-This MVP is deliberately **not** a K230 simulator and does not parse or emit
-Meiso wire. The server owns one sticky local draft. The browser may add, delete,
-select and transform built-in cubes; edit the scene camera; and record render,
-camera and Wi-Fi telemetry intents. It never allocates a Meiso `State` version,
-`ContentId`, `ObjectId`, plan/world generation, production epoch or Stream
-sequence.
+The browser owns editor-only handles (`draft_object`), a complete local scene
+snapshot, and requested render/camera/telemetry intent. It does not allocate or
+accept input for State versions, ContentIds, Meiso ObjectIds, plan/world
+generations, production epochs, Stream sequences, Peer/Session identity,
+bindings, nonces, or activation tokens.
 
-The UI therefore always shows:
+In native mode the bridge converts every scene mutation into a complete strict
+`set_scene` command. It converts XYZ Euler degrees to the Host's Hamilton
+`qz*qy*qx` quaternion; the native service owns scene-space/time epochs and the
+fixed target viewport. Native command batches are built and admitted to one
+bounded local queue candidate-first. A later child failure is projected as a
+terminal event; the bridge does not promise transaction rollback across
+multiple already-enqueued native commands.
 
-- backend `RECORDED_LOCAL` / proof `LOCAL_DRAFT_ONLY`;
-- device not connected, Session/catalog absent and native Host unbound;
-- RenderResult Stream and Wi-Fi telemetry unbound;
-- camera MediaStream unsupported by the current composite Profile;
-- every cross-device identity as `not allocated`.
+Only an exact allowlist of typed native output is copied into snapshots/SSE.
+Read-only evidence can include State/plan/world generations, production epoch,
+frame sequence/drop counters, effective media parameters, Wi-Fi/device samples,
+SceneStatus and RenderResult evidence. Peer/Session identity, binding material,
+nonces, tokens, ContentIds, Meiso ObjectIds and raw wire are never projected.
 
-Changing a local intent cannot make any binding or actual-device status become
-successful. A future native Host must replace the backend behind the same fixed
-browser commands and publish its own sanitized desired-delivery/actual/Stream
-events.
+CMFB/v1 records arrive on a caller-created AF_UNIX socketpair passed as the
+native service's `--frame-fd`. The bridge validates and caches the newest whole
+render and camera record separately. It never publishes a partial record.
 
 ## Run
+
+Recorded/local mode:
 
 ```sh
 python3 devtools/web/k230_debug_dashboard/server.py
 ```
 
-Open `http://127.0.0.1:50001/`. For an alternate foreground port:
+Explicit native mode requires both options and starts one child without a
+shell:
 
 ```sh
-python3 devtools/web/k230_debug_dashboard/server.py --port 55425
+python3 devtools/web/k230_debug_dashboard/server.py \
+  --native-host /absolute/path/to/composition_debug_host \
+  --native-config /absolute/path/to/composition-host.conf
 ```
 
-The listener is fixed to `127.0.0.1`; `--port` cannot change the bind address.
+Open `http://127.0.0.1:50001/`. The listener is fixed to `127.0.0.1`;
+`--port` only selects another loopback port. Omitting either native option is an
+error, while omitting both preserves `RECORDED_LOCAL` behavior.
 
 ## Fixed API
 
 ```text
 GET  /api/v1/snapshot
 GET  /api/v1/events?after=<event id>
+GET  /api/v1/frames/render
+GET  /api/v1/frames/camera
 POST /api/v1/command
 ```
 
-`POST` requires the page Origin and generated CSRF token. The accepted command
-names and their exact JSON shapes are:
+Frame endpoints return the newest complete record as
+`application/vnd.meiso.cmfb`, or `404 FRAME_UNAVAILABLE`. They are loopback-only
+and read-only.
+
+`POST` requires the page Origin and generated CSRF token. Accepted commands and
+their exact JSON shapes are:
 
 ```text
 scene.object.add        asset=builtin:cube
@@ -64,29 +91,29 @@ scene.camera.set        position, rotation_deg, vertical_fov_deg, near, far
 intent.render.set       enabled, max_hz
 intent.camera.set       enabled, fps
 intent.telemetry.set    enabled, sample_period_ms, selected_fields
+intent.device.set       enabled, sample_period_ms, selected_fields
 ```
 
-`draft_object` is a server-owned editor handle, not a Meiso `ObjectId`. Unknown
-keys, non-finite values, invalid ranges, unknown assets and missing objects are
-rejected without changing the sticky revision or event ring. The SSE ring holds
-the newest 256 complete snapshots; ordinary `GET /api/v1/snapshot` is read-only.
+`scene.object.select` is editor-local. Every other scene edit queues the full
+current scene snapshot in native mode. The only asset import presently exposed
+is `builtin:cube`; adding OBJ or another editor import does not change Meiso
+wire ownership.
+
+Unknown keys, non-finite values, invalid ranges, unknown assets and missing
+objects are rejected without changing the sticky revision or event ring. The
+SSE ring holds the newest 256 complete projections.
 
 ## Verify
 
 ```sh
 python3 devtools/web/k230_debug_dashboard/test_server.py
+python3 devtools/web/k230_debug_dashboard/test_native_bridge.py
 node --test devtools/web/k230_debug_dashboard/test_model.mjs
 node --check devtools/web/k230_debug_dashboard/static/app.js
+python3 -m py_compile \
+  devtools/web/k230_debug_dashboard/server.py \
+  devtools/web/k230_debug_dashboard/native_bridge.py
 ```
 
-The tests freeze the local/unbound truth, all mutation commands, no-partial
-rejection, bounded SSE, refresh behavior, CSRF/Origin/static boundaries and the
-absence of Meiso identity allocation in browser commands.
-
-## Explicitly later
-
-- native composite Host and direct-IP TCP;
-- Blob/MSH0 publication, SceneDesired/PresentationPlan and desired delivery;
-- K230 actual State, Wi-Fi samples and RenderResult thumbnails;
-- camera MediaStream, which requires a declared Profile route;
-- reconnect, catalog replacement and target evidence.
+Recorded/local UI preview is not RenderResult evidence. Native CMFB caching and
+typed service projection do not make the browser a source of protocol truth.
