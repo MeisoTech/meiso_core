@@ -64,18 +64,49 @@ typedef struct {
     uint32_t count;
 } MeisoCameraV4l2RequestBuffersIoctl;
 
+/* Exact Linux v4l2_field values retained at the target syscall boundary. */
+#define MEISO_CAMERA_V4L2_RAW_FIELD_ANY UINT32_C(0)
+#define MEISO_CAMERA_V4L2_RAW_FIELD_NONE UINT32_C(1)
+
+typedef uint8_t MeisoCameraV4l2FieldProvenance;
+enum {
+    MEISO_CAMERA_V4L2_FIELD_UNKNOWN = 0,
+    MEISO_CAMERA_V4L2_FIELD_EXPLICIT_PROGRESSIVE = 1,
+    MEISO_CAMERA_V4L2_FIELD_FORMAT_INHERITED_PROGRESSIVE = 2
+};
+
+typedef uint8_t MeisoCameraV4l2SequenceProvenance;
+enum {
+    MEISO_CAMERA_V4L2_SEQUENCE_NONE = 0,
+    MEISO_CAMERA_V4L2_SEQUENCE_DRIVER = 1,
+    MEISO_CAMERA_V4L2_SEQUENCE_ADAPTER_SYNTHETIC = 2
+};
+
 typedef struct {
     uint32_t index;
     uint32_t length;
     uint64_t memory_offset;
     uint32_t bytes_used;
+    /* Raw public v4l2_buffer.sequence, even when it is not a frame counter. */
     uint32_t driver_sequence;
+    bool driver_sequence_present;
     int64_t timestamp_seconds;
     int32_t timestamp_microseconds;
     bool timestamp_monotonic;
-    bool progressive;
+    uint32_t raw_field;
+    MeisoCameraV4l2FieldProvenance field_provenance;
     bool frame_error;
 } MeisoCameraV4l2BufferIoctl;
+
+/*
+ * A dequeue callback must preserve the raw public field/sequence values.
+ * EXPLICIT_PROGRESSIVE pairs only with RAW_FIELD_NONE;
+ * FORMAT_INHERITED_PROGRESSIVE pairs only with RAW_FIELD_ANY after the
+ * adapter's exact progressive G_FMT admission. driver_sequence_present is
+ * true only when the public sequence is a real per-frame counter. The pinned
+ * native vvcam translation sets it false because that driver exposes zero and
+ * uses a separate private buffer-index sequence internally.
+ */
 
 typedef union {
     MeisoCameraV4l2CapabilityIoctl capability;
@@ -163,7 +194,9 @@ typedef struct {
     uint64_t run_generation;
     uint64_t borrow_serial;
     uint32_t buffer_index;
+    /* Driver counter or checked adapter counter, as identified below. */
     uint32_t driver_sequence;
+    MeisoCameraV4l2SequenceProvenance sequence_provenance;
 } MeisoCameraV4l2FrameRef;
 
 /*
@@ -176,6 +209,8 @@ typedef struct {
     MeisoCameraV4l2FrameRef ref;
     MeisoTimePoint source_time;
     uint64_t producer_dropped_frames;
+    MeisoCameraV4l2FieldProvenance field_provenance;
+    MeisoCameraV4l2SequenceProvenance sequence_provenance;
     MeisoCompositionMediaPixelFormat pixel_format;
     uint16_t width;
     uint16_t height;
@@ -183,6 +218,43 @@ typedef struct {
     uint32_t size_image;
     MeisoByteView bytes;
 } MeisoCameraV4l2FrameView;
+
+typedef uint8_t MeisoCameraV4l2FrameRejectReason;
+enum {
+    MEISO_CAMERA_V4L2_FRAME_REJECT_NONE = 0,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_INDEX = 1,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_LENGTH = 2,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_BYTES_USED = 3,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_FLAG = 4,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_FIELD = 5,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_FRAME_ERROR = 6,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_VALUE = 7,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_MAPPING = 8,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_REGRESSION = 9,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_SEQUENCE = 10,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED = 11
+};
+
+/*
+ * Bounded copy of the most recent successful DQBUF translation. It survives
+ * terminal cleanup so a one-shot target runner can report why a frame was
+ * rejected without retaining the MMAP borrow or a device path.
+ */
+typedef struct {
+    bool present;
+    uint32_t index;
+    uint32_t length;
+    uint32_t bytes_used;
+    uint32_t raw_field;
+    MeisoCameraV4l2FieldProvenance field_provenance;
+    uint32_t raw_driver_sequence;
+    bool driver_sequence_present;
+    int64_t timestamp_seconds;
+    int32_t timestamp_microseconds;
+    bool timestamp_monotonic;
+    bool frame_error;
+    MeisoCameraV4l2FrameRejectReason reject_reason;
+} MeisoCameraV4l2DequeuedDiagnostic;
 
 typedef struct {
     MeisoCameraV4l2Phase phase;
@@ -197,7 +269,16 @@ typedef struct {
     uint64_t producer_dropped_frames;
     bool driver_sequence_present;
     uint32_t last_driver_sequence;
+    uint32_t last_sequence;
+    MeisoCameraV4l2SequenceProvenance last_sequence_provenance;
     uint64_t last_timestamp_monotonic_ns;
+    MeisoCameraV4l2DequeuedDiagnostic last_dequeue;
+    /* Primary operation failure and first cleanup failure never overwrite. */
+    MeisoCameraV4l2FailureStage primary_failure_stage;
+    int primary_error;
+    MeisoCameraV4l2FailureStage cleanup_failure_stage;
+    int cleanup_error;
+    /* Legacy aggregate: primary when present, otherwise first cleanup. */
     MeisoCameraV4l2FailureStage last_failure_stage;
     int last_error;
     size_t arena_bytes;
@@ -298,12 +379,20 @@ MeisoCameraV4l2StartStatus meiso_camera_v4l2_start(
  * WOULD_BLOCK and EINTR returns INTERRUPTED with adapter and output byte-exact
  * unchanged. Only FRAME changes out_frame and creates the sole outstanding
  * borrow. A dequeued buffer must have exact index, bytesused, monotonic V4L2
- * timestamp flag/value, forward uint32 sequence and configured format. The
- * first driver sequence is
- * accepted; thereafter modulo-u32 delta 1..0x7fffffff is forward, delta-1 is
- * added to producer_dropped_frames, and zero/backward deltas are fatal. Any
+ * timestamp flag/value and configured format. For a present driver sequence,
+ * the first value is accepted; thereafter modulo-u32 delta 1..0x7fffffff is
+ * forward, delta-1 is added to producer_dropped_frames, and zero/backward
+ * deltas are fatal. The native K230 vvcam driver leaves public capture
+ * sequence at zero; native
+ * translation therefore marks it absent and the adapter emits a checked,
+ * contiguous synthetic sequence without claiming producer drops. Custom
+ * syscalls may mark a real sequence present and retain the modulo-u32 gap
+ * accounting above. V4L2_FIELD_NONE is explicitly progressive. Native
+ * V4L2_FIELD_ANY is accepted only as format-inherited progressive because
+ * start already proved G_FMT field NONE; other fields fail closed. Any
  * post-dequeue contract or syscall failure performs full cleanup and enters
- * sticky TERMINAL without exposing partial output.
+ * sticky TERMINAL without exposing partial output. The bounded last_dequeue
+ * diagnostic remains queryable after that cleanup.
  */
 MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
     MeisoCameraV4l2Adapter *adapter,

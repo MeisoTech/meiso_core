@@ -1,0 +1,743 @@
+#define _POSIX_C_SOURCE 200809L
+
+#include "camera_v4l2_adapter.h"
+
+#include <errno.h>
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+enum {
+    CAPTURE_SHA256_BYTES = 32U,
+    CAPTURE_SHA256_BLOCK_BYTES = 64U,
+    CAPTURE_FRAME_COUNT = 3U,
+    CAPTURE_LINE_BYTES = 2048U
+};
+
+#define CAPTURE_DEADLINE_NS UINT64_C(8000000000)
+#define CAPTURE_RETRY_NS UINT64_C(1000000)
+
+#ifdef MEISO_K230_LINUX_TARGET
+#define CAPTURE_BUILD_TARGET "k230d_linux_candidate"
+#else
+#define CAPTURE_BUILD_TARGET "native_host"
+#endif
+
+typedef struct {
+    uint32_t state[8];
+    uint64_t total_bytes;
+    uint8_t block[CAPTURE_SHA256_BLOCK_BYTES];
+    size_t block_size;
+    uint32_t words[64];
+} CaptureSha256;
+
+typedef struct {
+    uint64_t source_clock_epoch;
+    uint64_t monotonic_ns;
+    uint64_t producer_dropped_frames;
+    uint64_t fnv1a64;
+    uint32_t effective_sequence;
+    uint32_t raw_driver_sequence;
+    uint32_t raw_field;
+    uint32_t bytes_used;
+    MeisoCameraV4l2FieldProvenance field_provenance;
+    MeisoCameraV4l2SequenceProvenance sequence_provenance;
+    bool driver_sequence_present;
+    uint8_t sha256[CAPTURE_SHA256_BYTES];
+} CaptureFrameReceipt;
+
+typedef struct {
+    uint16_t width;
+    uint16_t height;
+    uint32_t bytes_per_line;
+    uint32_t size_image;
+    uint32_t driver_buffer_count;
+    uint32_t mapped_buffer_count;
+    uint32_t queued_buffers_running;
+    uint64_t mapped_bytes;
+    CaptureFrameReceipt frames[CAPTURE_FRAME_COUNT];
+} CaptureReceipt;
+
+int meiso_camera_v4l2_capture_once_run(
+    FILE *output,
+    FILE *error_output,
+    const MeisoCameraV4l2Config *config
+);
+
+/*
+ * The 8-second bound below covers only nonblocking frame polling after a
+ * successful STREAMON. It cannot preempt a blocking driver ioctl inside
+ * start/stop. E_CLEANUP with detail 2 means the bounded second cleanup attempt
+ * still left an owned resource in the public ledger; the CLI then exits and a
+ * NO_MAIN caller must treat the process as terminal, not safely invoke another
+ * capture in the same process.
+ */
+
+static uint32_t rotate_right(uint32_t value, uint32_t bits)
+{
+    return (value >> bits) | (value << (32U - bits));
+}
+
+static uint32_t read_be_u32(const uint8_t *input)
+{
+    return ((uint32_t)input[0] << 24U) |
+        ((uint32_t)input[1] << 16U) |
+        ((uint32_t)input[2] << 8U) | (uint32_t)input[3];
+}
+
+static void write_be_u32(uint8_t *output, uint32_t value)
+{
+    output[0] = (uint8_t)(value >> 24U);
+    output[1] = (uint8_t)(value >> 16U);
+    output[2] = (uint8_t)(value >> 8U);
+    output[3] = (uint8_t)value;
+}
+
+static void sha256_transform(CaptureSha256 *sha, const uint8_t block[64])
+{
+    static const uint32_t constants[64] = {
+        0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+        0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+        0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+        0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+        0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+        0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+        0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+        0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+        0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+        0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+        0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+        0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+        0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+        0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+        0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+        0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
+    };
+    uint32_t a;
+    uint32_t b;
+    uint32_t c;
+    uint32_t d;
+    uint32_t e;
+    uint32_t f;
+    uint32_t g;
+    uint32_t h;
+    uint32_t index;
+
+    for (index = 0U; index < 16U; ++index) {
+        sha->words[index] = read_be_u32(block + (size_t)index * 4U);
+    }
+    for (index = 16U; index < 64U; ++index) {
+        const uint32_t x = sha->words[index - 15U];
+        const uint32_t y = sha->words[index - 2U];
+        const uint32_t small0 = rotate_right(x, 7U) ^
+            rotate_right(x, 18U) ^ (x >> 3U);
+        const uint32_t small1 = rotate_right(y, 17U) ^
+            rotate_right(y, 19U) ^ (y >> 10U);
+        sha->words[index] = sha->words[index - 16U] + small0 +
+            sha->words[index - 7U] + small1;
+    }
+    a = sha->state[0];
+    b = sha->state[1];
+    c = sha->state[2];
+    d = sha->state[3];
+    e = sha->state[4];
+    f = sha->state[5];
+    g = sha->state[6];
+    h = sha->state[7];
+    for (index = 0U; index < 64U; ++index) {
+        const uint32_t sum1 = rotate_right(e, 6U) ^
+            rotate_right(e, 11U) ^ rotate_right(e, 25U);
+        const uint32_t choice = (e & f) ^ (~e & g);
+        const uint32_t temporary1 = h + sum1 + choice +
+            constants[index] + sha->words[index];
+        const uint32_t sum0 = rotate_right(a, 2U) ^
+            rotate_right(a, 13U) ^ rotate_right(a, 22U);
+        const uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
+        const uint32_t temporary2 = sum0 + majority;
+        h = g;
+        g = f;
+        f = e;
+        e = d + temporary1;
+        d = c;
+        c = b;
+        b = a;
+        a = temporary1 + temporary2;
+    }
+    sha->state[0] += a;
+    sha->state[1] += b;
+    sha->state[2] += c;
+    sha->state[3] += d;
+    sha->state[4] += e;
+    sha->state[5] += f;
+    sha->state[6] += g;
+    sha->state[7] += h;
+}
+
+static void sha256_init(CaptureSha256 *sha)
+{
+    static const uint32_t initial[8] = {
+        0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+        0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U
+    };
+
+    memset(sha, 0, sizeof(*sha));
+    memcpy(sha->state, initial, sizeof(initial));
+}
+
+static void sha256_update(
+    CaptureSha256 *sha,
+    const uint8_t *data,
+    size_t size
+)
+{
+    while (size != 0U) {
+        const size_t available = sizeof(sha->block) - sha->block_size;
+        const size_t take = size < available ? size : available;
+
+        memcpy(sha->block + sha->block_size, data, take);
+        sha->block_size += take;
+        sha->total_bytes += take;
+        data += take;
+        size -= take;
+        if (sha->block_size == sizeof(sha->block)) {
+            sha256_transform(sha, sha->block);
+            sha->block_size = 0U;
+        }
+    }
+}
+
+static void sha256_final(CaptureSha256 *sha, uint8_t digest[32])
+{
+    const uint64_t total_bits = sha->total_bytes * UINT64_C(8);
+    uint32_t index;
+
+    sha->block[sha->block_size++] = UINT8_C(0x80);
+    if (sha->block_size > 56U) {
+        memset(sha->block + sha->block_size, 0,
+               sizeof(sha->block) - sha->block_size);
+        sha256_transform(sha, sha->block);
+        sha->block_size = 0U;
+    }
+    memset(sha->block + sha->block_size, 0, 56U - sha->block_size);
+    for (index = 0U; index < 8U; ++index) {
+        sha->block[56U + index] =
+            (uint8_t)(total_bits >> (56U - index * 8U));
+    }
+    sha256_transform(sha, sha->block);
+    for (index = 0U; index < 8U; ++index) {
+        write_be_u32(digest + (size_t)index * 4U, sha->state[index]);
+    }
+}
+
+static uint64_t fnv1a64(MeisoByteView bytes)
+{
+    uint64_t hash = UINT64_C(14695981039346656037);
+    size_t index;
+
+    for (index = 0U; index < bytes.size; ++index) {
+        hash ^= bytes.data[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static void digest_hex(const uint8_t digest[32], char output[65])
+{
+    static const char alphabet[] = "0123456789abcdef";
+    size_t index;
+
+    for (index = 0U; index < 32U; ++index) {
+        output[index * 2U] = alphabet[digest[index] >> 4U];
+        output[index * 2U + 1U] = alphabet[digest[index] & 0x0fU];
+    }
+    output[64] = '\0';
+}
+
+static bool monotonic_now(uint64_t *out_ns)
+{
+    struct timespec now;
+
+    if (out_ns == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+        now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
+        (uint64_t)now.tv_sec > UINT64_MAX / UINT64_C(1000000000)) {
+        return false;
+    }
+    *out_ns = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
+        (uint64_t)now.tv_nsec;
+    return true;
+}
+
+static bool retry_pause(uint64_t remaining_ns)
+{
+    struct timespec delay;
+    const uint64_t selected = remaining_ns < CAPTURE_RETRY_NS ?
+        remaining_ns : CAPTURE_RETRY_NS;
+
+    delay.tv_sec = 0;
+    delay.tv_nsec = (long)selected;
+    return nanosleep(&delay, NULL) == 0 || errno == EINTR;
+}
+
+static void fixed_error(FILE *error_output, const char *code, unsigned detail)
+{
+    if (error_output != NULL && code != NULL) {
+        (void)fprintf(
+            error_output,
+            "{\"type\":\"camera_capture_error\",\"code\":\"%s\","
+            "\"detail\":%u}\n",
+            code,
+            detail
+        );
+        (void)fflush(error_output);
+    }
+}
+
+static void poll_error(
+    FILE *error_output,
+    MeisoCameraV4l2PollStatus status,
+    const MeisoCameraV4l2Adapter *adapter
+)
+{
+    MeisoCameraV4l2Snapshot snapshot;
+
+    if (error_output == NULL || adapter == NULL ||
+        !meiso_camera_v4l2_snapshot(adapter, &snapshot) ||
+        !snapshot.last_dequeue.present) {
+        fixed_error(error_output, "E_POLL", status);
+        return;
+    }
+    (void)fprintf(
+        error_output,
+        "{\"type\":\"camera_capture_error\",\"code\":\"E_POLL\","
+        "\"detail\":%u,\"primary_failure_stage\":%u,"
+        "\"primary_error\":%d,\"cleanup_failure_stage\":%u,"
+        "\"cleanup_error\":%d,\"reject_reason\":%u,"
+        "\"dq_index\":%u,\"length\":%u,\"bytes_used\":%u,"
+        "\"raw_field\":%u,\"field_provenance\":%u,"
+        "\"raw_driver_sequence\":%u,"
+        "\"driver_sequence_present\":%s}\n",
+        (unsigned)status,
+        (unsigned)snapshot.primary_failure_stage,
+        snapshot.primary_error,
+        (unsigned)snapshot.cleanup_failure_stage,
+        snapshot.cleanup_error,
+        (unsigned)snapshot.last_dequeue.reject_reason,
+        (unsigned)snapshot.last_dequeue.index,
+        (unsigned)snapshot.last_dequeue.length,
+        (unsigned)snapshot.last_dequeue.bytes_used,
+        (unsigned)snapshot.last_dequeue.raw_field,
+        (unsigned)snapshot.last_dequeue.field_provenance,
+        (unsigned)snapshot.last_dequeue.raw_driver_sequence,
+        snapshot.last_dequeue.driver_sequence_present ? "true" : "false"
+    );
+    (void)fflush(error_output);
+}
+
+static bool write_receipt(
+    FILE *output,
+    const CaptureReceipt *receipt
+)
+{
+    char digest_text[CAPTURE_FRAME_COUNT][65];
+    char line[CAPTURE_LINE_BYTES];
+    int written;
+
+    uint32_t index;
+
+    for (index = 0U; index < CAPTURE_FRAME_COUNT; ++index) {
+        digest_hex(receipt->frames[index].sha256, digest_text[index]);
+    }
+    written = snprintf(
+        line, sizeof(line),
+        "{\"type\":\"camera_capture_probe\","
+        "\"schema\":\"meiso.camera_v4l2_capture_probe.v1\","
+        "\"verification\":\"THREE_FRAME_CAPTURE_RECEIPT\","
+        "\"build_target\":\"%s\",\"pixel_format\":\"NV12\","
+        "\"width\":%u,\"height\":%u,\"bytes_per_line\":%u,"
+        "\"size_image\":%u,\"driver_buffer_count\":%u,"
+        "\"mapped_buffer_count\":%u,\"mapped_bytes\":%" PRIu64
+        ",\"queued_buffers_running\":%u,"
+        "\"frame_count\":3,\"final_phase\":\"STOPPED\","
+        "\"final_mapped_count\":0,\"final_queued_count\":0,"
+        "\"frames\":["
+        "{\"ordinal\":1,\"source_clock_epoch\":%" PRIu64
+        ",\"monotonic_ns\":%" PRIu64 ",\"raw_field\":%u,"
+        "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
+        "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
+        "\"sequence_provenance\":%u,\"producer_dropped_frames\":%" PRIu64
+        ",\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
+        "\",\"sha256\":\"%s\"},"
+        "{\"ordinal\":2,\"source_clock_epoch\":%" PRIu64
+        ",\"monotonic_ns\":%" PRIu64 ",\"raw_field\":%u,"
+        "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
+        "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
+        "\"sequence_provenance\":%u,\"producer_dropped_frames\":%" PRIu64
+        ",\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
+        "\",\"sha256\":\"%s\"},"
+        "{\"ordinal\":3,\"source_clock_epoch\":%" PRIu64
+        ",\"monotonic_ns\":%" PRIu64 ",\"raw_field\":%u,"
+        "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
+        "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
+        "\"sequence_provenance\":%u,\"producer_dropped_frames\":%" PRIu64
+        ",\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
+        "\",\"sha256\":\"%s\"}]}",
+        CAPTURE_BUILD_TARGET,
+        (unsigned)receipt->width,
+        (unsigned)receipt->height,
+        (unsigned)receipt->bytes_per_line,
+        (unsigned)receipt->size_image,
+        (unsigned)receipt->driver_buffer_count,
+        (unsigned)receipt->mapped_buffer_count,
+        receipt->mapped_bytes,
+        (unsigned)receipt->queued_buffers_running,
+        receipt->frames[0].source_clock_epoch,
+        receipt->frames[0].monotonic_ns,
+        (unsigned)receipt->frames[0].raw_field,
+        (unsigned)receipt->frames[0].field_provenance,
+        (unsigned)receipt->frames[0].raw_driver_sequence,
+        receipt->frames[0].driver_sequence_present ? "true" : "false",
+        (unsigned)receipt->frames[0].effective_sequence,
+        (unsigned)receipt->frames[0].sequence_provenance,
+        receipt->frames[0].producer_dropped_frames,
+        (unsigned)receipt->frames[0].bytes_used,
+        receipt->frames[0].fnv1a64,
+        digest_text[0],
+        receipt->frames[1].source_clock_epoch,
+        receipt->frames[1].monotonic_ns,
+        (unsigned)receipt->frames[1].raw_field,
+        (unsigned)receipt->frames[1].field_provenance,
+        (unsigned)receipt->frames[1].raw_driver_sequence,
+        receipt->frames[1].driver_sequence_present ? "true" : "false",
+        (unsigned)receipt->frames[1].effective_sequence,
+        (unsigned)receipt->frames[1].sequence_provenance,
+        receipt->frames[1].producer_dropped_frames,
+        (unsigned)receipt->frames[1].bytes_used,
+        receipt->frames[1].fnv1a64,
+        digest_text[1],
+        receipt->frames[2].source_clock_epoch,
+        receipt->frames[2].monotonic_ns,
+        (unsigned)receipt->frames[2].raw_field,
+        (unsigned)receipt->frames[2].field_provenance,
+        (unsigned)receipt->frames[2].raw_driver_sequence,
+        receipt->frames[2].driver_sequence_present ? "true" : "false",
+        (unsigned)receipt->frames[2].effective_sequence,
+        (unsigned)receipt->frames[2].sequence_provenance,
+        receipt->frames[2].producer_dropped_frames,
+        (unsigned)receipt->frames[2].bytes_used,
+        receipt->frames[2].fnv1a64,
+        digest_text[2]
+    );
+    return written >= 0 && (size_t)written < sizeof(line) &&
+        fputs(line, output) >= 0 && fputc('\n', output) != EOF &&
+        fflush(output) == 0;
+}
+
+static bool cleanup_ledger_clear(
+    MeisoCameraV4l2Adapter *adapter,
+    bool require_stopped
+)
+{
+    MeisoCameraV4l2Snapshot snapshot;
+
+    return adapter != NULL &&
+        meiso_camera_v4l2_snapshot(adapter, &snapshot) &&
+        (!require_stopped ||
+         snapshot.phase == MEISO_CAMERA_V4L2_PHASE_STOPPED) &&
+        !snapshot.stream_on && !snapshot.frame_borrowed &&
+        snapshot.mapped_buffer_count == 0U &&
+        snapshot.queued_buffer_count == 0U &&
+        snapshot.mapped_bytes == 0U;
+}
+
+int meiso_camera_v4l2_capture_once_run(
+    FILE *output,
+    FILE *error_output,
+    const MeisoCameraV4l2Config *config
+)
+{
+    MeisoCameraV4l2Adapter *adapter = NULL;
+    MeisoCameraV4l2FrameView frame;
+    MeisoCameraV4l2Snapshot snapshot;
+    CaptureReceipt receipt;
+    CaptureSha256 sha;
+    void *arena = NULL;
+    uint64_t deadline = 0U;
+    bool adapter_initialized = false;
+    bool stopped = false;
+    bool frame_present = false;
+    bool cleanup_error = false;
+    unsigned stop_attempts = 0U;
+    uint32_t frame_index;
+    int result = 3;
+
+    if (output == NULL || error_output == NULL || output == error_output ||
+        config == NULL) {
+        fixed_error(error_output, "E_ARGUMENT", 0U);
+        return 2;
+    }
+    memset(&receipt, 0, sizeof(receipt));
+    arena = malloc(meiso_camera_v4l2_memory_required());
+    if (arena == NULL) {
+        fixed_error(error_output, "E_ALLOC", 0U);
+        return 3;
+    }
+    {
+        const MeisoCameraV4l2InitStatus init_status =
+            meiso_camera_v4l2_init(
+                arena, meiso_camera_v4l2_memory_required(), config, &adapter
+            );
+        if (init_status != MEISO_CAMERA_V4L2_INIT_OK) {
+            fixed_error(error_output, "E_INIT", init_status);
+            goto cleanup;
+        }
+    }
+    adapter_initialized = true;
+    {
+        const MeisoCameraV4l2StartStatus start_status =
+            meiso_camera_v4l2_start(adapter);
+        if (start_status != MEISO_CAMERA_V4L2_START_STARTED) {
+            fixed_error(error_output, "E_START", start_status);
+            goto cleanup;
+        }
+    }
+    if (!meiso_camera_v4l2_snapshot(adapter, &snapshot) ||
+        snapshot.phase != MEISO_CAMERA_V4L2_PHASE_RUNNING ||
+        snapshot.driver_buffer_count <
+            MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
+        snapshot.mapped_buffer_count !=
+            MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
+        snapshot.queued_buffer_count !=
+            MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
+        !snapshot.stream_on || snapshot.frame_borrowed ||
+        snapshot.mapped_bytes <
+            (uint64_t)MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT *
+                MEISO_CAMERA_V4L2_SIZE_IMAGE) {
+        fixed_error(error_output, "E_SNAPSHOT", 1U);
+        goto cleanup;
+    }
+    receipt.driver_buffer_count = snapshot.driver_buffer_count;
+    receipt.mapped_buffer_count = snapshot.mapped_buffer_count;
+    receipt.mapped_bytes = snapshot.mapped_bytes;
+    receipt.queued_buffers_running = snapshot.queued_buffer_count;
+    if (!monotonic_now(&deadline)) {
+        fixed_error(error_output, "E_CLOCK", 0U);
+        goto cleanup;
+    }
+    deadline = deadline > UINT64_MAX - CAPTURE_DEADLINE_NS ?
+        UINT64_MAX : deadline + CAPTURE_DEADLINE_NS;
+    for (frame_index = 0U;
+         frame_index < CAPTURE_FRAME_COUNT;
+         ++frame_index) {
+        CaptureFrameReceipt *frame_receipt = &receipt.frames[frame_index];
+
+        for (;;) {
+            uint64_t now;
+            MeisoCameraV4l2PollStatus poll_status;
+
+            if (!monotonic_now(&now)) {
+                fixed_error(error_output, "E_CLOCK", 0U);
+                goto cleanup;
+            }
+            if (now >= deadline) {
+                fixed_error(error_output, "E_TIMEOUT", 0U);
+                goto cleanup;
+            }
+            poll_status = meiso_camera_v4l2_poll_frame(adapter, &frame);
+            if (poll_status == MEISO_CAMERA_V4L2_POLL_FRAME) {
+                frame_present = true;
+                break;
+            }
+            if (poll_status != MEISO_CAMERA_V4L2_POLL_WOULD_BLOCK &&
+                poll_status != MEISO_CAMERA_V4L2_POLL_INTERRUPTED) {
+                poll_error(error_output, poll_status, adapter);
+                goto cleanup;
+            }
+            if (!monotonic_now(&now)) {
+                fixed_error(error_output, "E_CLOCK", 0U);
+                goto cleanup;
+            }
+            if (now >= deadline) {
+                fixed_error(error_output, "E_TIMEOUT", 0U);
+                goto cleanup;
+            }
+            if (!retry_pause(deadline - now)) {
+                fixed_error(error_output, "E_WAIT", (unsigned)errno);
+                goto cleanup;
+            }
+        }
+        if (!meiso_camera_v4l2_snapshot(adapter, &snapshot) ||
+            snapshot.phase != MEISO_CAMERA_V4L2_PHASE_RUNNING ||
+            !snapshot.stream_on || !snapshot.frame_borrowed ||
+            memcmp(
+                &snapshot.borrowed_frame, &frame.ref, sizeof(frame.ref)
+            ) != 0 || snapshot.mapped_buffer_count !=
+                MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
+            snapshot.queued_buffer_count + 1U !=
+                MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
+            !snapshot.last_dequeue.present ||
+            snapshot.last_dequeue.reject_reason !=
+                MEISO_CAMERA_V4L2_FRAME_REJECT_NONE) {
+            fixed_error(error_output, "E_SNAPSHOT", 2U);
+            goto cleanup;
+        }
+        if (frame_index == 0U) {
+            receipt.width = frame.width;
+            receipt.height = frame.height;
+            receipt.bytes_per_line = frame.bytes_per_line;
+            receipt.size_image = frame.size_image;
+        } else if (receipt.width != frame.width ||
+                   receipt.height != frame.height ||
+                   receipt.bytes_per_line != frame.bytes_per_line ||
+                   receipt.size_image != frame.size_image) {
+            fixed_error(error_output, "E_FRAME", 1U);
+            goto cleanup;
+        }
+        frame_receipt->source_clock_epoch = frame.source_time.clock_epoch;
+        frame_receipt->monotonic_ns = frame.source_time.monotonic_ns;
+        frame_receipt->producer_dropped_frames =
+            frame.producer_dropped_frames;
+        frame_receipt->effective_sequence = frame.ref.driver_sequence;
+        frame_receipt->sequence_provenance =
+            frame.ref.sequence_provenance;
+        frame_receipt->raw_driver_sequence =
+            snapshot.last_dequeue.raw_driver_sequence;
+        frame_receipt->driver_sequence_present =
+            snapshot.last_dequeue.driver_sequence_present;
+        frame_receipt->raw_field = snapshot.last_dequeue.raw_field;
+        frame_receipt->field_provenance =
+            snapshot.last_dequeue.field_provenance;
+        frame_receipt->bytes_used = snapshot.last_dequeue.bytes_used;
+        frame_receipt->fnv1a64 = fnv1a64(frame.bytes);
+        sha256_init(&sha);
+        sha256_update(&sha, frame.bytes.data, frame.bytes.size);
+        sha256_final(&sha, frame_receipt->sha256);
+        {
+            const MeisoCameraV4l2ReleaseStatus release_status =
+                meiso_camera_v4l2_release_frame(adapter, &frame.ref);
+            if (release_status != MEISO_CAMERA_V4L2_RELEASE_RELEASED) {
+                fixed_error(error_output, "E_RELEASE", release_status);
+                goto cleanup;
+            }
+            frame_present = false;
+        }
+        if (!meiso_camera_v4l2_snapshot(adapter, &snapshot) ||
+            snapshot.phase != MEISO_CAMERA_V4L2_PHASE_RUNNING ||
+            !snapshot.stream_on || snapshot.frame_borrowed ||
+            snapshot.mapped_buffer_count !=
+                MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
+            snapshot.queued_buffer_count !=
+                MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT) {
+            fixed_error(error_output, "E_SNAPSHOT", 3U);
+            goto cleanup;
+        }
+    }
+    {
+        const MeisoCameraV4l2StopStatus stop_status =
+            meiso_camera_v4l2_stop(adapter);
+        ++stop_attempts;
+        if (stop_status != MEISO_CAMERA_V4L2_STOP_STOPPED) {
+            cleanup_error = true;
+            result = 5;
+            goto cleanup;
+        }
+        stopped = true;
+    }
+    if (!cleanup_ledger_clear(adapter, true)) {
+        cleanup_error = true;
+        stopped = false;
+        result = 5;
+        goto cleanup;
+    }
+    if (!write_receipt(output, &receipt)) {
+        fixed_error(error_output, "E_WRITE", 0U);
+        result = 4;
+        goto cleanup;
+    }
+    result = 0;
+
+cleanup:
+    if (frame_present) {
+        const MeisoCameraV4l2ReleaseStatus release_status =
+            meiso_camera_v4l2_release_frame(adapter, &frame.ref);
+        if (release_status != MEISO_CAMERA_V4L2_RELEASE_RELEASED &&
+            release_status != MEISO_CAMERA_V4L2_RELEASE_NO_FRAME) {
+            cleanup_error = true;
+        }
+    }
+    if (adapter_initialized && !stopped) {
+        MeisoCameraV4l2StopStatus stop_status =
+            MEISO_CAMERA_V4L2_STOP_INVALID_ARGUMENT;
+
+        while (stop_attempts < 2U) {
+            stop_status = meiso_camera_v4l2_stop(adapter);
+            ++stop_attempts;
+            if (stop_status == MEISO_CAMERA_V4L2_STOP_STOPPED ||
+                stop_status == MEISO_CAMERA_V4L2_STOP_UNCHANGED) {
+                stopped = true;
+                break;
+            }
+        }
+        if (!cleanup_ledger_clear(adapter, stopped)) {
+            fixed_error(error_output, "E_CLEANUP", 2U);
+            result = 5;
+        } else if (cleanup_error || !stopped) {
+            fixed_error(error_output, "E_CLEANUP", 1U);
+            result = 5;
+        }
+    }
+    free(arena);
+    return result;
+}
+
+#ifndef MEISO_CAMERA_V4L2_CAPTURE_ONCE_NO_MAIN
+int main(void)
+{
+    MeisoCameraV4l2Config config;
+
+    meiso_camera_v4l2_default_config(UINT64_C(1), &config);
+    return meiso_camera_v4l2_capture_once_run(stdout, stderr, &config);
+}
+#else
+int meiso_camera_v4l2_capture_once_test_write_max_receipt(FILE *output)
+{
+    CaptureReceipt receipt;
+    uint32_t index;
+
+    if (output == NULL) {
+        return 2;
+    }
+    memset(&receipt, 0, sizeof(receipt));
+    receipt.width = UINT16_MAX;
+    receipt.height = UINT16_MAX;
+    receipt.bytes_per_line = UINT32_MAX;
+    receipt.size_image = UINT32_MAX;
+    receipt.driver_buffer_count = UINT32_MAX;
+    receipt.mapped_buffer_count = UINT32_MAX;
+    receipt.queued_buffers_running = UINT32_MAX;
+    receipt.mapped_bytes = UINT64_MAX;
+    for (index = 0U; index < CAPTURE_FRAME_COUNT; ++index) {
+        receipt.frames[index].source_clock_epoch = UINT64_MAX;
+        receipt.frames[index].monotonic_ns = UINT64_MAX;
+        receipt.frames[index].producer_dropped_frames = UINT64_MAX;
+        receipt.frames[index].fnv1a64 = UINT64_MAX;
+        receipt.frames[index].effective_sequence = UINT32_MAX;
+        receipt.frames[index].raw_driver_sequence = UINT32_MAX;
+        receipt.frames[index].raw_field = UINT32_MAX;
+        receipt.frames[index].bytes_used = UINT32_MAX;
+        receipt.frames[index].field_provenance = UINT8_MAX;
+        receipt.frames[index].sequence_provenance = UINT8_MAX;
+        receipt.frames[index].driver_sequence_present = true;
+        memset(
+            receipt.frames[index].sha256,
+            UINT8_MAX,
+            sizeof(receipt.frames[index].sha256)
+        );
+    }
+    return write_receipt(output, &receipt) ? 0 : 1;
+}
+#endif

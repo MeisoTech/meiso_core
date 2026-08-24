@@ -462,6 +462,21 @@ if(TARGET meiso_camera_v4l2_adapter)
         PRIVATE meiso_camera_v4l2_adapter
     )
     meiso_enable_warnings(meiso_camera_v4l2_adapter_test)
+
+    add_executable(
+        meiso_camera_v4l2_capture_once_test
+        tests/test_camera_v4l2_capture_once.c
+        targets/k230d-linux/camera_v4l2_capture_once.c
+    )
+    target_compile_definitions(
+        meiso_camera_v4l2_capture_once_test
+        PRIVATE MEISO_CAMERA_V4L2_CAPTURE_ONCE_NO_MAIN=1
+    )
+    target_link_libraries(
+        meiso_camera_v4l2_capture_once_test
+        PRIVATE meiso_camera_v4l2_adapter
+    )
+    meiso_enable_warnings(meiso_camera_v4l2_capture_once_test)
 endif()
 
 if(TARGET meiso_composition_debug_peer)
@@ -740,6 +755,12 @@ if(TARGET meiso_camera_v4l2_adapter_test)
     add_test(
         NAME meiso_camera_v4l2_adapter_test
         COMMAND meiso_camera_v4l2_adapter_test
+    )
+endif()
+if(TARGET meiso_camera_v4l2_capture_once_test)
+    add_test(
+        NAME meiso_camera_v4l2_capture_once_test
+        COMMAND meiso_camera_v4l2_capture_once_test
     )
 endif()
 if(TARGET meiso_composition_debug_peer_test)

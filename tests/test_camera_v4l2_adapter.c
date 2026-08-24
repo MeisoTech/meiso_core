@@ -118,10 +118,13 @@ static void fake_kernel_defaults(FakeKernel *kernel)
     kernel->dequeue.length = MEISO_CAMERA_V4L2_SIZE_IMAGE;
     kernel->dequeue.bytes_used = MEISO_CAMERA_V4L2_SIZE_IMAGE;
     kernel->dequeue.driver_sequence = 1U;
+    kernel->dequeue.driver_sequence_present = true;
     kernel->dequeue.timestamp_seconds = 10;
     kernel->dequeue.timestamp_microseconds = 20;
     kernel->dequeue.timestamp_monotonic = true;
-    kernel->dequeue.progressive = true;
+    kernel->dequeue.raw_field = MEISO_CAMERA_V4L2_RAW_FIELD_NONE;
+    kernel->dequeue.field_provenance =
+        MEISO_CAMERA_V4L2_FIELD_EXPLICIT_PROGRESSIVE;
 }
 
 static void fake_clear_calls(FakeKernel *kernel)
@@ -629,9 +632,15 @@ static bool test_poll_borrow_release_sequence_and_transient(void)
     CHECK(frame.ref.run_generation == 1U && frame.ref.borrow_serial == 1U &&
           frame.ref.buffer_index == 0U &&
           frame.ref.driver_sequence == UINT32_MAX &&
+          frame.ref.sequence_provenance ==
+              MEISO_CAMERA_V4L2_SEQUENCE_DRIVER &&
           frame.source_time.clock_epoch == 77U &&
           frame.source_time.monotonic_ns == UINT64_C(10000020000) &&
           frame.producer_dropped_frames == 0U &&
+          frame.field_provenance ==
+              MEISO_CAMERA_V4L2_FIELD_EXPLICIT_PROGRESSIVE &&
+          frame.sequence_provenance ==
+              MEISO_CAMERA_V4L2_SEQUENCE_DRIVER &&
           frame.pixel_format == MEISO_COMPOSITION_MEDIA_PIXEL_NV12 &&
           frame.width == MEISO_CAMERA_V4L2_WIDTH &&
           frame.height == MEISO_CAMERA_V4L2_HEIGHT &&
@@ -700,6 +709,9 @@ static bool test_poll_borrow_release_sequence_and_transient(void)
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.producer_dropped_frames == 3U &&
           snapshot.last_driver_sequence == 4U &&
+          snapshot.last_sequence == 4U &&
+          snapshot.last_sequence_provenance ==
+              MEISO_CAMERA_V4L2_SEQUENCE_DRIVER &&
           !snapshot.frame_borrowed);
     CHECK(meiso_camera_v4l2_stop(fixture.adapter) ==
           MEISO_CAMERA_V4L2_STOP_STOPPED);
@@ -771,6 +783,11 @@ static bool test_contract_failure_terminal_and_cleanup_retry(void)
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
           snapshot.last_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+          snapshot.last_dequeue.present &&
+          snapshot.last_dequeue.bytes_used ==
+              MEISO_CAMERA_V4L2_SIZE_IMAGE - 1U &&
+          snapshot.last_dequeue.reject_reason ==
+              MEISO_CAMERA_V4L2_FRAME_REJECT_BYTES_USED &&
           !snapshot.stream_on && !snapshot.frame_borrowed &&
           fixture.kernel.stream_off_calls == 1U &&
           fixture.kernel.request_zero_calls == 1U &&
@@ -785,6 +802,29 @@ static bool test_contract_failure_terminal_and_cleanup_retry(void)
           meiso_camera_v4l2_stop(fixture.adapter) ==
               MEISO_CAMERA_V4L2_STOP_TERMINAL &&
           fixture.kernel.close_calls == 1U);
+    fixture_destroy(&fixture);
+
+    CHECK(fixture_init(&fixture) && start_and_check(&fixture));
+    fixture.kernel.dequeue.bytes_used =
+        MEISO_CAMERA_V4L2_SIZE_IMAGE - 1U;
+    fixture.kernel.ioctl_error_request =
+        MEISO_CAMERA_V4L2_IOCTL_STREAM_OFF;
+    fixture.kernel.ioctl_error = EBUSY;
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &output) ==
+          MEISO_CAMERA_V4L2_POLL_TERMINAL);
+    CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+          snapshot.primary_failure_stage ==
+              MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+          snapshot.primary_error == EPROTO &&
+          snapshot.cleanup_failure_stage ==
+              MEISO_CAMERA_V4L2_FAILURE_STREAM_OFF &&
+          snapshot.cleanup_error == EBUSY &&
+          snapshot.last_failure_stage ==
+              MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+          snapshot.last_error == EPROTO &&
+          snapshot.last_dequeue.reject_reason ==
+              MEISO_CAMERA_V4L2_FRAME_REJECT_BYTES_USED &&
+          !snapshot.stream_on && snapshot.mapped_buffer_count == 0U);
     fixture_destroy(&fixture);
 
     CHECK(fixture_init(&fixture) && start_and_check(&fixture));
@@ -1217,6 +1257,73 @@ static bool test_init_alias_bounds_and_public_aliases(void)
     return true;
 }
 
+static bool test_vvcam_inherited_field_and_synthetic_sequence(void)
+{
+    Fixture fixture;
+    MeisoCameraV4l2FrameView frame;
+    MeisoCameraV4l2Snapshot snapshot;
+    uint32_t ordinal;
+
+    CHECK(fixture_init(&fixture) && start_and_check(&fixture));
+    fixture.kernel.dequeue.raw_field = MEISO_CAMERA_V4L2_RAW_FIELD_ANY;
+    fixture.kernel.dequeue.field_provenance =
+        MEISO_CAMERA_V4L2_FIELD_FORMAT_INHERITED_PROGRESSIVE;
+    fixture.kernel.dequeue.driver_sequence = 0U;
+    fixture.kernel.dequeue.driver_sequence_present = false;
+    for (ordinal = 1U; ordinal <= 5U; ++ordinal) {
+        fixture.kernel.dequeue.index = (ordinal - 1U) %
+            MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT;
+        fixture.kernel.dequeue.timestamp_seconds = (int64_t)(20U + ordinal);
+        CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+                  MEISO_CAMERA_V4L2_POLL_FRAME &&
+              frame.ref.driver_sequence == ordinal &&
+              frame.ref.sequence_provenance ==
+                  MEISO_CAMERA_V4L2_SEQUENCE_ADAPTER_SYNTHETIC &&
+              frame.field_provenance ==
+                  MEISO_CAMERA_V4L2_FIELD_FORMAT_INHERITED_PROGRESSIVE &&
+              frame.sequence_provenance ==
+                  MEISO_CAMERA_V4L2_SEQUENCE_ADAPTER_SYNTHETIC &&
+              frame.producer_dropped_frames == 0U &&
+              meiso_camera_v4l2_release_frame(
+                  fixture.adapter, &frame.ref
+              ) == MEISO_CAMERA_V4L2_RELEASE_RELEASED);
+    }
+    CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+          snapshot.last_sequence == 5U &&
+          snapshot.last_sequence_provenance ==
+              MEISO_CAMERA_V4L2_SEQUENCE_ADAPTER_SYNTHETIC &&
+          !snapshot.driver_sequence_present &&
+          snapshot.last_driver_sequence == 0U &&
+          snapshot.producer_dropped_frames == 0U &&
+          snapshot.last_dequeue.present &&
+          snapshot.last_dequeue.raw_field ==
+              MEISO_CAMERA_V4L2_RAW_FIELD_ANY &&
+          snapshot.last_dequeue.field_provenance ==
+              MEISO_CAMERA_V4L2_FIELD_FORMAT_INHERITED_PROGRESSIVE &&
+          !snapshot.last_dequeue.driver_sequence_present &&
+          snapshot.last_dequeue.reject_reason ==
+              MEISO_CAMERA_V4L2_FRAME_REJECT_NONE);
+    CHECK(meiso_camera_v4l2_stop(fixture.adapter) ==
+          MEISO_CAMERA_V4L2_STOP_STOPPED);
+    fixture_destroy(&fixture);
+
+    CHECK(fixture_init(&fixture) && start_and_check(&fixture));
+    fixture.kernel.dequeue.raw_field = 4U;
+    fixture.kernel.dequeue.field_provenance =
+        MEISO_CAMERA_V4L2_FIELD_UNKNOWN;
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+          MEISO_CAMERA_V4L2_POLL_TERMINAL);
+    CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+          snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
+          snapshot.last_dequeue.present &&
+          snapshot.last_dequeue.raw_field == 4U &&
+          snapshot.last_dequeue.reject_reason ==
+              MEISO_CAMERA_V4L2_FRAME_REJECT_FIELD &&
+          !snapshot.stream_on && !snapshot.frame_borrowed);
+    fixture_destroy(&fixture);
+    return true;
+}
+
 int main(void)
 {
     if (!test_init_start_stop_and_rollback() ||
@@ -1229,7 +1336,8 @@ int main(void)
         !test_duplicate_mapping_and_dequeue_error() ||
         !test_poll_contract_matrix() ||
         !test_mapping_alias_borrow_stop_and_release_failure() ||
-        !test_init_alias_bounds_and_public_aliases()) {
+        !test_init_alias_bounds_and_public_aliases() ||
+        !test_vvcam_inherited_field_and_synthetic_sequence()) {
         return 1;
     }
     (void)puts("camera v4l2 adapter tests passed");
