@@ -151,6 +151,22 @@ target_link_libraries(
 )
 meiso_enable_warnings(meiso_composition_session_v3_profile)
 
+if(UNIX)
+    add_library(
+        meiso_camera_v4l2_adapter
+        targets/k230d-linux/camera_v4l2_adapter.c
+    )
+    target_include_directories(
+        meiso_camera_v4l2_adapter
+        PUBLIC targets/k230d-linux
+    )
+    target_link_libraries(
+        meiso_camera_v4l2_adapter
+        PUBLIC meiso_composition_session_v3_profile
+    )
+    meiso_enable_warnings(meiso_camera_v4l2_adapter)
+endif()
+
 add_library(
     meiso_composition_media_transport
     profiles/composition-scene-lab-v0/composition_media_transport.c
@@ -417,6 +433,18 @@ if(TARGET meiso_device_telemetry_linux_adapter)
     meiso_enable_warnings(meiso_device_telemetry_linux_adapter_test)
 endif()
 
+if(TARGET meiso_camera_v4l2_adapter)
+    add_executable(
+        meiso_camera_v4l2_adapter_test
+        tests/test_camera_v4l2_adapter.c
+    )
+    target_link_libraries(
+        meiso_camera_v4l2_adapter_test
+        PRIVATE meiso_camera_v4l2_adapter
+    )
+    meiso_enable_warnings(meiso_camera_v4l2_adapter_test)
+endif()
+
 add_executable(meiso_runtime_v4_test tests/test_runtime_v4.c)
 target_link_libraries(
     meiso_runtime_v4_test
@@ -675,6 +703,12 @@ if(TARGET meiso_device_telemetry_linux_adapter_test)
     add_test(
         NAME meiso_device_telemetry_linux_adapter_test
         COMMAND meiso_device_telemetry_linux_adapter_test
+    )
+endif()
+if(TARGET meiso_camera_v4l2_adapter_test)
+    add_test(
+        NAME meiso_camera_v4l2_adapter_test
+        COMMAND meiso_camera_v4l2_adapter_test
     )
 endif()
 add_test(NAME meiso_runtime_v4_test COMMAND meiso_runtime_v4_test)
