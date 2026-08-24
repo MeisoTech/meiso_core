@@ -1,3 +1,6 @@
+#define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "camera_v4l2_adapter.h"
 
 #include <errno.h>
