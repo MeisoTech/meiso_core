@@ -799,6 +799,56 @@ static bool edge_pump_status_benign(MeisoCompositionDebugPeerPumpStatus status)
         status == MEISO_COMPOSITION_DEBUG_PEER_PUMP_REBIND_PROGRESS;
 }
 
+static bool resolve_unrelated_desired_offer(
+    MeisoCompositionDebugPeer *edge,
+    const MeisoRuntimeEvent *event
+)
+{
+    static const uint8_t desired_routes[] = {
+        ROUTE_WIFI_DESIRED,
+        ROUTE_PRESENTATION_DESIRED,
+        ROUTE_SCENE_DESIRED,
+        ROUTE_DEVICE_DESIRED,
+        ROUTE_RENDER_DESIRED,
+        ROUTE_CAMERA_DESIRED
+    };
+    static const uint8_t accept_sources[] = {1U, 5U, 7U, 10U, 13U, 15U};
+    MeisoRuntimeSchedulerWork work;
+    size_t index;
+
+    if (edge == NULL || event == NULL ||
+        event->type != MEISO_RUNTIME_EVENT_STATE_OFFER) {
+        return false;
+    }
+    for (index = 0U;
+         index < sizeof(desired_routes) / sizeof(desired_routes[0]);
+         ++index) {
+        MeisoRuntimeRouteKey route;
+
+        if (!meiso_composition_debug_peer_route_key(
+                edge, desired_routes[index], &route
+            ) || !route_equal(event->route, route)) {
+            continue;
+        }
+        if (meiso_composition_debug_peer_commit_state_receive(
+                edge, event->route, &event->state_offer,
+                MEISO_STATE_RECEIVE_STALE
+            ) != MEISO_COMPOSITION_DEBUG_PEER_OK) {
+            return false;
+        }
+        memset(&work, 0, sizeof(work));
+        work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
+        work.value.state_accept.route = event->route;
+        work.value.state_accept.generation = event->state_offer.generation;
+        work.value.state_accept.owner = event->state_offer.state.owner;
+        work.value.state_accept.version = event->state_offer.state.version;
+        return meiso_composition_debug_peer_queue_work(
+                   edge, accept_sources[index], &work
+               ) == MEISO_COMPOSITION_DEBUG_PEER_OK;
+    }
+    return false;
+}
+
 static bool drive_control_ready(HostAppFixture *fixture)
 {
     struct timespec deadline;
@@ -1009,6 +1059,13 @@ static bool drive_first_wifi_desired(HostAppFixture *fixture)
                 } else {
                     CHECK_GOTO(false, cleanup);
                 }
+                goto edge_event_handled;
+            }
+            if (edge_result.event.type != MEISO_RUNTIME_EVENT_STATE_OFFER ||
+                !route_equal(edge_result.event.route, expected_route)) {
+                CHECK_GOTO(resolve_unrelated_desired_offer(
+                               fixture->edge, &edge_result.event
+                           ), cleanup);
                 goto edge_event_handled;
             }
             MeisoRuntimeDesiredState desired;
@@ -1900,16 +1957,21 @@ static bool drive_media_desired(
             MeisoStateReceiveStatus receive;
             MeisoRuntimeSchedulerWork accept;
 
-            CHECK_GOTO(!offer_seen && edge_result.event.type ==
-                           MEISO_RUNTIME_EVENT_STATE_OFFER &&
-                       route_equal(edge_result.event.route, expected_route),
-                       cleanup);
+            if (edge_result.event.type != MEISO_RUNTIME_EVENT_STATE_OFFER ||
+                !route_equal(edge_result.event.route, expected_route)) {
+                CHECK_GOTO(resolve_unrelated_desired_offer(
+                               fixture->edge, &edge_result.event
+                           ), cleanup);
+                goto media_event_handled;
+            }
             receive = meiso_state_replica_receive(
                 replica, edge_result.event.state_offer.state.owner,
                 edge_result.event.state_offer.state.version,
                 edge_result.event.state_offer.state.payload
             );
-            CHECK_GOTO(receive == MEISO_STATE_RECEIVE_NEW &&
+            CHECK_GOTO(receive == (offer_seen ?
+                           MEISO_STATE_RECEIVE_DUPLICATE :
+                           MEISO_STATE_RECEIVE_NEW) &&
                        meiso_runtime_desired_state_decode(
                            edge_result.event.state_offer.state.payload,
                            &desired
@@ -1923,21 +1985,24 @@ static bool drive_media_desired(
                            &edge_result.event.state_offer, receive
                        ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
                        cleanup);
-            memset(&accept, 0, sizeof(accept));
-            accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
-            accept.value.state_accept.route = edge_result.event.route;
-            accept.value.state_accept.generation =
-                edge_result.event.state_offer.generation;
-            accept.value.state_accept.owner =
-                edge_result.event.state_offer.state.owner;
-            accept.value.state_accept.version =
-                edge_result.event.state_offer.state.version;
-            CHECK_GOTO(meiso_composition_debug_peer_queue_work(
-                           fixture->edge, accept_source, &accept
-                       ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
-                       cleanup);
-            offer_seen = true;
+            if (!offer_seen) {
+                memset(&accept, 0, sizeof(accept));
+                accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
+                accept.value.state_accept.route = edge_result.event.route;
+                accept.value.state_accept.generation =
+                    edge_result.event.state_offer.generation;
+                accept.value.state_accept.owner =
+                    edge_result.event.state_offer.state.owner;
+                accept.value.state_accept.version =
+                    edge_result.event.state_offer.state.version;
+                CHECK_GOTO(meiso_composition_debug_peer_queue_work(
+                               fixture->edge, accept_source, &accept
+                           ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
+                           cleanup);
+                offer_seen = true;
+            }
         }
+media_event_handled:
         memset(&completion, 0, sizeof(completion));
         if (meiso_composition_debug_peer_take_completion(
                 fixture->edge, accept_source, &completion
@@ -2742,11 +2807,15 @@ static bool test_camera_and_both_media_masks(void)
             &fixture, UINT64_C(0x5000) + (uint64_t)case_index
         ));
         fixture_initialized = true;
+        CHECK_GOTO(drive_control_ready(&fixture), case_cleanup);
         if ((mask & MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER) != 0U) {
             CHECK_GOTO(queue_media_desired(
                            &fixture,
                            MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW,
                            command_id++
+                       ) && drive_media_desired(
+                           &fixture,
+                           MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW
                        ), case_cleanup);
         }
         if ((mask & MEISO_COMPOSITION_HOST_APP_MEDIA_CAMERA) != 0U) {
@@ -2754,17 +2823,7 @@ static bool test_camera_and_both_media_masks(void)
                            &fixture,
                            MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,
                            command_id++
-                       ), case_cleanup);
-        }
-        CHECK_GOTO(drive_control_ready(&fixture), case_cleanup);
-        if ((mask & MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER) != 0U) {
-            CHECK_GOTO(drive_media_desired(
-                           &fixture,
-                           MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW
-                       ), case_cleanup);
-        }
-        if ((mask & MEISO_COMPOSITION_HOST_APP_MEDIA_CAMERA) != 0U) {
-            CHECK_GOTO(drive_media_desired(
+                       ) && drive_media_desired(
                            &fixture,
                            MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA
                        ), case_cleanup);
