@@ -616,13 +616,18 @@ CPU raster像素golden、AF_INET、K230、camera、physical display、性能或s
 应用协议。`composition_debug_host --simulator --interactive`直接创建caller-owned simulator handle，复用
 remote模式的closed NDJSON command/snapshot surface；Dashboard的`--native-simulator`启动真实子进程并验证
 child声明`wire_owner:simulator_service`，模式投影为`NATIVE_SIMULATOR`。真实subprocess vector已贯通builtin
-cube→Scene→Presentation→synthetic RenderResult，以及render/camera media、Wi-Fi和DeviceTelemetry State，
-同时锁定`control_ready=false`、`media_bound=false`、`media_mask=none`、无`media.connected`、无CMFB frame。
+cube→Scene→Presentation→RenderResult，以及render/camera media、Wi-Fi和DeviceTelemetry State。随后
+显式opt-in CPU-raster slice把固定双target renderer计入caller arena，以source-pinned RenderResult替换
+fake result，并发布完整CMFB/v1 render record（80-byte header + 307200-byte RGBA8888 payload）；真实child
+vector锁定payload SHA-256与同world full-target hash一致。它同时锁定`control_ready=false`、
+`media_bound=false`、`media_mask=none`、无`media.connected`，camera frame保持不存在。
 remote入口仍要求config并保持原argv/output；simulator入口拒绝config，二者声明错配会terminal。
 fresh Debug、Release和ASan+UBSan全仓CTest均52/52；修改C TU通过conversion/sign/shadow strict C11，
-两份clang analyzer零诊断，Dashboard Python真实child 14/14、server 9/9、JavaScript 5/5，28-file Markdown
-link与diff/sensitive门通过。这证明本地编辑器已有真实native离线backend入口，不证明Session/TCP、CPU raster
-像素、K230、camera capture、CMFB media、physical display、性能或soak。
+公开header通过C++17，五份clang analyzer零诊断，Dashboard Python真实child 14/14、server 9/9、
+JavaScript 5/5，28-file Markdown link与diff/sensitive门通过。新增vector还锁定第二个world的重新render、
+旧media borrow期间不覆盖、release后exact发布、两代frame/result SHA一致、CPU-owned route拒外部publish，
+以及trace v1对nonzero raster config的原子拒绝。这证明本地编辑器已有真实native离线backend和source-host CPU-raster preview，
+不证明Session/TCP、cross-target像素、K230、camera capture、physical display、性能或soak。
 
 ## 已验证的负面结论
 

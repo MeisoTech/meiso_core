@@ -38,6 +38,18 @@ typedef struct {
     uint64_t composition_clock_epoch;
     uint64_t presentation_production_epoch;
     uint64_t scene_production_epoch;
+    /*
+     * Optional source-pinned CPU raster preview. This requires Composition,
+     * reserves the fixed two-target renderer in the caller arena, replaces
+     * the fake RenderResult with the CPU raster result, and publishes the
+     * complete RGBA8888 target on an enabled render-media route. It remains
+     * synthetic offscreen evidence: no driver, scanout, physical display,
+     * cross-target pixel promise, wall clock, thread, socket or heap.
+     * The configured render capability must be exact RGBA8888/raw at the
+     * fixed Scene target dimensions; broader formats or dimensions are an
+     * invalid config rather than capabilities the renderer cannot honor.
+     */
+    bool cpu_raster_preview_enabled;
 } MeisoCompositionEdgeSimulatorConfig;
 
 typedef uint8_t MeisoCompositionEdgeSimulatorInitStatus;
@@ -61,7 +73,8 @@ enum {
     MEISO_COMPOSITION_EDGE_SIMULATOR_SCENE_APPLIED = 6,
     MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_APPLIED = 7,
     MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_ACTIVATED = 8,
-    MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_RESULT_PUBLISHED = 9
+    MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_RESULT_PUBLISHED = 9,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_PREVIEW_PUBLISHED = 10
 };
 
 typedef struct {
@@ -112,9 +125,10 @@ MeisoEdgeStatus meiso_composition_edge_simulator_activate(
 );
 
 /*
- * At most one queued desired, Mesh publication, Presentation activation or
- * synthetic RenderResult is advanced. now becomes the source time for an
- * applied telemetry sample and the logical Composition boundary/render time.
+ * At most one queued desired, Mesh publication, Presentation activation,
+ * RenderResult, or optional CPU-raster preview frame is advanced. now becomes
+ * the source time for an applied telemetry sample and the logical Composition
+ * boundary/render time.
  * When Composition is enabled, now.clock_epoch must exactly equal the
  * configured composition_clock_epoch; a mismatch is INVALID_ARGUMENT with
  * no simulator or output change.
@@ -125,7 +139,11 @@ MeisoEdgeStatus meiso_composition_edge_simulator_step(
     MeisoCompositionEdgeSimulatorTransition *out_transition
 );
 
-/* Copies one complete selected-route access unit into the caller arena. */
+/*
+ * Copies one complete selected-route access unit into the caller arena. When
+ * cpu_raster_preview_enabled is true, the renderer exclusively owns the render
+ * preview route and caller publication to that route returns CONFLICT.
+ */
 MeisoEdgeStatus meiso_composition_edge_simulator_publish_frame(
     MeisoEdgeHandle *handle,
     const MeisoCompositionEdgeSimulatorFrame *frame

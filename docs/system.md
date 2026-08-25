@@ -74,16 +74,19 @@ Blob/Composition操作明确`unsupported`，DeviceTelemetry未启用时SET_DEVIC
 同一native Composition Debug Host现在提供显式`--simulator --interactive`入口，Dashboard以
 `--native-host ... --native-simulator`启动真实子进程，并通过与remote模式相同的closed NDJSON命令和
 typed snapshot消费上述opaque handle。该模式不读取remote config、不连接control/media TCP、不建立
-Session/catalog wire，也不发布CMFB frame；Dashboard把它标为`NATIVE_SIMULATOR`和
-`SYNTHETIC_OFFLINE_TYPED_ONLY`，只把Scene/C2状态、synthetic RenderResult、Wi-Fi/Device和media State
-呈现为离线truth。remote模式、其argv和`wire_owner:native_service`保持不变。
+Session/catalog wire。native simulator显式启用caller-owned CPU raster：Dashboard把模式标为
+`NATIVE_SIMULATOR`和`SYNTHETIC_OFFLINE_CPU_RASTER`，除Scene/C2、Wi-Fi/Device及media State外，还接收
+一条完整CMFB/v1 320×240 RGBA render preview，并验证payload SHA-256与同world RenderResult一致。
+camera route仍只有synthetic State、没有camera frame；`media_bound=false`继续表示没有MediaTransport/TCP
+binding。remote模式、其argv和`wire_owner:native_service`保持不变。
 
 Recorded backend artifact使用固定版本、closed-kind、bounded的canonical in-memory trace；它只记录
 simulator config、Wi-Fi/media typed desired、显式step/time、完整media unit与terminal，不记录或发明Session/Runtime
 wire。reader在暴露config前完整验证header、每record integrity、容量、事件顺序和payload，再以单record
 原子cursor驱动fresh simulator。文件或transport I/O继续由caller拥有，trace失败不能吞掉后续record，
 recorded truth始终保持synthetic evidence标签。v1要求DeviceTelemetry与Composition simulation均关闭，
-两组新增config suffix都必须canonical zero，因此新增simulator能力不会被旧trace静默忽略。
+`cpu_raster_preview_enabled`也必须为false，所有相关config suffix均须canonical zero，因此新增simulator
+能力不会被旧trace静默忽略。
 
 `EdgeHandle` 的公开生命周期绑定一段连续的 Session/catalog truth。Host integration 拥有
 连接、event loop、Runtime pump 和 backend replacement；应用只能读取 handle 的

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "composition_cpu_raster_renderer.h"
 #include "meiso_composition_edge_simulator.h"
 #include "scene_store.h"
 
@@ -198,6 +199,209 @@ static MeisoCompositionEdgePresentationSettings presentation_settings(void)
     };
 }
 
+static bool test_cpu_raster_preview(void)
+{
+    MeisoCompositionEdgeSimulatorConfig config = simulator_config(9201U, 2U);
+    MeisoCompositionEdgeSimulatorConfig base = config;
+    MeisoCompositionEdgeSimulatorConfig invalid = config;
+    MeisoEdgeHandle *handle = NULL;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoCompositionEdgeSimulatorTransition transition;
+    MeisoCompositionEdgeSnapshot snapshot;
+    MeisoCompositionSceneDesired scene;
+    MeisoCompositionEdgePresentationSettings settings =
+        presentation_settings();
+    MeisoCompositionEdgeSimulatorFrame external_frame;
+    MeisoCompositionMediaDesired render_desired = {
+        MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888,
+        MEISO_COMPOSITION_MEDIA_CODEC_RAW,
+        320U, 240U, 1000U, 0U, 1U,
+        MEISO_COMPOSITION_MEDIA_RECOVERY_REQUEST_KEY
+    };
+    MeisoEdgeMediaFrameView frame;
+    MeisoEdgeMediaFrameKey old_frame_key;
+    MeisoContentId cube_id;
+    MeisoContentId frame_id;
+    MeisoContentId next_frame_id;
+    uint8_t cube[1024];
+    uint8_t external_byte = 0U;
+    size_t cube_size = 0U;
+    size_t required;
+    size_t base_required;
+    const size_t alignment =
+        meiso_composition_edge_simulator_alignment_required();
+    void *arena = NULL;
+
+    config.cpu_raster_preview_enabled = true;
+    base.cpu_raster_preview_enabled = false;
+    invalid.composition_enabled = false;
+    invalid.composition_blob_slot_count = 0U;
+    invalid.composition_clock_epoch = 0U;
+    invalid.presentation_production_epoch = 0U;
+    invalid.scene_production_epoch = 0U;
+    invalid.cpu_raster_preview_enabled = true;
+    required = meiso_composition_edge_simulator_memory_required(&config);
+    base_required = meiso_composition_edge_simulator_memory_required(&base);
+    CHECK(required > base_required && base_required != 0U &&
+          meiso_composition_edge_simulator_memory_required(&invalid) == 0U);
+    invalid = config;
+    invalid.catalog.render_media_capability.pixel_formats |=
+        MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGB565;
+    CHECK(cube_wire(cube, sizeof(cube), &cube_size, &cube_id));
+    CHECK(posix_memalign(&arena, alignment, required) == 0);
+    memset(arena, 0xa5, required);
+    handle = (MeisoEdgeHandle *)(uintptr_t)UINT64_C(0x1234);
+    CHECK(meiso_composition_edge_simulator_init(
+              arena, required, &invalid, &handle
+          ) == MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG &&
+          bytes_all(arena, required, UINT8_C(0xa5)) &&
+          handle ==
+              (MeisoEdgeHandle *)(uintptr_t)UINT64_C(0x1234));
+    handle = NULL;
+    memset(arena, 0, required);
+    CHECK(meiso_composition_edge_simulator_init(
+              arena, required, &config, &handle
+          ) == MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_OK);
+    scene = scene_value(cube_id, 700U, 100U, 0.0F, true);
+    CHECK(meiso_composition_edge_put_mesh(
+              handle, (MeisoByteView){cube, cube_size}, &receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_set_scene(
+              handle, true, &scene, &receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_set_presentation(
+              handle, true, &settings, &receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_set_render_media(
+              handle, true, &render_desired, &receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_activate(handle) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1000U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_MESH_PUBLISHED);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1100U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_SCENE_APPLIED);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1200U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_APPLIED);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1300U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_ACTIVATED);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1400U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_RESULT_PUBLISHED);
+    CHECK(meiso_composition_edge_snapshot(handle, &snapshot) == MEISO_EDGE_OK &&
+          snapshot.render_result_present &&
+          snapshot.render_result.evidence_flags ==
+              MEISO_COMPOSITION_CPU_RASTER_RENDERER_EVIDENCE_FLAGS &&
+          snapshot.render_result.object_count == 1U &&
+          snapshot.render_result.unique_mesh_count == 1U &&
+          snapshot.scene_status.target_slots_used ==
+              MEISO_COMPOSITION_SCENE_TARGET_SET_COUNT &&
+          snapshot.scene_status.target_bytes ==
+              MEISO_COMPOSITION_CPU_RASTER_TARGET_BYTES &&
+          snapshot.scene_status.render_jobs_in_flight == 0U &&
+          !snapshot.media[0].latest_present);
+    memset(&frame_id, 0, sizeof(frame_id));
+    frame_id.algorithm = MEISO_CONTENT_ALGORITHM_SHA256;
+    frame_id.digest_size = MEISO_SHA256_DIGEST_SIZE;
+    memmove(frame_id.digest, snapshot.render_result.full_target_sha256,
+            MEISO_SHA256_DIGEST_SIZE);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1500U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_MEDIA_APPLIED);
+    memset(&external_frame, 0, sizeof(external_frame));
+    external_frame.source = MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW;
+    external_frame.source_time = (MeisoTimePoint){700U, 1500U};
+    external_frame.access_unit = (MeisoByteView){&external_byte, 1U};
+    CHECK(meiso_composition_edge_simulator_publish_frame(
+              handle, &external_frame
+          ) == MEISO_EDGE_CONFLICT);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1600U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_PREVIEW_PUBLISHED);
+    CHECK(meiso_composition_edge_media_latest(
+              handle, MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW, &frame
+          ) == MEISO_EDGE_OK &&
+          frame.access_unit.size ==
+              MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES &&
+          frame.pixel_format == MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888 &&
+          frame.codec == MEISO_COMPOSITION_MEDIA_CODEC_RAW &&
+          frame.width == MEISO_COMPOSITION_SCENE_TARGET_WIDTH &&
+          frame.height == MEISO_COMPOSITION_SCENE_TARGET_HEIGHT &&
+          frame.applied_scene_state_version == 1U &&
+          frame.active_plan_generation == 1U &&
+          frame.world_generation == 1U &&
+          meiso_runtime_blob_sha256_verify(
+              &frame_id, frame.access_unit, NULL
+          ));
+    old_frame_key = frame.key;
+    scene = scene_value(cube_id, 700U, 200U, 1.0F, true);
+    CHECK(meiso_composition_edge_set_scene(
+              handle, true, &scene, &receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1700U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_SCENE_APPLIED);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1800U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_RESULT_PUBLISHED);
+    CHECK(meiso_composition_edge_snapshot(handle, &snapshot) == MEISO_EDGE_OK &&
+          snapshot.render_result_present &&
+          snapshot.render_result.object_count == 1U &&
+          snapshot.scene_status.world_generation == 2U);
+    memset(&next_frame_id, 0, sizeof(next_frame_id));
+    next_frame_id.algorithm = MEISO_CONTENT_ALGORITHM_SHA256;
+    next_frame_id.digest_size = MEISO_SHA256_DIGEST_SIZE;
+    memmove(next_frame_id.digest,
+            snapshot.render_result.full_target_sha256,
+            MEISO_SHA256_DIGEST_SIZE);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 1900U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_IDLE &&
+          meiso_runtime_blob_sha256_verify(
+              &frame_id, frame.access_unit, NULL
+          ));
+    CHECK(meiso_composition_edge_media_release(handle, &old_frame_key) ==
+          MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){700U, 2000U}, &transition
+          ) == MEISO_EDGE_OK && transition ==
+              MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_PREVIEW_PUBLISHED);
+    CHECK(meiso_composition_edge_media_latest(
+              handle, MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW, &frame
+          ) == MEISO_EDGE_OK &&
+          frame.key.frame_sequence == 2U &&
+          frame.applied_scene_state_version == 2U &&
+          frame.active_plan_generation == 1U &&
+          frame.world_generation == 2U &&
+          meiso_runtime_blob_sha256_verify(
+              &next_frame_id, frame.access_unit, NULL
+          ));
+    CHECK(meiso_composition_edge_media_release(handle, &frame.key) ==
+          MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_terminate(
+              handle, MEISO_EDGE_TERMINAL_LOCAL_ABORT
+          ) == MEISO_EDGE_OK);
+    free(arena);
+    return true;
+
+fail:
+    free(arena);
+    return false;
+}
+
 int main(void)
 {
     MeisoCompositionEdgeSimulatorConfig config = simulator_config(9101U, 2U);
@@ -253,6 +457,7 @@ int main(void)
     uint8_t *render_bytes = NULL;
     bool supported = false;
 
+    CHECK(test_cpu_raster_preview());
     disabled.composition_enabled = false;
     disabled.composition_blob_slot_count = 0U;
     disabled.composition_clock_epoch = 0U;

@@ -277,6 +277,7 @@ static bool trace_config_valid(
         config->device_production_epoch == 0U &&
         trace_device_sample_zero(&config->device_sample) &&
         !config->composition_enabled &&
+        !config->cpu_raster_preview_enabled &&
         config->composition_blob_slot_count == 0U &&
         config->composition_clock_epoch == 0U &&
         config->presentation_production_epoch == 0U &&

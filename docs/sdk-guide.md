@@ -105,8 +105,10 @@ Session、TCP binding 或 physical frame；它以固定 Composition Profile v3 c
 进程本地 synthetic sample 初始化同一个 opaque `MeisoEdgeHandle`，再由相同 NDJSON command、typed truth
 和 snapshot 投影驱动 Mesh→Scene→Presentation→RenderResult。默认远端 CLI 与输出保持兼容；Dashboard
 必须显式选择 `NATIVE_SIMULATOR`，不得把该模式显示成 `NATIVE_HOST`、设备连接或 media transport bound。
-每个子进程是 fresh simulator lifetime，close/EOF 后旧 handle 不可恢复。离线模式不生成 CMFB frame；
-RenderResult 仅为 SceneStore synthetic offscreen/hash/thumbnail evidence。
+每个子进程是 fresh simulator lifetime，close/EOF 后旧 handle 不可恢复。native simulator固定启用CPU
+raster preview，render media RUNNING后生成完整80-byte CMFB/v1 header与307200-byte RGBA8888 payload；
+payload SHA-256必须等于同一RenderResult的full-target hash。它不生成camera frame，且该source-host结果仍只
+是offscreen evidence，不证明driver、scanout、physical display或跨target bit-exact。
 
 该切片的 conformance vector 必须使用真实 `AF_INET` HostApp/Edge fixture，并同时证明：pre-READY
 本地排队不制造在线 resource；READY 后 exact discovery 与 typed Wi-Fi State/Stream 闭环；未支持
@@ -136,6 +138,12 @@ active world通过SceneStore fake renderer发布带`OFFSCREEN_COMPLETE|THUMBNAIL
 RenderResult。Scene replacement、missing-Blob等待、capacity、disable、epoch exhaustion与render media
 world/plan identity都fail closed。这个闭环服务离线编辑器状态机验证，不是CPU raster像素golden、网络、
 K230、camera、physical display或性能证据。
+
+`cpu_raster_preview_enabled`是Composition之上的独立显式opt-in：它把固定双target CPU renderer和
+1,228,800-byte color/depth target storage计入caller arena，用source-pinned raster RenderResult替换fake
+result，并在render media route上发布完整320×240 RGBA8888 access unit。renderer独占该route，外部同route
+publish返回`CONFLICT`；camera route仍可由caller独立注入。该能力不读wall clock、不建thread/socket、
+不分配heap，也不把source-host hash等同于cross-target、driver、scanout或physical evidence。
 
 DeviceTelemetry simulation是config显式opt-in：调用方提供nonzero production epoch与一份canonical sample；
 SET_DEVICE按Wi-Fi之后、media之前的固定step优先级产生desired/Actual/inline Stream，并对未选字段归零。

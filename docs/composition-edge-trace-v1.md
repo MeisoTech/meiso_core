@@ -78,7 +78,7 @@ CONFIG 必须是 sequence 1 且只出现一次：
 subset。reader 从该 record 候选式解码 `MeisoCompositionEdgeSimulatorConfig`，调用方再用它创建 fresh
 simulator arena。v1没有DeviceTelemetry epoch/sample或Composition Mesh/Scene/Presentation record，因此
 要求config的`device_telemetry_enabled=false`、device epoch/sample为canonical zero，并要求
-`composition_enabled=false`、Blob slot/clock/Presentation epoch/Scene epoch suffix全为canonical zero；
+`composition_enabled=false`、`cpu_raster_preview_enabled=false`，且Blob slot/clock/Presentation epoch/Scene epoch suffix全为canonical zero；
 任一enabled config或关闭标志下的非零suffix都必须由writer拒绝，不能静默丢字段。
 
 ### 2 — ACTIVATE（0 bytes）

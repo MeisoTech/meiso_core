@@ -428,7 +428,7 @@ class DashboardState:
                 "catalog_status": "PENDING",
                 "profile": "composition-v3",
                 "proof": (
-                    "SYNTHETIC_OFFLINE_TYPED_ONLY" if simulator else
+                    "SYNTHETIC_OFFLINE_CPU_RASTER" if simulator else
                     "NATIVE_SERVICE_TYPED_ONLY"
                 ),
             })
@@ -886,7 +886,7 @@ def main() -> int:
         return 1
     print(f"K230 debug dashboard: http://{LOOPBACK_ADDRESS}:{server.server_port}/")
     print(
-        "Backend: NATIVE_SIMULATOR (synthetic offline typed bridge)."
+        "Backend: NATIVE_SIMULATOR (synthetic offline CPU-raster bridge)."
         if arguments.native_simulator else
         "Backend: NATIVE_HOST (typed local bridge)." if arguments.native_host
         else "Backend: RECORDED_LOCAL; device/media are not connected."

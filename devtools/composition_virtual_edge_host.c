@@ -1,6 +1,7 @@
 #include "composition_virtual_edge_host.h"
 #include "composition_virtual_edge_host_internal.h"
 #include "composition_coordinator.h"
+#include "composition_cpu_raster_renderer.h"
 #include "meiso_composition_edge_simulator.h"
 #include "scene_store.h"
 
@@ -131,6 +132,8 @@ typedef struct {
     size_t scene_size;
     size_t coordinator_offset;
     size_t coordinator_size;
+    size_t renderer_offset;
+    size_t renderer_size;
 } SimulatorLayout;
 
 struct MeisoEdgeHandle {
@@ -203,6 +206,11 @@ struct MeisoEdgeHandle {
     void *simulator_coordinator_arena;
     size_t simulator_coordinator_arena_size;
     MeisoCompositionCoordinator *simulator_coordinator;
+    bool simulator_cpu_raster_enabled;
+    void *simulator_renderer_arena;
+    size_t simulator_renderer_arena_size;
+    MeisoCompositionCpuRasterRenderer *simulator_renderer;
+    bool simulator_raster_preview_pending;
     SimulatorScenePending simulator_scene_pending;
     bool simulator_scene_retry_pending;
     bool simulator_scene_retry_ready;
@@ -291,6 +299,9 @@ static bool simulator_layout(
         return false;
     }
     if (!config->composition_enabled) {
+        if (config->cpu_raster_preview_enabled) {
+            return false;
+        }
         layout.required = cursor;
         *out_layout = layout;
         return true;
@@ -339,6 +350,21 @@ static bool simulator_layout(
             layout.coordinator_offset, layout.coordinator_size, &cursor
         )) {
         return false;
+    }
+    if (config->cpu_raster_preview_enabled) {
+        layout.renderer_size =
+            meiso_composition_cpu_raster_renderer_memory_required();
+        if (layout.renderer_size == 0U ||
+            !checked_align_size(
+                cursor,
+                meiso_composition_cpu_raster_renderer_alignment_required(),
+                &layout.renderer_offset
+            ) ||
+            !checked_add_size(
+                layout.renderer_offset, layout.renderer_size, &cursor
+            )) {
+            return false;
+        }
     }
     layout.required = cursor;
     *out_layout = layout;
@@ -1965,6 +1991,8 @@ static bool simulator_composition_config_valid(
     const MeisoCompositionEdgeSimulatorConfig *config
 )
 {
+    const MeisoCompositionMediaCapability *render;
+
     if (config == NULL) {
         return false;
     }
@@ -1972,14 +2000,27 @@ static bool simulator_composition_config_valid(
         return config->composition_blob_slot_count == 0U &&
             config->composition_clock_epoch == 0U &&
             config->presentation_production_epoch == 0U &&
-            config->scene_production_epoch == 0U;
+            config->scene_production_epoch == 0U &&
+            !config->cpu_raster_preview_enabled;
     }
+    render = &config->catalog.render_media_capability;
     return config->composition_blob_slot_count != 0U &&
         config->composition_blob_slot_count <=
             MEISO_COMPOSITION_SCENE_MAX_PUBLISHED_BLOBS &&
         config->composition_clock_epoch != 0U &&
         config->presentation_production_epoch != 0U &&
-        config->scene_production_epoch != 0U;
+        config->scene_production_epoch != 0U &&
+        (!config->cpu_raster_preview_enabled ||
+         (render->source == MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW &&
+          render->pixel_formats ==
+              MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888 &&
+          render->codecs == MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW &&
+          render->min_width == MEISO_COMPOSITION_SCENE_TARGET_WIDTH &&
+          render->max_width == MEISO_COMPOSITION_SCENE_TARGET_WIDTH &&
+          render->min_height == MEISO_COMPOSITION_SCENE_TARGET_HEIGHT &&
+          render->max_height == MEISO_COMPOSITION_SCENE_TARGET_HEIGHT &&
+          render->max_access_unit_bytes >=
+              MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES));
 }
 
 size_t meiso_composition_edge_simulator_alignment_required(void)
@@ -1990,6 +2031,8 @@ size_t meiso_composition_edge_simulator_alignment_required(void)
         meiso_composition_scene_store_alignment_required();
     const size_t coordinator_alignment =
         meiso_composition_coordinator_alignment_required();
+    const size_t renderer_alignment =
+        meiso_composition_cpu_raster_renderer_alignment_required();
 
     if (blob_alignment > alignment) {
         alignment = blob_alignment;
@@ -1999,6 +2042,9 @@ size_t meiso_composition_edge_simulator_alignment_required(void)
     }
     if (coordinator_alignment > alignment) {
         alignment = coordinator_alignment;
+    }
+    if (renderer_alignment > alignment) {
+        alignment = renderer_alignment;
     }
     return alignment;
 }
@@ -2139,6 +2185,8 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     candidate.simulator_device_sample = config->device_sample;
     candidate.simulator_composition_supported =
         config->composition_enabled;
+    candidate.simulator_cpu_raster_enabled =
+        config->cpu_raster_preview_enabled;
     candidate.simulator_blob_slot_count =
         config->composition_blob_slot_count;
     candidate.simulator_composition_clock_epoch =
@@ -2187,6 +2235,11 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
             arena_bytes + layout.coordinator_offset;
         candidate.simulator_coordinator_arena_size =
             layout.coordinator_size;
+        if (config->cpu_raster_preview_enabled) {
+            candidate.simulator_renderer_arena =
+                arena_bytes + layout.renderer_offset;
+            candidate.simulator_renderer_arena_size = layout.renderer_size;
+        }
     }
     for (i = 0U; i < MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT; ++i) {
         const uintptr_t capability_begin =
@@ -2222,6 +2275,8 @@ static bool simulator_composition_initialize(MeisoEdgeHandle *handle)
     MeisoBlobStore *blob_store = NULL;
     MeisoCompositionSceneStore *scene_store = NULL;
     MeisoCompositionCoordinator *coordinator = NULL;
+    MeisoCompositionCpuRasterRenderer *renderer = NULL;
+    MeisoCompositionSceneControlScope scope;
 
     if (handle == NULL || !handle->simulator_composition_supported) {
         return handle != NULL;
@@ -2271,9 +2326,22 @@ static bool simulator_composition_initialize(MeisoEdgeHandle *handle)
         ) != MEISO_COMPOSITION_COORDINATOR_OWNER_STARTED) {
         return false;
     }
+    if (handle->simulator_cpu_raster_enabled &&
+        (meiso_composition_cpu_raster_renderer_init(
+             handle->simulator_renderer_arena,
+             handle->simulator_renderer_arena_size,
+             blob_store, &renderer
+         ) != MEISO_COMPOSITION_CPU_RASTER_INIT_OK ||
+         !meiso_composition_scene_store_control_scope(scene_store, &scope) ||
+         meiso_composition_cpu_raster_renderer_begin_control_scope(
+             renderer, &scope
+         ) != MEISO_COMPOSITION_CPU_RASTER_SCOPE_STARTED)) {
+        return false;
+    }
     handle->simulator_blob_store = blob_store;
     handle->simulator_scene_store = scene_store;
     handle->simulator_coordinator = coordinator;
+    handle->simulator_renderer = renderer;
     handle->simulator_composition_initialized = true;
     return true;
 }
@@ -2469,6 +2537,9 @@ static void simulator_apply_media(MeisoEdgeHandle *handle, size_t index)
     };
     if (index == 0U) {
         snapshot->render_media_actual_present = pending->enabled;
+        handle->simulator_raster_preview_pending =
+            handle->simulator_cpu_raster_enabled && pending->enabled &&
+            snapshot->render_result_present;
     } else {
         snapshot->camera_media_actual_present = pending->enabled;
     }
@@ -2562,6 +2633,7 @@ static bool simulator_refresh_scene_status(MeisoEdgeHandle *handle)
 {
     MeisoCompositionSceneResourceUsage usage;
     MeisoCompositionSceneStatus status;
+    MeisoCompositionCpuRasterSnapshot renderer_snapshot;
     size_t blob_count;
 
     if (!handle->simulator_composition_initialized) {
@@ -2574,6 +2646,16 @@ static bool simulator_refresh_scene_status(MeisoEdgeHandle *handle)
     memset(&usage, 0, sizeof(usage));
     usage.published_blob_count = (uint32_t)blob_count;
     usage.published_blob_bytes = handle->simulator_published_blob_bytes;
+    if (handle->simulator_cpu_raster_enabled) {
+        if (!meiso_composition_cpu_raster_renderer_snapshot(
+                handle->simulator_renderer, &renderer_snapshot
+            )) {
+            return false;
+        }
+        usage.target_slots_used = renderer_snapshot.target_slots_allocated;
+        usage.target_bytes = renderer_snapshot.target_bytes;
+        usage.render_jobs_in_flight = renderer_snapshot.queued_jobs;
+    }
     usage.result_queue_depth =
         handle->simulator_snapshot.inline_streams[
             MEISO_COMPOSITION_EDGE_INLINE_RENDER_RESULT
@@ -2594,7 +2676,7 @@ static bool simulator_refresh_composition_status(MeisoEdgeHandle *handle)
         simulator_refresh_scene_status(handle);
 }
 
-static void simulator_clear_render_truth(MeisoEdgeHandle *handle)
+static bool simulator_clear_render_truth(MeisoEdgeHandle *handle)
 {
     MeisoCompositionEdgeInlineView *stream =
         &handle->simulator_snapshot.inline_streams[
@@ -2602,6 +2684,25 @@ static void simulator_clear_render_truth(MeisoEdgeHandle *handle)
         ];
     const uint64_t received_count = stream->received_count;
     const uint64_t replaced_count = stream->replaced_count;
+    MeisoCompositionCpuRasterCompleteView complete;
+    MeisoCompositionSceneControlScope scope;
+
+    if (handle->simulator_cpu_raster_enabled &&
+        handle->simulator_renderer != NULL &&
+        meiso_composition_cpu_raster_renderer_latest_complete(
+            handle->simulator_renderer, &complete
+        )) {
+        const MeisoCompositionCpuRasterRetireStatus status =
+            meiso_composition_scene_store_control_scope(
+                handle->simulator_scene_store, &scope
+            ) ? meiso_composition_cpu_raster_renderer_retire_world(
+                    handle->simulator_renderer, &scope, &complete.job.world
+                ) : MEISO_COMPOSITION_CPU_RASTER_RETIRE_INVALID_ARGUMENT;
+        if (status != MEISO_COMPOSITION_CPU_RASTER_RETIRE_RETIRED &&
+            status != MEISO_COMPOSITION_CPU_RASTER_RETIRE_UNCHANGED) {
+            return false;
+        }
+    }
 
     memset(stream, 0, sizeof(*stream));
     stream->received_count = received_count;
@@ -2611,6 +2712,8 @@ static void simulator_clear_render_truth(MeisoEdgeHandle *handle)
            sizeof(handle->simulator_snapshot.render_result));
     handle->simulator_render_result_sequence = 0U;
     handle->simulator_render_result_pending = false;
+    handle->simulator_raster_preview_pending = false;
+    return true;
 }
 
 typedef int SimulatorPrepareResult;
@@ -2885,8 +2988,8 @@ static bool simulator_apply_scene_command(
         simulator_apply_actual_state(
             handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, false, false, 0U
         );
-        simulator_clear_render_truth(handle);
-        return simulator_refresh_composition_status(handle);
+        return simulator_clear_render_truth(handle) &&
+            simulator_refresh_composition_status(handle);
     }
     if (command_pending) {
         handle->simulator_scene_enabled = true;
@@ -2985,7 +3088,9 @@ static bool simulator_apply_scene_command(
     simulator_apply_actual_state(
         handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, true, true, epoch
     );
-    simulator_clear_render_truth(handle);
+    if (!simulator_clear_render_truth(handle)) {
+        return false;
+    }
     handle->simulator_render_result_pending = true;
     return simulator_refresh_composition_status(handle);
 }
@@ -3032,7 +3137,9 @@ static bool simulator_apply_presentation_command(
             handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
             false, false, 0U
         );
-        simulator_clear_render_truth(handle);
+        if (!simulator_clear_render_truth(handle)) {
+            return false;
+        }
         if (handle->simulator_snapshot.desired[
                 MEISO_COMPOSITION_EDGE_DESIRED_SCENE
             ].requested && !handle->simulator_snapshot.desired[
@@ -3167,7 +3274,9 @@ static bool simulator_activate_presentation(
         handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
         true, true, scene_epoch
     );
-    simulator_clear_render_truth(handle);
+    if (!simulator_clear_render_truth(handle)) {
+        return false;
+    }
     handle->simulator_render_result_pending = true;
     return simulator_refresh_composition_status(handle);
 }
@@ -3179,6 +3288,9 @@ static bool simulator_publish_render_result(
 {
     MeisoCompositionSceneWorldView world;
     MeisoCompositionSceneRenderResult result;
+    MeisoCompositionCpuRasterJobRef job;
+    MeisoCompositionCpuRasterCompleteView complete;
+    MeisoCompositionSceneControlScope scope;
     MeisoCompositionEdgeInlineView stream;
     MeisoCompositionEdgeInlineView *current =
         &handle->simulator_snapshot.inline_streams[
@@ -3199,12 +3311,29 @@ static bool simulator_publish_render_result(
         return false;
     }
     sequence = handle->simulator_render_result_sequence + 1U;
-    if (meiso_composition_scene_store_fake_render(
-            handle->simulator_scene_store,
-            handle->simulator_composition_clock_epoch,
-            now.monotonic_ns, now.monotonic_ns + 1U, &result
-        ) != MEISO_COMPOSITION_SCENE_RENDER_COMPLETE ||
-        !meiso_composition_scene_store_record_result_published(
+    if (handle->simulator_cpu_raster_enabled) {
+        if (!meiso_composition_scene_store_control_scope(
+                handle->simulator_scene_store, &scope
+            ) ||
+            meiso_composition_cpu_raster_renderer_submit(
+                handle->simulator_renderer, &scope, &world,
+                handle->simulator_composition_clock_epoch, &job
+            ) != MEISO_COMPOSITION_CPU_RASTER_SUBMIT_QUEUED ||
+            meiso_composition_cpu_raster_renderer_render_next(
+                handle->simulator_renderer, &job, now.monotonic_ns,
+                now.monotonic_ns + 1U, &complete
+            ) != MEISO_COMPOSITION_CPU_RASTER_RENDER_COMPLETE) {
+            return false;
+        }
+        result = complete.result;
+    } else if (meiso_composition_scene_store_fake_render(
+                   handle->simulator_scene_store,
+                   handle->simulator_composition_clock_epoch,
+                   now.monotonic_ns, now.monotonic_ns + 1U, &result
+               ) != MEISO_COMPOSITION_SCENE_RENDER_COMPLETE) {
+        return false;
+    }
+    if (!meiso_composition_scene_store_record_result_published(
             handle->simulator_scene_store, &world.ref, epoch, sequence
         )) {
         return false;
@@ -3223,6 +3352,8 @@ static bool simulator_publish_render_result(
     handle->simulator_snapshot.render_result = result;
     *current = stream;
     handle->simulator_render_result_pending = false;
+    handle->simulator_raster_preview_pending =
+        handle->simulator_cpu_raster_enabled;
     return simulator_refresh_scene_status(handle);
 }
 
@@ -3296,6 +3427,150 @@ static bool simulator_frame_scene_fields_valid(
         frame->applied_scene_state_version == 0U &&
         frame->active_plan_generation == 0U &&
         frame->world_generation == 0U;
+}
+
+static MeisoEdgeStatus simulator_commit_frame(
+    MeisoEdgeHandle *handle,
+    const MeisoCompositionEdgeSimulatorFrame *frame
+)
+{
+    SimulatorMediaRoute *route;
+    MeisoCompositionEdgeMediaRouteView *snapshot_route;
+    const MeisoCompositionEdgeMediaActual *actual;
+    uint64_t gap = 0U;
+    const int index = media_index(frame->source);
+
+    if (index < 0) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    route = &handle->simulator_media[(size_t)index];
+    snapshot_route = &handle->simulator_snapshot.media[(size_t)index];
+    actual = index == 0 ? &handle->simulator_snapshot.render_media_actual :
+        &handle->simulator_snapshot.camera_media_actual;
+    if (!handle->simulator_snapshot.edge.resource_graph_live ||
+        !snapshot_route->actual_binding_ready ||
+        frame->media_stream_epoch != actual->media_stream_epoch) {
+        return MEISO_EDGE_NOT_READY;
+    }
+    if (route->borrowed) {
+        return MEISO_EDGE_BUSY;
+    }
+    if (frame->frame_sequence == 0U ||
+        frame->frame_sequence <=
+            snapshot_route->published_sequence_high_water ||
+        frame->producer_dropped_frames <
+            snapshot_route->producer_drop_high_water) {
+        return MEISO_EDGE_STALE;
+    }
+    if (frame->pixel_format != actual->effective.pixel_format ||
+        frame->codec != actual->effective.codec ||
+        frame->width != actual->effective.width ||
+        frame->height != actual->effective.height ||
+        (frame->flags & MEISO_COMPOSITION_MEDIA_FRAME_KEY) == 0U ||
+        (frame->flags &
+         (MeisoCompositionMediaFrameFlags)~
+             (MEISO_COMPOSITION_MEDIA_FRAME_KEY |
+              MEISO_COMPOSITION_MEDIA_FRAME_RECOVERY)) != 0U ||
+        !simulator_frame_scene_fields_valid(handle, frame) ||
+        !simulator_media_size_exact(frame)) {
+        return MEISO_EDGE_CONFLICT;
+    }
+    if (frame->access_unit.size > route->capacity) {
+        return MEISO_EDGE_CAPACITY;
+    }
+    if (snapshot_route->published_sequence_high_water != 0U) {
+        gap = frame->frame_sequence -
+            snapshot_route->published_sequence_high_water - 1U;
+    }
+    if (gap > UINT64_MAX - snapshot_route->sequence_gap_frames ||
+        (route->present &&
+         snapshot_route->unread_latest_frames_dropped == UINT64_MAX)) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    if (route->present) {
+        ++snapshot_route->unread_latest_frames_dropped;
+    }
+    memmove(route->buffer, frame->access_unit.data, frame->access_unit.size);
+    route->frame = (MeisoEdgeMediaFrameView){
+        {handle->continuity_serial, frame->source,
+         frame->media_stream_epoch, frame->frame_sequence},
+        frame->source_time,
+        frame->applied_scene_owner,
+        frame->applied_scene_state_version,
+        frame->active_plan_generation,
+        frame->world_generation,
+        frame->dependency_sequence,
+        frame->producer_dropped_frames,
+        frame->pixel_format,
+        frame->codec,
+        frame->width,
+        frame->height,
+        frame->flags,
+        {route->buffer, frame->access_unit.size}
+    };
+    route->present = true;
+    snapshot_route->latest_present = true;
+    snapshot_route->latest_frame_sequence = frame->frame_sequence;
+    snapshot_route->latest_source_time = frame->source_time;
+    snapshot_route->latest_access_unit_bytes =
+        (uint32_t)frame->access_unit.size;
+    snapshot_route->published_sequence_high_water = frame->frame_sequence;
+    snapshot_route->sequence_gap_frames += gap;
+    snapshot_route->producer_drop_high_water =
+        frame->producer_dropped_frames;
+    return MEISO_EDGE_OK;
+}
+
+static MeisoEdgeStatus simulator_publish_raster_preview(
+    MeisoEdgeHandle *handle
+)
+{
+    MeisoCompositionCpuRasterCompleteView complete;
+    const MeisoCompositionEdgeMediaActual *actual =
+        &handle->simulator_snapshot.render_media_actual;
+    MeisoCompositionEdgeMediaRouteView *route =
+        &handle->simulator_snapshot.media[0];
+    MeisoCompositionEdgeSimulatorFrame frame;
+    MeisoEdgeStatus status;
+
+    if (!handle->simulator_cpu_raster_enabled ||
+        !handle->simulator_raster_preview_pending ||
+        !route->actual_binding_ready ||
+        !handle->simulator_snapshot.render_media_actual_present) {
+        return MEISO_EDGE_NOT_READY;
+    }
+    if (route->published_sequence_high_water == UINT64_MAX) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    if (!meiso_composition_cpu_raster_renderer_latest_complete(
+            handle->simulator_renderer, &complete
+        )) {
+        return MEISO_EDGE_INTERNAL_FAILURE;
+    }
+    memset(&frame, 0, sizeof(frame));
+    frame.source = MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW;
+    frame.media_stream_epoch = actual->media_stream_epoch;
+    frame.frame_sequence = route->published_sequence_high_water + 1U;
+    frame.source_time = (MeisoTimePoint){
+        complete.result.source_clock_epoch,
+        complete.result.render_end_monotonic_ns
+    };
+    frame.applied_scene_owner = handle->simulator_desired_owner;
+    frame.applied_scene_state_version =
+        complete.job.world.desired_state_version;
+    frame.active_plan_generation = complete.job.world.plan_generation;
+    frame.world_generation = complete.job.world.world_generation;
+    frame.pixel_format = MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888;
+    frame.codec = MEISO_COMPOSITION_MEDIA_CODEC_RAW;
+    frame.width = MEISO_COMPOSITION_SCENE_TARGET_WIDTH;
+    frame.height = MEISO_COMPOSITION_SCENE_TARGET_HEIGHT;
+    frame.flags = MEISO_COMPOSITION_MEDIA_FRAME_KEY;
+    frame.access_unit = complete.color_rgba8888;
+    status = simulator_commit_frame(handle, &frame);
+    if (status == MEISO_EDGE_OK) {
+        handle->simulator_raster_preview_pending = false;
+    }
+    return status;
 }
 
 MeisoEdgeStatus meiso_composition_edge_simulator_step(
@@ -3401,6 +3676,23 @@ MeisoEdgeStatus meiso_composition_edge_simulator_step(
     } else if (handle->simulator_media_pending[1].pending) {
         simulator_apply_media(handle, 1U);
         transition = MEISO_COMPOSITION_EDGE_SIMULATOR_CAMERA_MEDIA_APPLIED;
+    } else if (handle->simulator_raster_preview_pending &&
+               handle->simulator_snapshot.media[0].actual_binding_ready) {
+        const MeisoEdgeStatus preview_status =
+            simulator_publish_raster_preview(handle);
+        if (preview_status == MEISO_EDGE_OK) {
+            transition =
+                MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_PREVIEW_PUBLISHED;
+        } else if (preview_status != MEISO_EDGE_BUSY &&
+                   preview_status != MEISO_EDGE_NOT_READY) {
+            if (preview_status == MEISO_EDGE_COUNTER_EXHAUSTED) {
+                return preview_status;
+            }
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
     }
     *out_transition = transition;
     return MEISO_EDGE_OK;
@@ -3411,12 +3703,6 @@ MeisoEdgeStatus meiso_composition_edge_simulator_publish_frame(
     const MeisoCompositionEdgeSimulatorFrame *frame
 )
 {
-    SimulatorMediaRoute *route;
-    MeisoCompositionEdgeMediaRouteView *snapshot_route;
-    const MeisoCompositionEdgeMediaActual *actual;
-    uint64_t gap = 0U;
-    int index;
-
     if (!handle_valid(handle) ||
         handle->backend_kind != EDGE_BACKEND_SIMULATOR || frame == NULL ||
         !optional_input_disjoint(handle, frame, sizeof(*frame)) ||
@@ -3437,85 +3723,11 @@ MeisoEdgeStatus meiso_composition_edge_simulator_publish_frame(
     if (handle->simulator_snapshot.edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
         return MEISO_EDGE_TERMINAL;
     }
-    index = media_index(frame->source);
-    if (index < 0) {
-        return MEISO_EDGE_INVALID_ARGUMENT;
-    }
-    route = &handle->simulator_media[(size_t)index];
-    snapshot_route = &handle->simulator_snapshot.media[(size_t)index];
-    actual = index == 0 ? &handle->simulator_snapshot.render_media_actual :
-        &handle->simulator_snapshot.camera_media_actual;
-    if (!handle->simulator_snapshot.edge.resource_graph_live ||
-        !snapshot_route->actual_binding_ready ||
-        frame->media_stream_epoch != actual->media_stream_epoch) {
-        return MEISO_EDGE_NOT_READY;
-    }
-    if (route->borrowed) {
-        return MEISO_EDGE_BUSY;
-    }
-    if (frame->frame_sequence == 0U ||
-        frame->frame_sequence <= snapshot_route->published_sequence_high_water ||
-        frame->producer_dropped_frames <
-            snapshot_route->producer_drop_high_water) {
-        return MEISO_EDGE_STALE;
-    }
-    if (frame->pixel_format != actual->effective.pixel_format ||
-        frame->codec != actual->effective.codec ||
-        frame->width != actual->effective.width ||
-        frame->height != actual->effective.height ||
-        (frame->flags & MEISO_COMPOSITION_MEDIA_FRAME_KEY) == 0U ||
-        (frame->flags &
-         (MeisoCompositionMediaFrameFlags)~
-             (MEISO_COMPOSITION_MEDIA_FRAME_KEY |
-              MEISO_COMPOSITION_MEDIA_FRAME_RECOVERY)) != 0U ||
-        !simulator_frame_scene_fields_valid(handle, frame) ||
-        !simulator_media_size_exact(frame)) {
+    if (handle->simulator_cpu_raster_enabled &&
+        frame->source == MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW) {
         return MEISO_EDGE_CONFLICT;
     }
-    if (frame->access_unit.size > route->capacity) {
-        return MEISO_EDGE_CAPACITY;
-    }
-    if (snapshot_route->published_sequence_high_water != 0U) {
-        gap = frame->frame_sequence -
-            snapshot_route->published_sequence_high_water - 1U;
-    }
-    if (gap > UINT64_MAX - snapshot_route->sequence_gap_frames ||
-        (route->present &&
-         snapshot_route->unread_latest_frames_dropped == UINT64_MAX)) {
-        return MEISO_EDGE_COUNTER_EXHAUSTED;
-    }
-    if (route->present) {
-        ++snapshot_route->unread_latest_frames_dropped;
-    }
-    memmove(route->buffer, frame->access_unit.data, frame->access_unit.size);
-    route->frame = (MeisoEdgeMediaFrameView){
-        {handle->continuity_serial, frame->source,
-         frame->media_stream_epoch, frame->frame_sequence},
-        frame->source_time,
-        frame->applied_scene_owner,
-        frame->applied_scene_state_version,
-        frame->active_plan_generation,
-        frame->world_generation,
-        frame->dependency_sequence,
-        frame->producer_dropped_frames,
-        frame->pixel_format,
-        frame->codec,
-        frame->width,
-        frame->height,
-        frame->flags,
-        {route->buffer, frame->access_unit.size}
-    };
-    route->present = true;
-    snapshot_route->latest_present = true;
-    snapshot_route->latest_frame_sequence = frame->frame_sequence;
-    snapshot_route->latest_source_time = frame->source_time;
-    snapshot_route->latest_access_unit_bytes =
-        (uint32_t)frame->access_unit.size;
-    snapshot_route->published_sequence_high_water = frame->frame_sequence;
-    snapshot_route->sequence_gap_frames += gap;
-    snapshot_route->producer_drop_high_water =
-        frame->producer_dropped_frames;
-    return MEISO_EDGE_OK;
+    return simulator_commit_frame(handle, frame);
 }
 
 MeisoEdgeStatus meiso_composition_edge_simulator_terminate(
@@ -3571,6 +3783,7 @@ MeisoEdgeStatus meiso_composition_edge_simulator_terminate(
     memset(&handle->simulator_presentation_plan, 0,
            sizeof(handle->simulator_presentation_plan));
     handle->simulator_render_result_pending = false;
+    handle->simulator_raster_preview_pending = false;
     memset(handle->simulator_media_pending, 0,
            sizeof(handle->simulator_media_pending));
     memset(handle->simulator_media, 0, sizeof(handle->simulator_media));
@@ -3721,6 +3934,8 @@ bool meiso_composition_edge_internal_simulator_fresh_matches(
             config->device_telemetry_enabled ||
         handle->simulator_composition_supported !=
             config->composition_enabled ||
+        handle->simulator_cpu_raster_enabled !=
+            config->cpu_raster_preview_enabled ||
         handle->simulator_blob_slot_count !=
             config->composition_blob_slot_count ||
         handle->simulator_composition_clock_epoch !=
@@ -3745,6 +3960,7 @@ bool meiso_composition_edge_internal_simulator_fresh_matches(
         handle->simulator_presentation_plan_present ||
         handle->simulator_presentation_activation_pending ||
         handle->simulator_render_result_pending ||
+        handle->simulator_raster_preview_pending ||
         handle->simulator_published_blob_bytes != 0U ||
         handle->simulator_render_result_sequence != 0U ||
         handle->simulator_media_epoch[0] !=

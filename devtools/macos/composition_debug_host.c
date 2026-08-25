@@ -327,6 +327,7 @@ static MeisoCompositionEdgeSimulatorConfig offline_simulator_config(void)
     value.composition_clock_epoch = 5001U;
     value.presentation_production_epoch = 6001U;
     value.scene_production_epoch = 7001U;
+    value.cpu_raster_preview_enabled = true;
     return value;
 }
 
@@ -2828,6 +2829,9 @@ static bool initialize_simulator_service(Service *service, int frame_fd)
     service->control_fd = -1;
     service->media_fd = -1;
     service->frame_fd = frame_fd;
+    service->config.catalog_generation = config.catalog_generation;
+    service->config.catalog = config.catalog;
+    service->config.local_incarnation = config.desired_owner.incarnation;
     service->host_clock_epoch = config.composition_clock_epoch;
     service->scene_space_epoch = UINT64_C(5002);
     service->simulator_monotonic_ns = 0U;

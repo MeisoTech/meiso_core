@@ -190,6 +190,8 @@ static bool config_fields_equal(
         lhs->presentation_production_epoch ==
             rhs->presentation_production_epoch &&
         lhs->scene_production_epoch == rhs->scene_production_epoch &&
+        lhs->cpu_raster_preview_enabled ==
+            rhs->cpu_raster_preview_enabled &&
         lhs->catalog.wifi_incarnation == rhs->catalog.wifi_incarnation &&
         lhs->catalog.presentation_incarnation ==
             rhs->catalog.presentation_incarnation &&
@@ -366,6 +368,17 @@ int main(void)
     wrong_config.composition_clock_epoch = 701U;
     wrong_config.presentation_production_epoch = 801U;
     wrong_config.scene_production_epoch = 901U;
+    CHECK(meiso_composition_edge_trace_writer_init(
+              writer_arena, writer_size,
+              (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},
+              &wrong_config, &writer
+          ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_CONFIG &&
+          bytes_all(writer_arena, writer_size + writer_alignment, 0xa5) &&
+          bytes_all(trace_bytes, TRACE_CAPACITY, 0xa5) &&
+          writer ==
+              (MeisoCompositionEdgeTraceWriter *)(uintptr_t)UINT64_C(0x1234));
+    wrong_config = config;
+    wrong_config.cpu_raster_preview_enabled = true;
     CHECK(meiso_composition_edge_trace_writer_init(
               writer_arena, writer_size,
               (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},

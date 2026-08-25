@@ -87,8 +87,9 @@ media borrow不再直接读取HostApp；HostApp只留在fd/pump/slot/abort integ
 `--simulator`模式不读取remote config、不打开control/media socket；它只创建caller-owned simulator
 arena、固定Profile v3 catalog和synthetic sample，并沿相同NDJSON command/typed snapshot路径执行
 Mesh→Scene→Presentation→RenderResult。Dashboard把它标为`NATIVE_SIMULATOR`，同时保持Session、设备连接、
-media transport与CMFB frame均未绑定；默认远端模式不变。此路径只证明本地editor与simulator集成，不能
-提升为network、K230D、camera、CPU raster像素、physical presentation或性能证据。
+media transport均未绑定；CPU raster render preview通过machine-local CMFB/v1 frame-fd发布，camera frame
+保持不存在。默认远端模式不变。此路径只证明本地editor、source-host CPU raster与simulator集成，不能
+提升为network、K230D、camera capture、cross-target像素、physical presentation或性能证据。
 
 ## 对 Host 项目对象的映射
 
@@ -123,7 +124,8 @@ Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Comp
 已有固定HostApp backend的typed SDK/Virtual Edge facade及两路external MediaStream read；另一个
 caller-owned deterministic simulator通过同一handle实现Wi-Fi desired→Actual/Stream和render/camera
 media replay，并可由config显式启用deterministic DeviceTelemetry desired→Actual/Stream以及
-Mesh publish→SceneStore/C2→synthetic RenderResult离线Composition闭环；固定v1 trace只把
+Mesh publish→SceneStore/C2→RenderResult离线Composition闭环。另一个显式config位会在caller arena内
+预留固定双target CPU renderer，由它生成source-pinned RenderResult和完整RGBA render preview；固定v1 trace只把
 Wi-Fi/media synthetic子集编码为bounded canonical bytes，并以fresh simulator
 逐record重放。trace不打开文件、不持fd，也不能替代network/target/physical evidence。Action、通用typed
 dispatcher、Edge→Host/并行/

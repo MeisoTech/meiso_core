@@ -166,7 +166,7 @@ function renderSnapshot(next) {
       "Native Host typed bridge is active." :
     "这是本地场景草稿，不是 K230 回传。";
   node("truth-detail").textContent = simulated ?
-    "编辑命令由本地 caller-owned simulator 执行；没有 Session、设备连接、TCP media 或 physical frame。" : native ?
+    "编辑命令由本地 caller-owned simulator 执行；CPU raster 仅提供 offscreen preview，没有 Session、设备连接、TCP media 或 physical display。" : native ?
     "浏览器只提交编辑器意图；下方 generation、epoch、sequence 与 telemetry 是 native service 的只读投影。" :
     "浏览器不创建 State version、ContentId、Session、epoch 或 sequence；显式启动 native Host 前这些字段保持未分配。";
   node("native-frame-links").hidden = !native;

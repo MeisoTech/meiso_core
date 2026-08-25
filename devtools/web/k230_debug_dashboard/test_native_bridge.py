@@ -240,8 +240,7 @@ class NativeBridgeTests(unittest.TestCase):
                 lambda: (
                     state.snapshot()["native_truth"]["render_result"]
                     is not None and
-                    state.snapshot()["bindings"]["render_result_stream"] ==
-                    "SIMULATED"
+                    state.snapshot()["frames"]["render"]["available"]
                 ),
                 timeout=5.0,
             )
@@ -251,7 +250,7 @@ class NativeBridgeTests(unittest.TestCase):
             self.assertFalse(snapshot["backend"]["device_connected"])
             self.assertEqual(
                 snapshot["backend"]["proof"],
-                "SYNTHETIC_OFFLINE_TYPED_ONLY",
+                "SYNTHETIC_OFFLINE_CPU_RASTER",
             )
             self.assertEqual(
                 snapshot["native_truth"]["scene_status"]["reason"], "ready"
@@ -262,8 +261,18 @@ class NativeBridgeTests(unittest.TestCase):
             self.assertEqual(
                 snapshot["bindings"]["camera_media_stream"], "UNBOUND"
             )
-            self.assertFalse(snapshot["frames"]["render"]["available"])
+            self.assertTrue(snapshot["frames"]["render"]["available"])
             self.assertFalse(snapshot["frames"]["camera"]["available"])
+            record, metadata = state.latest_frame("render")
+            self.assertEqual(record[:4], b"CMFB")
+            self.assertEqual(len(record), 80 + 320 * 240 * 4)
+            self.assertEqual(metadata["pixel_format"], "rgba8888")
+            self.assertEqual(metadata["payload_bytes"], 320 * 240 * 4)
+            self.assertEqual(
+                hashlib.sha256(record[80:]).hexdigest(),
+                snapshot["native_truth"]["render_result"]
+                    ["full_target_sha256"],
+            )
         finally:
             state.close()
 

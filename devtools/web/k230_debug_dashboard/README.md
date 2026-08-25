@@ -84,8 +84,11 @@ python3 devtools/web/k230_debug_dashboard/server.py \
 
 The backend is shown as `NATIVE_SIMULATOR`. It executes the same bounded editor
 commands and projects synthetic Wi-Fi/device/Composition truth, but it keeps
-device connection, Session and TCP media evidence absent. It does not publish
-CMFB frames; the RenderResult is the SceneStore synthetic offscreen result.
+device connection, Session and TCP media evidence absent. Its caller-owned CPU
+raster renderer publishes a complete CMFB/v1 `render` record (80-byte header
+plus a 320x240 RGBA8888 payload); the payload SHA-256 equals the same-world
+RenderResult full-target hash. It publishes no `camera` frame and makes no
+driver, scanout, physical-display, target, or cross-target pixel claim.
 
 ## Fixed API
 
