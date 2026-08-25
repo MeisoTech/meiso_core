@@ -94,6 +94,11 @@ backend plugin 或任意 schema dispatcher：
 - command receipt、desired delivery、Actual observed/applied、inline sample、Core Blob result、Scene
   visibility、render result 与 media frame 分字段表达，任何前一阶段都不冒充后一阶段。
 
+macOS Composition Debug Host 现在也沿用这条边界：编辑器命令、typed truth、mesh 与 external-media
+borrow/release 只调用公开 `MeisoEdgeHandle` API；进程内 HostApp 仅负责 facade 初始化、readiness/pump、
+control/media fd、one-use media slot 与 abort。NDJSON/CMFB 仍是 machine-local bridge，不成为第二套
+SDK 或 wire owner。
+
 该切片的 conformance vector 必须使用真实 `AF_INET` HostApp/Edge fixture，并同时证明：pre-READY
 本地排队不制造在线 resource；READY 后 exact discovery 与 typed Wi-Fi State/Stream 闭环；未支持
 operation 的 capability 为 false；media borrow 只能以 facade key exact release；control terminal

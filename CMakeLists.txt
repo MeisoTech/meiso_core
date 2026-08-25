@@ -265,7 +265,9 @@ if(UNIX)
     )
     target_link_libraries(
         meiso_composition_debug_host
-        PRIVATE meiso_composition_host_app
+        PRIVATE
+            meiso_composition_virtual_edge
+            meiso_composition_host_app
     )
     meiso_enable_warnings(meiso_composition_debug_host)
 
@@ -636,7 +638,10 @@ if(TARGET meiso_composition_virtual_edge)
     )
     target_link_libraries(
         meiso_composition_debug_host_test
-        PRIVATE meiso_composition_host_app Threads::Threads
+        PRIVATE
+            meiso_composition_virtual_edge
+            meiso_composition_host_app
+            Threads::Threads
     )
     meiso_enable_warnings(meiso_composition_debug_host_test)
 endif()

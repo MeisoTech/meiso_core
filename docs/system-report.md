@@ -561,6 +561,12 @@ ASan+UBSan全仓CTest均48/48，公开C/C++ header strict，相关product/applic
 这些只构成固定HostApp backend的`HOST_SEMANTIC_VERIFIED / TRANSPORT_VERIFIED` facade evidence；不
 证明通用backend ABI、simulator/replay、watch/Action、自动reconnect、physical Edge或新target结果。
 
+同日，macOS Composition Debug Host 的业务面完成迁移：七类 typed command、Composition snapshot、
+mesh publication 状态与两路 media latest/release 均经公开 facade；HostApp 直接调用只保留在
+readiness/pump、control/media 连接、slot admission 与 lifecycle cleanup。现有 real-AF_INET native
+service regression 保持 NDJSON/CMFB schema 与媒体连接行为不变。这进一步证明首个 facade 已被真实
+Host 应用路径消费，但不把 debug service、Dashboard 或固定 HostApp adapter 冒充通用 SDK backend。
+
 ## 已验证的负面结论
 
 - 把每帧 raw camera 当成可靠完整 transfer 会造成高带宽与旧数据阻塞，不适合连续 Stream；

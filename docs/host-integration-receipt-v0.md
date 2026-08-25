@@ -79,6 +79,10 @@ resource view、typed desired/actual/Stream/Blob/Composition snapshot与external
 Runtime pump、route key、nonce、catalog wire、driver path或K230D细节。该实现不是通用backend ABI；
 State watch、Stream publish、Action invoke与Blob lookup仍以capability false明确缺失。
 
+现有macOS Composition Debug Host已作为首个真实消费者迁移到该facade：业务命令、typed snapshot与
+media borrow不再直接读取HostApp；HostApp只留在fd/pump/slot/abort integration。既有NDJSON与CMFB
+输出保持不变，因此此迁移验证的是应用边界，不新增协议或证据标签。
+
 ## 对 Host 项目对象的映射
 
 | Host/SDC 概念 | Meiso 对接方式 |

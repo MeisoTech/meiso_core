@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "composition_host_app.h"
+#include "composition_virtual_edge_host.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -23,8 +23,10 @@
 
 /*
  * Native Composition debug service. This is an application adapter, not a
- * new protocol surface: only CompositionHostApp owns Core/Session/Runtime
- * truth. stdin/stdout NDJSON and CMFB/v1 are bounded machine-local bridges.
+ * new protocol surface: CompositionVirtualEdge owns application commands,
+ * typed truth and media borrows; CompositionHostApp remains the private
+ * fd/pump integration owner. stdin/stdout NDJSON and CMFB/v1 are bounded
+ * machine-local bridges.
  */
 
 enum {
@@ -130,7 +132,6 @@ typedef struct {
     size_t size;
     size_t offset;
     bool pending;
-    MeisoCompositionMediaFrameRef ref;
 } FrameOutput;
 
 typedef struct {
@@ -145,6 +146,9 @@ typedef struct {
     void *app_arena;
     size_t app_arena_size;
     MeisoCompositionHostApp *app;
+    void *edge_arena;
+    size_t edge_arena_size;
+    MeisoEdgeHandle *edge;
     char input[HOST_CONTROL_LINE_BYTES];
     size_t input_size;
     /* True only after read(STDIN_FILENO) returns zero, never from POLLHUP. */
@@ -991,28 +995,28 @@ static bool parse_scene_command(JsonCursor *cursor, SceneCommand *out_command)
     return json_literal(cursor, "}") && json_end(cursor);
 }
 
-static const char *command_kind_name(MeisoCompositionHostAppCommandKind value)
+static const char *command_kind_name(MeisoEdgeCommandKind value)
 {
     switch (value) {
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_PUT_MESH: return "put_mesh";
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_SET_SCENE: return "set_scene";
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_SET_PRESENTATION:
+        case MEISO_EDGE_COMMAND_PUT_MESH: return "put_mesh";
+        case MEISO_EDGE_COMMAND_SET_SCENE: return "set_scene";
+        case MEISO_EDGE_COMMAND_SET_PRESENTATION:
             return "set_presentation";
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_SET_WIFI: return "set_wifi";
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_SET_DEVICE: return "set_device";
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_SET_RENDER_MEDIA:
+        case MEISO_EDGE_COMMAND_SET_WIFI: return "set_wifi";
+        case MEISO_EDGE_COMMAND_SET_DEVICE: return "set_device";
+        case MEISO_EDGE_COMMAND_SET_RENDER_MEDIA:
             return "set_render_media";
-        case MEISO_COMPOSITION_HOST_APP_COMMAND_SET_CAMERA_MEDIA:
+        case MEISO_EDGE_COMMAND_SET_CAMERA_MEDIA:
             return "set_camera_media";
         default: return "unknown";
     }
 }
 
-static const char *local_result_name(MeisoCompositionHostAppLocalQueueResult value)
+static const char *local_result_name(MeisoEdgeLocalQueueResult value)
 {
     switch (value) {
-        case MEISO_COMPOSITION_HOST_APP_LOCAL_QUEUED: return "queued";
-        case MEISO_COMPOSITION_HOST_APP_LOCAL_REPLACED_PENDING:
+        case MEISO_EDGE_LOCAL_QUEUED: return "queued";
+        case MEISO_EDGE_LOCAL_REPLACED_PENDING:
             return "replaced_pending";
         default: return "unknown";
     }
@@ -1299,7 +1303,7 @@ static bool emit_error(uint64_t request_id, const char *code)
 
 static bool emit_receipt(
     uint64_t request_id,
-    const MeisoCompositionHostAppCommandReceipt *receipt
+    const MeisoEdgeCommandReceipt *receipt
 )
 {
     char line[640];
@@ -1323,29 +1327,29 @@ static bool emit_receipt(
     return written > 0 && (size_t)written < sizeof(line) && emit_line(line);
 }
 
-static const char *app_status_code(MeisoCompositionHostAppStatus status)
+static const char *edge_status_code(MeisoEdgeStatus status)
 {
     switch (status) {
-        case MEISO_COMPOSITION_HOST_APP_INVALID_ARGUMENT:
+        case MEISO_EDGE_INVALID_ARGUMENT:
             return "INVALID_ARGUMENT";
-        case MEISO_COMPOSITION_HOST_APP_INVALID_STATE:
+        case MEISO_EDGE_STALE:
             return "INVALID_STATE";
-        case MEISO_COMPOSITION_HOST_APP_CAPACITY:
+        case MEISO_EDGE_CAPACITY:
             return "CAPACITY";
-        case MEISO_COMPOSITION_HOST_APP_BUSY:
+        case MEISO_EDGE_BUSY:
             return "BUSY";
-        case MEISO_COMPOSITION_HOST_APP_CONFLICT:
+        case MEISO_EDGE_CONFLICT:
             return "CONFLICT";
-        case MEISO_COMPOSITION_HOST_APP_NOT_READY:
+        case MEISO_EDGE_NOT_READY:
             return "NOT_READY";
-        case MEISO_COMPOSITION_HOST_APP_NO_FRAME:
+        case MEISO_EDGE_NO_DATA:
             return "NO_FRAME";
-        case MEISO_COMPOSITION_HOST_APP_FRAME_MISMATCH:
-            return "FRAME_MISMATCH";
-        case MEISO_COMPOSITION_HOST_APP_COUNTER_EXHAUSTED:
+        case MEISO_EDGE_COUNTER_EXHAUSTED:
             return "COUNTER_EXHAUSTED";
-        case MEISO_COMPOSITION_HOST_APP_TERMINAL:
+        case MEISO_EDGE_TERMINAL:
             return "TERMINAL";
+        case MEISO_EDGE_UNSUPPORTED:
+            return "UNSUPPORTED";
         default:
             return "INTERNAL_FAILURE";
     }
@@ -1457,8 +1461,8 @@ static bool handle_asset_command(Service *service, const char *line, size_t size
 {
     JsonCursor cursor = {line, size, 0U};
     uint64_t request_id;
-    MeisoCompositionHostAppCommandReceipt receipt;
-    MeisoCompositionHostAppStatus status;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeStatus status;
 
     if (!json_literal(
             &cursor,
@@ -1469,8 +1473,9 @@ static bool handle_asset_command(Service *service, const char *line, size_t size
         return emit_error(0U, "INVALID_COMMAND");
     }
     if (service->cube_loaded) {
-        MeisoCompositionHostAppSnapshot snapshot;
-        if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
+        MeisoCompositionEdgeSnapshot snapshot;
+        if (meiso_composition_edge_snapshot(service->edge, &snapshot) !=
+            MEISO_EDGE_OK) {
             return emit_error(request_id, "SNAPSHOT_FAILED");
         }
         if (snapshot.mesh.edge_core_published) {
@@ -1500,12 +1505,12 @@ static bool handle_asset_command(Service *service, const char *line, size_t size
             return emit_error(request_id, "CUBE_ENCODE_FAILED");
         }
     }
-    status = meiso_composition_host_app_put_mesh(
-        service->app,
+    status = meiso_composition_edge_put_mesh(
+        service->edge,
         (MeisoByteView){service->cube_bytes, service->cube_size}, &receipt
     );
-    if (status != MEISO_COMPOSITION_HOST_APP_OK) {
-        return emit_error(request_id, app_status_code(status));
+    if (status != MEISO_EDGE_OK) {
+        return emit_error(request_id, edge_status_code(status));
     }
     service->cube_content_id = receipt.mesh_content_id;
     service->cube_loaded = true;
@@ -1516,8 +1521,8 @@ static bool handle_scene_command(Service *service, const char *line, size_t size
 {
     JsonCursor cursor = {line, size, 0U};
     SceneCommand command;
-    MeisoCompositionHostAppCommandReceipt receipt;
-    MeisoCompositionHostAppStatus status;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeStatus status;
     EditorObjectIdentity old_objects[HOST_EDITOR_OBJECTS];
     uint64_t old_serial;
 
@@ -1535,14 +1540,14 @@ static bool handle_scene_command(Service *service, const char *line, size_t size
     if (command.enabled && !allocate_scene_ids(service, &command)) {
         return emit_error(command.request_id, "OBJECT_ID_CAPACITY");
     }
-    status = meiso_composition_host_app_set_scene(
-        service->app, command.enabled,
+    status = meiso_composition_edge_set_scene(
+        service->edge, command.enabled,
         command.enabled ? &command.value : NULL, &receipt
     );
-    if (status != MEISO_COMPOSITION_HOST_APP_OK) {
+    if (status != MEISO_EDGE_OK) {
         memcpy(service->objects, old_objects, sizeof(old_objects));
         service->next_object_serial = old_serial;
-        return emit_error(command.request_id, app_status_code(status));
+        return emit_error(command.request_id, edge_status_code(status));
     }
     return emit_receipt(command.request_id, &receipt);
 }
@@ -1572,9 +1577,9 @@ static bool handle_presentation_command(
 )
 {
     JsonCursor cursor = {line, size, 0U};
-    MeisoCompositionHostAppPresentationSettings settings;
-    MeisoCompositionHostAppCommandReceipt receipt;
-    MeisoCompositionHostAppStatus status;
+    MeisoCompositionEdgePresentationSettings settings;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeStatus status;
     uint64_t request_id;
     bool enabled;
     bool safety_frame;
@@ -1608,12 +1613,12 @@ static bool handle_presentation_command(
     if (!json_literal(&cursor, "}") || !json_end(&cursor)) {
         return emit_error(request_id, "INVALID_COMMAND");
     }
-    status = meiso_composition_host_app_set_presentation(
-        service->app, enabled, enabled ? &settings : NULL, &receipt
+    status = meiso_composition_edge_set_presentation(
+        service->edge, enabled, enabled ? &settings : NULL, &receipt
     );
-    return status == MEISO_COMPOSITION_HOST_APP_OK ?
+    return status == MEISO_EDGE_OK ?
         emit_receipt(request_id, &receipt) :
-        emit_error(request_id, app_status_code(status));
+        emit_error(request_id, edge_status_code(status));
 }
 
 static bool handle_periodic_command(
@@ -1628,8 +1633,8 @@ static bool handle_periodic_command(
     bool enabled;
     uint32_t selected_fields = 0U;
     uint32_t sample_period_ms = 0U;
-    MeisoCompositionHostAppCommandReceipt receipt;
-    MeisoCompositionHostAppStatus status;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeStatus status;
 
     if (!parse_enabled_prefix(
             &cursor, device ? "set_device" : "set_wifi", &request_id,
@@ -1651,20 +1656,20 @@ static bool handle_periodic_command(
         MeisoDeviceTelemetryParameters parameters = {
             selected_fields, sample_period_ms
         };
-        status = meiso_composition_host_app_set_device(
-            service->app, enabled, enabled ? &parameters : NULL, &receipt
+        status = meiso_composition_edge_set_device(
+            service->edge, enabled, enabled ? &parameters : NULL, &receipt
         );
     } else {
         MeisoWifiTelemetryDesiredParameters parameters = {
             selected_fields, sample_period_ms
         };
-        status = meiso_composition_host_app_set_wifi(
-            service->app, enabled, enabled ? &parameters : NULL, &receipt
+        status = meiso_composition_edge_set_wifi(
+            service->edge, enabled, enabled ? &parameters : NULL, &receipt
         );
     }
-    return status == MEISO_COMPOSITION_HOST_APP_OK ?
+    return status == MEISO_EDGE_OK ?
         emit_receipt(request_id, &receipt) :
-        emit_error(request_id, app_status_code(status));
+        emit_error(request_id, edge_status_code(status));
 }
 
 static bool handle_media_desired_command(
@@ -1676,8 +1681,8 @@ static bool handle_media_desired_command(
 {
     JsonCursor cursor = {line, size, 0U};
     MeisoCompositionMediaDesired desired;
-    MeisoCompositionHostAppCommandReceipt receipt;
-    MeisoCompositionHostAppStatus status;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeStatus status;
     uint64_t request_id;
     bool enabled;
     bool request_key;
@@ -1715,26 +1720,29 @@ static bool handle_media_desired_command(
     if (!json_literal(&cursor, "}") || !json_end(&cursor)) {
         return emit_error(request_id, "INVALID_COMMAND");
     }
-    status = camera ? meiso_composition_host_app_set_camera_media(
-                          service->app, enabled, enabled ? &desired : NULL,
+    status = camera ? meiso_composition_edge_set_camera_media(
+                          service->edge, enabled, enabled ? &desired : NULL,
                           &receipt
                       ) :
-                      meiso_composition_host_app_set_render_media(
-                          service->app, enabled, enabled ? &desired : NULL,
+                      meiso_composition_edge_set_render_media(
+                          service->edge, enabled, enabled ? &desired : NULL,
                           &receipt
                       );
-    return status == MEISO_COMPOSITION_HOST_APP_OK ?
+    return status == MEISO_EDGE_OK ?
         emit_receipt(request_id, &receipt) :
-        emit_error(request_id, app_status_code(status));
+        emit_error(request_id, edge_status_code(status));
 }
 
 static bool emit_snapshot(Service *service, uint64_t request_id)
 {
-    MeisoCompositionHostAppSnapshot snapshot;
+    MeisoCompositionHostAppSnapshot integration;
+    MeisoCompositionEdgeSnapshot snapshot;
     char line[2048];
     int written;
 
-    if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
+    if (!meiso_composition_host_app_snapshot(service->app, &integration) ||
+        meiso_composition_edge_snapshot(service->edge, &snapshot) !=
+            MEISO_EDGE_OK) {
         return emit_error(request_id, "SNAPSHOT_FAILED");
     }
     written = snprintf(
@@ -1751,26 +1759,26 @@ static bool emit_snapshot(Service *service, uint64_t request_id)
         "\"wifi_sample\":%s,\"render_result\":%s,"
         "\"device_sample\":%s,\"render_frame\":%s,"
         "\"camera_frame\":%s}",
-        request_id, phase_name(snapshot.phase),
-        terminal_reason_name(snapshot.terminal_reason),
-        snapshot.control_ready ? "true" : "false",
-        snapshot.active_catalog_generation,
-        snapshot.media_bound ? "true" : "false",
-        media_mask_name(snapshot.media_active_route_mask),
-        (unsigned)snapshot.media_slots_consumed,
+        request_id, phase_name(integration.phase),
+        terminal_reason_name(integration.terminal_reason),
+        integration.control_ready ? "true" : "false",
+        snapshot.edge.catalog_generation,
+        integration.media_bound ? "true" : "false",
+        media_mask_name(integration.media_active_route_mask),
+        (unsigned)integration.media_slots_consumed,
         snapshot.mesh.transfer_active ? "true" : "false",
         snapshot.mesh.next_offset,
-        snapshot.actual[MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI].present ?
+        snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_WIFI].present ?
             "true" : "false",
-        snapshot.actual[MEISO_COMPOSITION_HOST_APP_ACTUAL_PRESENTATION].present ?
+        snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_PRESENTATION].present ?
             "true" : "false",
-        snapshot.actual[MEISO_COMPOSITION_HOST_APP_ACTUAL_SCENE].present ?
+        snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_SCENE].present ?
             "true" : "false",
-        snapshot.actual[MEISO_COMPOSITION_HOST_APP_ACTUAL_DEVICE].present ?
+        snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE].present ?
             "true" : "false",
-        snapshot.actual[MEISO_COMPOSITION_HOST_APP_ACTUAL_RENDER_MEDIA].present ?
+        snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_RENDER_MEDIA].present ?
             "true" : "false",
-        snapshot.actual[MEISO_COMPOSITION_HOST_APP_ACTUAL_CAMERA_MEDIA].present ?
+        snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_CAMERA_MEDIA].present ?
             "true" : "false",
         snapshot.wifi_sample_present ? "true" : "false",
         snapshot.render_result_present ? "true" : "false",
@@ -1899,8 +1907,8 @@ static bool queue_frame_output(
     bool *out_emitted
 )
 {
-    MeisoCompositionMediaLatestView latest;
-    MeisoCompositionHostAppStatus status;
+    MeisoEdgeMediaFrameView latest;
+    MeisoEdgeStatus status;
     size_t record_size;
     char metadata[512];
     int written;
@@ -1909,22 +1917,22 @@ static bool queue_frame_output(
     if (service->frame_output.pending) {
         return true;
     }
-    status = meiso_composition_host_app_media_latest(
-        service->app, source, &latest
+    status = meiso_composition_edge_media_latest(
+        service->edge, source, &latest
     );
-    if (status == MEISO_COMPOSITION_HOST_APP_NO_FRAME) {
+    if (status == MEISO_EDGE_NO_DATA) {
         return true;
     }
-    if (status != MEISO_COMPOSITION_HOST_APP_OK ||
+    if (status != MEISO_EDGE_OK ||
         (source == MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW &&
-         latest.unit.access_unit.size > service->config.catalog
+         latest.access_unit.size > service->config.catalog
              .render_media_capability.max_access_unit_bytes) ||
         (source == MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA &&
-         latest.unit.access_unit.size > service->config.catalog
+         latest.access_unit.size > service->config.catalog
              .camera_media_capability.max_access_unit_bytes) ||
-        latest.unit.access_unit.size > HOST_FRAME_BYTES ||
+        latest.access_unit.size > HOST_FRAME_BYTES ||
         !checked_add_size(HOST_CMFB_HEADER_BYTES,
-                          latest.unit.access_unit.size, &record_size)) {
+                          latest.access_unit.size, &record_size)) {
         return false;
     }
     memset(service->frame_output.bytes, 0, HOST_CMFB_HEADER_BYTES);
@@ -1932,35 +1940,34 @@ static bool queue_frame_output(
     write_be_u16(service->frame_output.bytes + 4U, 1U);
     write_be_u16(service->frame_output.bytes + 6U, HOST_CMFB_HEADER_BYTES);
     service->frame_output.bytes[8] = source;
-    write_be_u16(service->frame_output.bytes + 10U, latest.unit.pixel_format);
-    write_be_u16(service->frame_output.bytes + 12U, latest.unit.codec);
-    write_be_u16(service->frame_output.bytes + 14U, latest.unit.flags);
-    write_be_u16(service->frame_output.bytes + 16U, latest.unit.width);
-    write_be_u16(service->frame_output.bytes + 18U, latest.unit.height);
+    write_be_u16(service->frame_output.bytes + 10U, latest.pixel_format);
+    write_be_u16(service->frame_output.bytes + 12U, latest.codec);
+    write_be_u16(service->frame_output.bytes + 14U, latest.flags);
+    write_be_u16(service->frame_output.bytes + 16U, latest.width);
+    write_be_u16(service->frame_output.bytes + 18U, latest.height);
     write_be_u32(service->frame_output.bytes + 20U,
-                 (uint32_t)latest.unit.access_unit.size);
+                 (uint32_t)latest.access_unit.size);
     write_be_u64(service->frame_output.bytes + 24U,
-                 latest.unit.frame_sequence);
+                 latest.key.frame_sequence);
     write_be_u64(service->frame_output.bytes + 32U,
-                 latest.unit.source_time.clock_epoch);
+                 latest.source_time.clock_epoch);
     write_be_u64(service->frame_output.bytes + 40U,
-                 latest.unit.source_time.monotonic_ns);
+                 latest.source_time.monotonic_ns);
     write_be_u64(service->frame_output.bytes + 48U,
-                 latest.unit.active_plan_generation);
+                 latest.active_plan_generation);
     write_be_u64(service->frame_output.bytes + 56U,
-                 latest.unit.world_generation);
+                 latest.world_generation);
     write_be_u64(service->frame_output.bytes + 64U,
-                 latest.unit.applied_scene_state_version);
+                 latest.applied_scene_state_version);
     memcpy(service->frame_output.bytes + HOST_CMFB_HEADER_BYTES,
-           latest.unit.access_unit.data, latest.unit.access_unit.size);
+           latest.access_unit.data, latest.access_unit.size);
     service->frame_output.size = record_size;
     service->frame_output.offset = 0U;
-    service->frame_output.ref = latest.ref;
     service->frame_output.pending = service->frame_fd >= 0;
-    status = meiso_composition_host_app_media_release(
-        service->app, &latest.ref
+    status = meiso_composition_edge_media_release(
+        service->edge, &latest.key
     );
-    if (status != MEISO_COMPOSITION_HOST_APP_OK) {
+    if (status != MEISO_EDGE_OK) {
         memset(&service->frame_output, 0, sizeof(service->frame_output));
         return false;
     }
@@ -1971,13 +1978,13 @@ static bool queue_frame_output(
         ",\"monotonic_ns\":%" PRIu64 ",\"pixel_format\":\"%s\","
         "\"codec\":\"%s\",\"width\":%u,\"height\":%u,"
         "\"access_unit_bytes\":%zu,\"frame_fd_queued\":%s}",
-        media_source_name(source), latest.unit.frame_sequence,
-        latest.unit.source_time.clock_epoch,
-        latest.unit.source_time.monotonic_ns,
-        pixel_format_name(latest.unit.pixel_format),
-        codec_name(latest.unit.codec),
-        (unsigned)latest.unit.width, (unsigned)latest.unit.height,
-        latest.unit.access_unit.size,
+        media_source_name(source), latest.key.frame_sequence,
+        latest.source_time.clock_epoch,
+        latest.source_time.monotonic_ns,
+        pixel_format_name(latest.pixel_format),
+        codec_name(latest.codec),
+        (unsigned)latest.width, (unsigned)latest.height,
+        latest.access_unit.size,
         service->frame_fd >= 0 ? "true" : "false"
     );
     if (written <= 0 || (size_t)written >= sizeof(metadata) ||
@@ -2218,17 +2225,18 @@ static bool emit_pump_result(
 
 static bool emit_typed_truth(Service *service)
 {
-    MeisoCompositionHostAppSnapshot snapshot;
+    MeisoCompositionEdgeSnapshot snapshot;
     char line[1024];
     size_t index;
     int written;
 
-    if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
+    if (meiso_composition_edge_snapshot(service->edge, &snapshot) !=
+        MEISO_EDGE_OK) {
         return false;
     }
-    for (index = 0U; index < MEISO_COMPOSITION_HOST_APP_ACTUAL_COUNT;
+    for (index = 0U; index < MEISO_COMPOSITION_EDGE_ACTUAL_COUNT;
          ++index) {
-        const MeisoCompositionHostAppActualSnapshot *actual =
+        const MeisoCompositionEdgeActualView *actual =
             &snapshot.actual[index];
         if (!actual->present) {
             continue;
@@ -2282,7 +2290,7 @@ static bool emit_typed_truth(Service *service)
         }
     }
     if (snapshot.presentation_status_present) {
-        const MeisoCompositionScenePresentationStatus *presentation =
+        const MeisoCompositionEdgePresentationStatus *presentation =
             &snapshot.presentation_status;
         written = snprintf(
             line, sizeof(line),
@@ -2309,9 +2317,9 @@ static bool emit_typed_truth(Service *service)
             return false;
         }
     }
-    for (index = 0U; index < MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT;
+    for (index = 0U; index < MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT;
          ++index) {
-        const MeisoCompositionMediaActual *media = index == 0U ?
+        const MeisoCompositionEdgeMediaActual *media = index == 0U ?
             &snapshot.render_media_actual : &snapshot.camera_media_actual;
         bool present = index == 0U ? snapshot.render_media_actual_present :
             snapshot.camera_media_actual_present;
@@ -2572,8 +2580,12 @@ static bool initialize_service(
 {
     MeisoCompositionHostAppConfig app_config;
     MeisoCompositionHostAppInitStatus init_status;
+    MeisoCompositionVirtualEdgeHostConfig edge_config;
+    MeisoCompositionVirtualEdgeHostInitStatus edge_init_status;
     size_t alignment;
+    size_t edge_alignment;
     void *arena = NULL;
+    void *edge_arena = NULL;
 
     if (service == NULL || config == NULL || !frame_fd_valid(frame_fd)) {
         return false;
@@ -2633,6 +2645,49 @@ static bool initialize_service(
         return false;
     }
     service->app_arena = arena;
+    service->edge_arena_size =
+        meiso_composition_virtual_edge_host_memory_required();
+    edge_alignment = meiso_composition_virtual_edge_host_alignment_required();
+    if (service->edge_arena_size == 0U || edge_alignment == 0U ||
+        posix_memalign(&edge_arena, edge_alignment,
+                       service->edge_arena_size) != 0) {
+        (void)meiso_composition_host_app_abort(
+            service->app,
+            MEISO_COMPOSITION_HOST_APP_TERMINAL_LOCAL_ABORT, 0
+        );
+        free(service->app_arena);
+        service->app_arena = NULL;
+        service->app = NULL;
+        close_fd(&service->control_fd);
+        return false;
+    }
+    memset(edge_arena, 0, service->edge_arena_size);
+    memset(&edge_config, 0, sizeof(edge_config));
+    edge_config.host_app = service->app;
+    edge_config.host_app_arena = service->app_arena;
+    edge_config.host_app_arena_size = service->app_arena_size;
+    edge_config.catalog_generation = config->catalog_generation;
+    edge_config.catalog = config->catalog;
+    edge_config.continuity_serial = mix_nonzero_epoch(
+        service->host_clock_epoch ^ UINT64_C(0x4544474548414e44)
+    );
+    edge_init_status = meiso_composition_virtual_edge_host_init(
+        edge_arena, service->edge_arena_size, &edge_config, &service->edge
+    );
+    if (edge_init_status != MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_OK) {
+        (void)meiso_composition_host_app_abort(
+            service->app,
+            MEISO_COMPOSITION_HOST_APP_TERMINAL_LOCAL_ABORT, 0
+        );
+        free(edge_arena);
+        free(service->app_arena);
+        service->edge = NULL;
+        service->app_arena = NULL;
+        service->app = NULL;
+        close_fd(&service->control_fd);
+        return false;
+    }
+    service->edge_arena = edge_arena;
     return true;
 }
 
@@ -2648,8 +2703,11 @@ static void destroy_service(Service *service)
     }
     close_fd(&service->media_fd);
     close_fd(&service->control_fd);
+    free(service->edge_arena);
     free(service->app_arena);
+    service->edge_arena = NULL;
     service->app_arena = NULL;
+    service->edge = NULL;
     service->app = NULL;
 }
 
