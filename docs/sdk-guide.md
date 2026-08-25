@@ -99,6 +99,15 @@ borrow/release 只调用公开 `MeisoEdgeHandle` API；进程内 HostApp 仅负�
 control/media fd、one-use media slot 与 abort。NDJSON/CMFB 仍是 machine-local bridge，不成为第二套
 SDK 或 wire owner。
 
+同一个 Debug Host 还必须提供显式 `--simulator` 启动模式，作为本地编辑器的真实离线入口，而不是只在
+单元测试中直接调用 simulator。该模式不读取远端 config、不创建 control/media socket，也不伪造
+Session、TCP binding 或 physical frame；它以固定 Composition Profile v3 catalog、caller-owned arena 和
+进程本地 synthetic sample 初始化同一个 opaque `MeisoEdgeHandle`，再由相同 NDJSON command、typed truth
+和 snapshot 投影驱动 Mesh→Scene→Presentation→RenderResult。默认远端 CLI 与输出保持兼容；Dashboard
+必须显式选择 `NATIVE_SIMULATOR`，不得把该模式显示成 `NATIVE_HOST`、设备连接或 media transport bound。
+每个子进程是 fresh simulator lifetime，close/EOF 后旧 handle 不可恢复。离线模式不生成 CMFB frame；
+RenderResult 仅为 SceneStore synthetic offscreen/hash/thumbnail evidence。
+
 该切片的 conformance vector 必须使用真实 `AF_INET` HostApp/Edge fixture，并同时证明：pre-READY
 本地排队不制造在线 resource；READY 后 exact discovery 与 typed Wi-Fi State/Stream 闭环；未支持
 operation 的 capability 为 false；media borrow 只能以 facade key exact release；control terminal

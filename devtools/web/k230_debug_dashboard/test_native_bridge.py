@@ -7,6 +7,7 @@ import copy
 import hashlib
 import http.client
 import json
+import os
 from pathlib import Path
 import socket
 import struct
@@ -36,8 +37,12 @@ import json
 from pathlib import Path
 import sys
 
-config_index = sys.argv.index("--config") + 1
-mode = Path(sys.argv[config_index]).read_text(encoding="utf-8").strip()
+simulator = "--simulator" in sys.argv
+if simulator:
+    mode = "simulator"
+else:
+    config_index = sys.argv.index("--config") + 1
+    mode = Path(sys.argv[config_index]).read_text(encoding="utf-8").strip()
 if mode == "invalid":
     print(json.dumps({
         "type": "service.ready", "profile": "composition-v3",
@@ -47,7 +52,10 @@ if mode == "invalid":
 else:
     print(json.dumps({
         "type": "service.ready", "profile": "composition-v3",
-        "wire_owner": "native_service", "asset_import": "builtin_cube_only",
+        "wire_owner": (
+            "simulator_service" if simulator or mode == "wrong_mode" else
+            "native_service"
+        ), "asset_import": "builtin_cube_only",
         "frame_projection": "CMFB/v1",
     }, separators=(",", ":")), flush=True)
     for raw in sys.stdin:
@@ -58,7 +66,7 @@ else:
             output = {
                 "type": "snapshot", "request_id": request_id,
                 "phase": "ready", "terminal_reason": "none",
-                "control_ready": True, "catalog_generation": 1,
+                "control_ready": not simulator, "catalog_generation": 1,
                 "media_bound": False, "media_mask": "none",
                 "media_slots_consumed": 0, "mesh_active": False,
                 "mesh_next_offset": 0, "wifi_actual": False,
@@ -150,6 +158,115 @@ class NativeBridgeTests(unittest.TestCase):
             finally:
                 bridge.close()
 
+    def test_simulator_child_needs_no_config_and_stays_non_session(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, _config = self._fake_child(
+                Path(raw_directory), "unused"
+            )
+            bridge = NativeBridge(
+                str(executable), None, events.append, lambda *_: None,
+                simulator=True,
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event["type"] == "service.ready" for event in events
+                ))
+                bridge.submit_batch(
+                    [{"command": "snapshot"}],
+                    origin="native.simulator", revision=0,
+                )
+                _wait_for(lambda: any(
+                    event["type"] == "snapshot" for event in events
+                ))
+                snapshot = next(
+                    event for event in events if event["type"] == "snapshot"
+                )
+                self.assertFalse(snapshot["control_ready"])
+                self.assertFalse(snapshot["media_bound"])
+                self.assertEqual(snapshot["media_mask"], "none")
+            finally:
+                bridge.close()
+
+        state = DashboardState()
+        state._snapshot["backend"].update({
+            "mode": "NATIVE_SIMULATOR", "native_host_bound": True,
+        })
+        state._native_event({
+            "type": "snapshot", "request_id": 1, "phase": "ready",
+            "terminal_reason": "none", "control_ready": False,
+            "catalog_generation": 1, "media_bound": False,
+            "media_mask": "none", "media_slots_consumed": 0,
+            "mesh_active": False, "mesh_next_offset": 304,
+            "wifi_actual": True, "presentation_actual": True,
+            "scene_actual": True, "device_actual": True,
+            "render_actual": True, "camera_actual": True,
+            "wifi_sample": True, "render_result": True,
+            "device_sample": True, "render_frame": False,
+            "camera_frame": False,
+        })
+        for channel in ("render_media", "camera_media"):
+            state._native_event({
+                "type": "actual", "channel": channel,
+                "state_version": 1, "apply_result": "applied",
+                "availability": "present", "profile_decoded": True,
+                "enabled": True, "production_status": "running",
+                "reason": "none", "production_epoch": 1,
+            })
+        self.assertFalse(state.snapshot()["backend"]["device_connected"])
+        self.assertEqual(
+            state.snapshot()["backend"]["session_status"], "SIMULATED"
+        )
+        self.assertEqual(
+            state.snapshot()["bindings"]["render_result_stream"],
+            "SIMULATED",
+        )
+        self.assertEqual(
+            state.snapshot()["bindings"]["camera_media_stream"],
+            "SIMULATED",
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("MEISO_COMPOSITION_DEBUG_HOST"),
+        "built CompositionDebugHost not supplied",
+    )
+    def test_real_simulator_child_completes_offline_editor_bootstrap(self) -> None:
+        executable = os.environ["MEISO_COMPOSITION_DEBUG_HOST"]
+        state = DashboardState()
+        state.enable_native(executable, None, simulator=True)
+        try:
+            _wait_for(
+                lambda: (
+                    state.snapshot()["native_truth"]["render_result"]
+                    is not None and
+                    state.snapshot()["bindings"]["render_result_stream"] ==
+                    "SIMULATED"
+                ),
+                timeout=5.0,
+            )
+            snapshot = state.snapshot()
+            self.assertEqual(snapshot["backend"]["mode"], "NATIVE_SIMULATOR")
+            self.assertEqual(snapshot["backend"]["session_status"], "SIMULATED")
+            self.assertFalse(snapshot["backend"]["device_connected"])
+            self.assertEqual(
+                snapshot["backend"]["proof"],
+                "SYNTHETIC_OFFLINE_TYPED_ONLY",
+            )
+            self.assertEqual(
+                snapshot["native_truth"]["scene_status"]["reason"], "ready"
+            )
+            self.assertEqual(
+                snapshot["bindings"]["render_result_stream"], "SIMULATED"
+            )
+            self.assertEqual(
+                snapshot["bindings"]["camera_media_stream"], "UNBOUND"
+            )
+            self.assertFalse(snapshot["frames"]["render"]["available"])
+            self.assertFalse(snapshot["frames"]["camera"]["available"])
+        finally:
+            state.close()
+
     def test_fake_child_malformed_stdout_is_sticky_terminal(self) -> None:
         events: list[dict[str, object]] = []
         with tempfile.TemporaryDirectory() as raw_directory:
@@ -172,6 +289,27 @@ class NativeBridgeTests(unittest.TestCase):
                     bridge.submit_batch(
                         [{"command": "snapshot"}], origin="x", revision=1
                     )
+            finally:
+                bridge.close()
+
+    def test_selected_native_mode_must_match_child(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "wrong_mode"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event["type"] == "native.bridge_terminal"
+                    for event in events
+                ))
+                self.assertFalse(any(
+                    event["type"] == "service.ready" for event in events
+                ))
             finally:
                 bridge.close()
 

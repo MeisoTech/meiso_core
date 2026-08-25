@@ -14,6 +14,14 @@ browser <- editor intents / sanitized SSE -> Python bridge
                                               | CMFB/v1 socketpair
                                               v
                                       CompositionDebugHost -> K230
+
+explicit offline simulator mode:
+browser <- same intents / sanitized SSE -> Python bridge
+                                              |
+                                              v
+                                CompositionDebugHost --simulator
+                                              |
+                                   caller-owned EdgeHandle
 ```
 
 The Python and browser layers never parse or emit Meiso wire.
@@ -64,6 +72,20 @@ python3 devtools/web/k230_debug_dashboard/server.py \
 Open `http://127.0.0.1:50001/`. The listener is fixed to `127.0.0.1`;
 `--port` only selects another loopback port. Omitting either native option is an
 error, while omitting both preserves `RECORDED_LOCAL` behavior.
+
+The same native service can instead run the fixed offline simulator without a
+remote config or any socket:
+
+```sh
+python3 devtools/web/k230_debug_dashboard/server.py \
+  --native-host /absolute/path/to/composition_debug_host \
+  --native-simulator
+```
+
+The backend is shown as `NATIVE_SIMULATOR`. It executes the same bounded editor
+commands and projects synthetic Wi-Fi/device/Composition truth, but it keeps
+device connection, Session and TCP media evidence absent. It does not publish
+CMFB frames; the RenderResult is the SceneStore synthetic offscreen result.
 
 ## Fixed API
 

@@ -83,6 +83,13 @@ State watch、Stream publish、Action invoke与Blob lookup仍以capability false
 media borrow不再直接读取HostApp；HostApp只留在fd/pump/slot/abort integration。既有NDJSON与CMFB
 输出保持不变，因此此迁移验证的是应用边界，不新增协议或证据标签。
 
+离线编辑入口必须复用同一个native service与opaque handle，而不是复制一份浏览器状态机。显式
+`--simulator`模式不读取remote config、不打开control/media socket；它只创建caller-owned simulator
+arena、固定Profile v3 catalog和synthetic sample，并沿相同NDJSON command/typed snapshot路径执行
+Mesh→Scene→Presentation→RenderResult。Dashboard把它标为`NATIVE_SIMULATOR`，同时保持Session、设备连接、
+media transport与CMFB frame均未绑定；默认远端模式不变。此路径只证明本地editor与simulator集成，不能
+提升为network、K230D、camera、CPU raster像素、physical presentation或性能证据。
+
 ## 对 Host 项目对象的映射
 
 | Host/SDC 概念 | Meiso 对接方式 |

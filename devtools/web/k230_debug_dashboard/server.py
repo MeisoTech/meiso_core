@@ -400,12 +400,21 @@ class DashboardState:
             )
             return event_id, copy.deepcopy(self._snapshot)
 
-    def enable_native(self, executable: str, config: str) -> None:
+    def enable_native(
+        self, executable: str, config: str | None, *, simulator: bool = False
+    ) -> None:
         with self._condition:
             if self._native_bridge is not None:
                 raise NativeBridgeError("NATIVE_ALREADY_BOUND")
-            bridge = NativeBridge(
-                executable, config, self._native_event, self._native_frame
+            bridge = (
+                NativeBridge(
+                    executable, config, self._native_event,
+                    self._native_frame, simulator=True,
+                ) if simulator else
+                NativeBridge(
+                    executable, config, self._native_event,
+                    self._native_frame,
+                )
             )
             snapshot_before = copy.deepcopy(self._snapshot)
             events_before = copy.deepcopy(list(self._events))
@@ -413,12 +422,15 @@ class DashboardState:
             self._native_bridge = bridge
             self._native_refresh_pending = False
             self._snapshot["backend"].update({
-                "mode": "NATIVE_HOST",
+                "mode": "NATIVE_SIMULATOR" if simulator else "NATIVE_HOST",
                 "native_host_bound": True,
-                "session_status": "STARTING",
+                "session_status": "SIMULATED" if simulator else "STARTING",
                 "catalog_status": "PENDING",
                 "profile": "composition-v3",
-                "proof": "NATIVE_SERVICE_TYPED_ONLY",
+                "proof": (
+                    "SYNTHETIC_OFFLINE_TYPED_ONLY" if simulator else
+                    "NATIVE_SERVICE_TYPED_ONLY"
+                ),
             })
             self._snapshot["bindings"]["camera_media_stream"] = "UNBOUND"
             candidate = copy.deepcopy(self._snapshot)
@@ -472,8 +484,12 @@ class DashboardState:
             elif event_type == "snapshot":
                 self._native_refresh_pending = False
                 truth["control_snapshot"] = copy.deepcopy(event)
-                backend["device_connected"] = bool(event["control_ready"])
+                simulated = backend["mode"] == "NATIVE_SIMULATOR"
+                backend["device_connected"] = (
+                    False if simulated else bool(event["control_ready"])
+                )
                 backend["session_status"] = (
+                    "SIMULATED" if simulated and event["phase"] == "ready" else
                     "READY" if event["control_ready"] else event["phase"].upper()
                 )
                 backend["catalog_status"] = (
@@ -553,9 +569,10 @@ class DashboardState:
         truth = self._snapshot["native_truth"]
         control = truth["control_snapshot"]
         actual = truth["actual"]
+        simulated = self._snapshot["backend"]["mode"] == "NATIVE_SIMULATOR"
         session_bound = bool(
             self._snapshot["backend"]["native_host_bound"] and
-            self._snapshot["backend"]["device_connected"]
+            (simulated or self._snapshot["backend"]["device_connected"])
         )
         media_bound = bool(session_bound and control and control["media_bound"])
         mask = control["media_mask"] if control else "none"
@@ -567,11 +584,13 @@ class DashboardState:
         ):
             value = actual.get(channel)
             bound = bool(
-                media_bound and selected and value and value["enabled"] and
+                (simulated or media_bound) and (simulated or selected) and
+                value and value["enabled"] and
                 value["availability"] == "present" and
                 value["production_status"] == "running"
             )
             self._snapshot["bindings"][binding_key] = (
+                "SIMULATED" if bound and simulated else
                 "BOUND" if bound else "UNBOUND"
             )
         wifi = actual.get("wifi")
@@ -581,6 +600,7 @@ class DashboardState:
             wifi["production_status"] == "running"
         )
         self._snapshot["bindings"]["wifi_telemetry"] = (
+            "SIMULATED" if wifi_bound and simulated else
             "BOUND" if wifi_bound else "UNBOUND"
         )
 
@@ -814,14 +834,20 @@ def create_server(
     event_capacity: int = DEFAULT_EVENT_CAPACITY,
     native_host: str | None = None,
     native_config: str | None = None,
+    native_simulator: bool = False,
 ) -> tuple[DashboardServer, DashboardState]:
     state = DashboardState(event_capacity)
-    if (native_host is None) != (native_config is None):
+    if ((native_simulator and
+         (native_host is None or native_config is not None)) or
+        (not native_simulator and
+         ((native_host is None) != (native_config is None)))):
         raise NativeBridgeError("NATIVE_ARGUMENT_PAIR")
     server = DashboardServer((LOOPBACK_ADDRESS, port), state)
-    if native_host is not None and native_config is not None:
+    if native_host is not None:
         try:
-            state.enable_native(native_host, native_config)
+            state.enable_native(
+                native_host, native_config, simulator=native_simulator
+            )
         except Exception:
             server.server_close()
             raise
@@ -835,22 +861,33 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--native-host")
     parser.add_argument("--native-config")
+    parser.add_argument("--native-simulator", action="store_true")
     arguments = parser.parse_args()
     if arguments.port < 1 or arguments.port > 65535:
         parser.error("--port must be in 1..65535")
-    if (arguments.native_host is None) != (arguments.native_config is None):
+    if (arguments.native_simulator and
+        (arguments.native_host is None or arguments.native_config is not None)):
+        parser.error(
+            "--native-simulator requires --native-host and forbids --native-config"
+        )
+    if (not arguments.native_simulator and
+        ((arguments.native_host is None) !=
+         (arguments.native_config is None))):
         parser.error("--native-host and --native-config must be supplied together")
     try:
         server, _state = create_server(
             port=arguments.port,
             native_host=arguments.native_host,
             native_config=arguments.native_config,
+            native_simulator=arguments.native_simulator,
         )
     except NativeBridgeError as error:
         print(f"Native bridge failed: {error}", file=sys.stderr)
         return 1
     print(f"K230 debug dashboard: http://{LOOPBACK_ADDRESS}:{server.server_port}/")
     print(
+        "Backend: NATIVE_SIMULATOR (synthetic offline typed bridge)."
+        if arguments.native_simulator else
         "Backend: NATIVE_HOST (typed local bridge)." if arguments.native_host
         else "Backend: RECORDED_LOCAL; device/media are not connected."
     )

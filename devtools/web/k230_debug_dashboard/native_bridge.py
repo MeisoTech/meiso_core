@@ -351,7 +351,9 @@ _SIGNED_INTEGER_FIELDS = {"signal_mbm", "temperature_millic"}
 
 _EVENT_ENUMS: dict[tuple[str, str], set[str]] = {
     ("service.ready", "profile"): {"composition-v3"},
-    ("service.ready", "wire_owner"): {"native_service"},
+    ("service.ready", "wire_owner"): {
+        "native_service", "simulator_service",
+    },
     ("service.ready", "asset_import"): {"builtin_cube_only"},
     ("service.ready", "frame_projection"): {"CMFB/v1"},
     ("command.receipt", "kind"): {
@@ -386,7 +388,7 @@ _EVENT_ENUMS: dict[tuple[str, str], set[str]] = {
     },
     ("pump.event", "media_source"): {"none", "render", "camera"},
     ("media.connected", "transport"): {"tcp"},
-    ("terminal", "code"): {"HOST_APP_TERMINAL"},
+    ("terminal", "code"): {"HOST_APP_TERMINAL", "SIMULATOR_TERMINAL"},
     ("actual", "channel"): {
         "wifi", "presentation", "scene", "device", "render_media",
         "camera_media",
@@ -494,12 +496,17 @@ class NativeBridge:
     def __init__(
         self,
         executable: str,
-        config: str,
+        config: str | None,
         on_event: Callable[[dict[str, Any]], None],
         on_frame: Callable[[str, dict[str, Any]], None],
+        *,
+        simulator: bool = False,
     ):
         self.executable = Path(executable).expanduser().resolve()
-        self.config = Path(config).expanduser().resolve()
+        self.config = (
+            None if config is None else Path(config).expanduser().resolve()
+        )
+        self.simulator = simulator
         self._on_event = on_event
         self._on_frame = on_frame
         self._condition = threading.Condition()
@@ -519,18 +526,25 @@ class NativeBridge:
                 raise NativeBridgeError("NATIVE_ALREADY_BOUND")
         if (not self.executable.is_file() or
             not os.access(self.executable, os.X_OK) or
-            not self.config.is_file()):
+            (self.simulator and self.config is not None) or
+            (not self.simulator and
+             (self.config is None or not self.config.is_file()))):
             raise NativeBridgeError("NATIVE_PATH")
         parent_frame, child_frame = socket.socketpair(
             socket.AF_UNIX, socket.SOCK_STREAM
         )
         child_frame.setblocking(False)
         try:
+            arguments = [str(self.executable)]
+            if self.simulator:
+                arguments.append("--simulator")
+            else:
+                arguments.extend(["--config", str(self.config)])
+            arguments.extend([
+                "--interactive", "--frame-fd", str(child_frame.fileno()),
+            ])
             process = subprocess.Popen(
-                [
-                    str(self.executable), "--config", str(self.config),
-                    "--interactive", "--frame-fd", str(child_frame.fileno()),
-                ],
+                arguments,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -739,6 +753,13 @@ class NativeBridge:
                     if len(raw) >= MAX_NATIVE_LINE_BYTES:
                         raise NativeBridgeError("NATIVE_OUTPUT_SIZE")
                     value = json.loads(raw.decode("utf-8"))
+                    if (isinstance(value, dict) and
+                        value.get("type") == "service.ready" and
+                        value.get("wire_owner") != (
+                            "simulator_service" if self.simulator else
+                            "native_service"
+                        )):
+                        raise NativeBridgeError("NATIVE_MODE_MISMATCH")
                     event = sanitize_native_event(value)
                     request_id = event.get("request_id")
                     if isinstance(request_id, int):

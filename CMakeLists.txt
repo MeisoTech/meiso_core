@@ -868,6 +868,16 @@ if(Python3_Interpreter_FOUND)
             "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/devtools/web/k230_debug_dashboard/test_server.py"
     )
+    if(TARGET meiso_composition_debug_host)
+        add_test(
+            NAME meiso_k230_debug_dashboard_native_bridge_test
+            COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "MEISO_COMPOSITION_DEBUG_HOST=$<TARGET_FILE:meiso_composition_debug_host>"
+                "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/devtools/web/k230_debug_dashboard/test_native_bridge.py"
+        )
+    endif()
 endif()
 find_program(MEISO_NODE_EXECUTABLE node)
 if(MEISO_NODE_EXECUTABLE)

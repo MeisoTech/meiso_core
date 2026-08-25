@@ -71,6 +71,13 @@ Composition子组件、pending Mesh和媒体buffer均在caller arena内，不读
 不分配heap，也不把recorded sample/frame或synthetic render冒充physical truth；Composition未启用时
 Blob/Composition操作明确`unsupported`，DeviceTelemetry未启用时SET_DEVICE同样明确`unsupported`。
 
+同一native Composition Debug Host现在提供显式`--simulator --interactive`入口，Dashboard以
+`--native-host ... --native-simulator`启动真实子进程，并通过与remote模式相同的closed NDJSON命令和
+typed snapshot消费上述opaque handle。该模式不读取remote config、不连接control/media TCP、不建立
+Session/catalog wire，也不发布CMFB frame；Dashboard把它标为`NATIVE_SIMULATOR`和
+`SYNTHETIC_OFFLINE_TYPED_ONLY`，只把Scene/C2状态、synthetic RenderResult、Wi-Fi/Device和media State
+呈现为离线truth。remote模式、其argv和`wire_owner:native_service`保持不变。
+
 Recorded backend artifact使用固定版本、closed-kind、bounded的canonical in-memory trace；它只记录
 simulator config、Wi-Fi/media typed desired、显式step/time、完整media unit与terminal，不记录或发明Session/Runtime
 wire。reader在暴露config前完整验证header、每record integrity、容量、事件顺序和payload，再以单record

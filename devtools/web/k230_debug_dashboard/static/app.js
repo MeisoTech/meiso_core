@@ -56,7 +56,7 @@ async function send(command) {
     throw new Error(body.error || `HTTP ${response.status}`);
   }
   showToast(
-    snapshot?.backend?.mode === "NATIVE_HOST" ?
+    snapshot?.backend?.mode?.startsWith("NATIVE_") ?
       `Native command queued · revision ${body.revision}` :
       `Local draft accepted · revision ${body.revision}`
   );
@@ -151,17 +151,22 @@ function renderSnapshot(next) {
   node("revision-badge").textContent = `REV ${snapshot.revision}`;
   node("backend-badge").textContent = snapshot.backend.mode.replace("_", " / ");
   node("device-badge").textContent = snapshot.backend.device_connected ? "DEVICE CONNECTED" : "DEVICE NOT CONNECTED";
-  node("media-badge").textContent = snapshot.bindings.render_result_stream === "BOUND" ? "MEDIA BOUND" : "MEDIA UNBOUND";
+  node("media-badge").textContent = snapshot.bindings.render_result_stream === "SIMULATED" ?
+    "MEDIA SIMULATED" : snapshot.bindings.render_result_stream === "BOUND" ?
+      "MEDIA BOUND" : "MEDIA UNBOUND";
   node("render-binding").textContent = snapshot.bindings.render_result_stream;
   node("camera-binding").textContent = snapshot.bindings.camera_media_stream;
   node("wifi-binding").textContent = snapshot.bindings.wifi_telemetry;
   node("device-binding").textContent = snapshot.native_truth?.actual?.device ?
     "ACTUAL RECEIVED" : "DEVICE UNBOUND";
-  const native = snapshot.backend.mode === "NATIVE_HOST";
+  const native = snapshot.backend.mode.startsWith("NATIVE_");
+  const simulated = snapshot.backend.mode === "NATIVE_SIMULATOR";
   node("truth-title").textContent = native ?
-    "Native Host typed bridge is active." :
+    simulated ? "Native synthetic simulator bridge is active." :
+      "Native Host typed bridge is active." :
     "这是本地场景草稿，不是 K230 回传。";
-  node("truth-detail").textContent = native ?
+  node("truth-detail").textContent = simulated ?
+    "编辑命令由本地 caller-owned simulator 执行；没有 Session、设备连接、TCP media 或 physical frame。" : native ?
     "浏览器只提交编辑器意图；下方 generation、epoch、sequence 与 telemetry 是 native service 的只读投影。" :
     "浏览器不创建 State version、ContentId、Session、epoch 或 sequence；显式启动 native Host 前这些字段保持未分配。";
   node("native-frame-links").hidden = !native;

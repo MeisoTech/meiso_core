@@ -612,6 +612,18 @@ enabled Composition config和关闭状态非零suffix的原子拒绝。fresh Deb
 analyzer均为367-byte零诊断。该结果仅是portable、deterministic、offscreen synthetic编辑器证据，不证明
 CPU raster像素golden、AF_INET、K230、camera、physical display、性能或soak。
 
+随后把该离线Composition闭环接入同一个native Composition Debug Host与本地Dashboard，而没有新增第三套
+应用协议。`composition_debug_host --simulator --interactive`直接创建caller-owned simulator handle，复用
+remote模式的closed NDJSON command/snapshot surface；Dashboard的`--native-simulator`启动真实子进程并验证
+child声明`wire_owner:simulator_service`，模式投影为`NATIVE_SIMULATOR`。真实subprocess vector已贯通builtin
+cube→Scene→Presentation→synthetic RenderResult，以及render/camera media、Wi-Fi和DeviceTelemetry State，
+同时锁定`control_ready=false`、`media_bound=false`、`media_mask=none`、无`media.connected`、无CMFB frame。
+remote入口仍要求config并保持原argv/output；simulator入口拒绝config，二者声明错配会terminal。
+fresh Debug、Release和ASan+UBSan全仓CTest均52/52；修改C TU通过conversion/sign/shadow strict C11，
+两份clang analyzer零诊断，Dashboard Python真实child 14/14、server 9/9、JavaScript 5/5，28-file Markdown
+link与diff/sensitive门通过。这证明本地编辑器已有真实native离线backend入口，不证明Session/TCP、CPU raster
+像素、K230、camera capture、CMFB media、physical display、性能或soak。
+
 ## 已验证的负面结论
 
 - 把每帧 raw camera 当成可靠完整 transfer 会造成高带宽与旧数据阻塞，不适合连续 Stream；
@@ -634,7 +646,8 @@ CPU raster像素golden、AF_INET、K230、camera、physical display、性能或s
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
 - 超出Profile v3 render/camera两路read的通用MediaStream与Resource lifecycle/telemetry集成；
 - Composition的自动resume、fresh Edge、SCAP 16-slot aggregate与未覆盖的wrong-Profile/backpressure/
-  fair-contention fault/recovery，product-grade Host editor、target present backend与真实presentation endpoint；R2b0已有loopback
+  fair-contention fault/recovery，超出当前fixed-cube/closed-schema simulator入口的product-grade Host editor、
+  target present backend与真实presentation endpoint；R2b0已有loopback
   happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2b2已有
   same-Session catalog replacement evidence，R2b3已有explicit same-process RST/new-Session evidence，R2b4已有
   max-single-Blob/resource-boundary evidence，R2b5已有真实TCP wrong-Profile fail-closed、双向分段

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "composition_virtual_edge_host.h"
+#include "meiso_composition_edge_simulator.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -134,7 +135,14 @@ typedef struct {
     bool pending;
 } FrameOutput;
 
+typedef uint8_t ServiceBackend;
+enum {
+    SERVICE_BACKEND_REMOTE = 1,
+    SERVICE_BACKEND_SIMULATOR = 2
+};
+
 typedef struct {
+    ServiceBackend backend;
     ServiceConfig config;
     int control_fd;
     int media_fd;
@@ -161,6 +169,7 @@ typedef struct {
     uint64_t next_object_serial;
     uint64_t scene_space_epoch;
     uint64_t host_clock_epoch;
+    uint64_t simulator_monotonic_ns;
     FrameOutput frame_output;
     uint8_t frame_drain_cursor;
     uint8_t loop_cursor;
@@ -277,6 +286,47 @@ static MeisoCompositionSessionV3CatalogConfig default_catalog(void)
         320U * 240U * 3U / 2U,
         MEISO_COMPOSITION_MEDIA_MAX_FRAGMENT_PAYLOAD_SIZE, 0U
     };
+    return value;
+}
+
+static MeisoCompositionEdgeSimulatorConfig offline_simulator_config(void)
+{
+    MeisoCompositionEdgeSimulatorConfig value;
+
+    memset(&value, 0, sizeof(value));
+    value.catalog_generation = 1U;
+    value.catalog = default_catalog();
+    value.catalog.wifi_capability.supported_fields =
+        MEISO_WIFI_TELEMETRY_FIELD_ALL;
+    value.catalog.device_telemetry_capability.supported_fields =
+        MEISO_DEVICE_TELEMETRY_FIELD_ALL;
+    value.continuity_serial = 1U;
+    value.desired_owner = (MeisoOwnerScope){MEISO_OWNER_ROLE_HOST, 1U};
+    value.wifi_production_epoch = 1001U;
+    value.render_media_stream_epoch = 2001U;
+    value.camera_media_stream_epoch = 3001U;
+    value.wifi_sample.selected_fields = MEISO_WIFI_TELEMETRY_FIELD_ALL;
+    value.wifi_sample.present_fields = MEISO_WIFI_TELEMETRY_FIELD_ALL;
+    value.wifi_sample.link_state = true;
+    value.wifi_sample.signal_mbm = -4200;
+    value.wifi_sample.rx_bytes = 1000000U;
+    value.wifi_sample.tx_bytes = 500000U;
+    value.wifi_sample.rx_packets = 1000U;
+    value.wifi_sample.tx_packets = 500U;
+    value.device_telemetry_enabled = true;
+    value.device_production_epoch = 4001U;
+    value.device_sample.selected_fields = MEISO_DEVICE_TELEMETRY_FIELD_ALL;
+    value.device_sample.present_fields = MEISO_DEVICE_TELEMETRY_FIELD_ALL;
+    value.device_sample.temperature_millic = 25000;
+    value.device_sample.temperature_uncertainty_millic = 1000U;
+    value.device_sample.cpu_load_ppm = 250000U;
+    value.device_sample.memory_total_bytes = UINT64_C(536870912);
+    value.device_sample.memory_available_bytes = UINT64_C(402653184);
+    value.composition_enabled = true;
+    value.composition_blob_slot_count = 4U;
+    value.composition_clock_epoch = 5001U;
+    value.presentation_production_epoch = 6001U;
+    value.scene_production_epoch = 7001U;
     return value;
 }
 
@@ -1054,6 +1104,21 @@ static const char *terminal_reason_name(
     }
 }
 
+static const char *edge_terminal_reason_name(MeisoEdgeTerminalReason value)
+{
+    switch (value) {
+        case MEISO_EDGE_TERMINAL_NONE: return "none";
+        case MEISO_EDGE_TERMINAL_TRANSPORT: return "control_transport";
+        case MEISO_EDGE_TERMINAL_SESSION: return "control_session";
+        case MEISO_EDGE_TERMINAL_CATALOG_DISCONTINUITY:
+            return "catalog_changed";
+        case MEISO_EDGE_TERMINAL_LOCAL_ABORT: return "local_abort";
+        case MEISO_EDGE_TERMINAL_INTERNAL_FAILURE:
+            return "internal_failure";
+        default: return "unknown";
+    }
+}
+
 static const char *apply_result_name(MeisoRuntimeApplyResult value)
 {
     switch (value) {
@@ -1737,13 +1802,39 @@ static bool emit_snapshot(Service *service, uint64_t request_id)
 {
     MeisoCompositionHostAppSnapshot integration;
     MeisoCompositionEdgeSnapshot snapshot;
+    const char *phase;
+    const char *terminal_reason;
+    bool control_ready;
+    bool media_bound;
+    MeisoCompositionHostAppMediaRouteMask media_mask = 0U;
+    uint32_t media_slots_consumed = 0U;
     char line[2048];
     int written;
 
-    if (!meiso_composition_host_app_snapshot(service->app, &integration) ||
-        meiso_composition_edge_snapshot(service->edge, &snapshot) !=
-            MEISO_EDGE_OK) {
+    if (meiso_composition_edge_snapshot(service->edge, &snapshot) !=
+        MEISO_EDGE_OK) {
         return emit_error(request_id, "SNAPSHOT_FAILED");
+    }
+    if (service->backend == SERVICE_BACKEND_SIMULATOR) {
+        phase = snapshot.edge.phase == MEISO_EDGE_PHASE_READY ? "ready" :
+            snapshot.edge.phase == MEISO_EDGE_PHASE_TERMINAL ? "terminal" :
+            "handshake";
+        terminal_reason = edge_terminal_reason_name(
+            snapshot.edge.terminal_reason
+        );
+        control_ready = false;
+        media_bound = false;
+    } else {
+        if (!meiso_composition_host_app_snapshot(service->app,
+                                                  &integration)) {
+            return emit_error(request_id, "SNAPSHOT_FAILED");
+        }
+        phase = phase_name(integration.phase);
+        terminal_reason = terminal_reason_name(integration.terminal_reason);
+        control_ready = integration.control_ready;
+        media_bound = integration.media_bound;
+        media_mask = integration.media_active_route_mask;
+        media_slots_consumed = integration.media_slots_consumed;
     }
     written = snprintf(
         line, sizeof(line),
@@ -1759,13 +1850,12 @@ static bool emit_snapshot(Service *service, uint64_t request_id)
         "\"wifi_sample\":%s,\"render_result\":%s,"
         "\"device_sample\":%s,\"render_frame\":%s,"
         "\"camera_frame\":%s}",
-        request_id, phase_name(integration.phase),
-        terminal_reason_name(integration.terminal_reason),
-        integration.control_ready ? "true" : "false",
+        request_id, phase, terminal_reason,
+        control_ready ? "true" : "false",
         snapshot.edge.catalog_generation,
-        integration.media_bound ? "true" : "false",
-        media_mask_name(integration.media_active_route_mask),
-        (unsigned)integration.media_slots_consumed,
+        media_bound ? "true" : "false",
+        media_mask_name(media_mask),
+        (unsigned)media_slots_consumed,
         snapshot.mesh.transfer_active ? "true" : "false",
         snapshot.mesh.next_offset,
         snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_WIFI].present ?
@@ -2482,6 +2572,37 @@ static bool pump_host(
     MeisoCompositionHostAppPumpStatus status;
 
     *out_progress = false;
+    if (service->backend == SERVICE_BACKEND_SIMULATOR) {
+        MeisoCompositionEdgeSimulatorTransition transition;
+        MeisoEdgeStatus edge_status;
+        uint64_t next_time;
+
+        (void)ready;
+        if (service->simulator_monotonic_ns == UINT64_MAX) {
+            return false;
+        }
+        next_time = service->simulator_monotonic_ns + 1U;
+        edge_status = meiso_composition_edge_simulator_step(
+            service->edge,
+            (MeisoTimePoint){service->host_clock_epoch, next_time},
+            &transition
+        );
+        if (edge_status == MEISO_EDGE_TERMINAL) {
+            service->close_requested = true;
+            return emit_line(
+                "{\"type\":\"terminal\",\"code\":\"SIMULATOR_TERMINAL\"}"
+            );
+        }
+        if (edge_status != MEISO_EDGE_OK) {
+            return false;
+        }
+        if (transition == MEISO_COMPOSITION_EDGE_SIMULATOR_IDLE) {
+            return true;
+        }
+        service->simulator_monotonic_ns = next_time;
+        *out_progress = true;
+        return emit_typed_truth(service);
+    }
     status = meiso_composition_host_app_pump(service->app, ready, &result);
     if (status == MEISO_COMPOSITION_HOST_APP_PUMP_IDLE ||
         status == MEISO_COMPOSITION_HOST_APP_PUMP_WOULD_BLOCK) {
@@ -2572,7 +2693,7 @@ static bool frame_fd_valid(int fd)
         access_mode != O_RDONLY;
 }
 
-static bool initialize_service(
+static bool initialize_remote_service(
     Service *service,
     const ServiceConfig *config,
     int frame_fd
@@ -2591,6 +2712,7 @@ static bool initialize_service(
         return false;
     }
     memset(service, 0, sizeof(*service));
+    service->backend = SERVICE_BACKEND_REMOTE;
     service->control_fd = -1;
     service->media_fd = -1;
     service->frame_fd = frame_fd;
@@ -2691,12 +2813,57 @@ static bool initialize_service(
     return true;
 }
 
+static bool initialize_simulator_service(Service *service, int frame_fd)
+{
+    MeisoCompositionEdgeSimulatorConfig config = offline_simulator_config();
+    MeisoCompositionEdgeSimulatorInitStatus init_status;
+    size_t alignment;
+    void *arena = NULL;
+
+    if (service == NULL || !frame_fd_valid(frame_fd)) {
+        return false;
+    }
+    memset(service, 0, sizeof(*service));
+    service->backend = SERVICE_BACKEND_SIMULATOR;
+    service->control_fd = -1;
+    service->media_fd = -1;
+    service->frame_fd = frame_fd;
+    service->host_clock_epoch = config.composition_clock_epoch;
+    service->scene_space_epoch = UINT64_C(5002);
+    service->simulator_monotonic_ns = 0U;
+    service->edge_arena_size =
+        meiso_composition_edge_simulator_memory_required(&config);
+    alignment = meiso_composition_edge_simulator_alignment_required();
+    if (service->edge_arena_size == 0U || alignment == 0U ||
+        posix_memalign(&arena, alignment, service->edge_arena_size) != 0) {
+        return false;
+    }
+    memset(arena, 0, service->edge_arena_size);
+    init_status = meiso_composition_edge_simulator_init(
+        arena, service->edge_arena_size, &config, &service->edge
+    );
+    if (init_status != MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_OK ||
+        meiso_composition_edge_simulator_activate(service->edge) !=
+            MEISO_EDGE_OK) {
+        free(arena);
+        service->edge = NULL;
+        return false;
+    }
+    service->edge_arena = arena;
+    return true;
+}
+
 static void destroy_service(Service *service)
 {
     if (service == NULL) {
         return;
     }
-    if (service->app != NULL) {
+    if (service->backend == SERVICE_BACKEND_SIMULATOR &&
+        service->edge != NULL) {
+        (void)meiso_composition_edge_simulator_terminate(
+            service->edge, MEISO_EDGE_TERMINAL_LOCAL_ABORT
+        );
+    } else if (service->app != NULL) {
         (void)meiso_composition_host_app_abort(
             service->app, MEISO_COMPOSITION_HOST_APP_TERMINAL_LOCAL_ABORT, 0
         );
@@ -2714,21 +2881,48 @@ static void destroy_service(Service *service)
 static bool drain_latest_frames(Service *service)
 {
     MeisoCompositionHostAppSnapshot snapshot;
+    MeisoCompositionEdgeSnapshot edge_snapshot;
+    MeisoCompositionHostAppMediaRouteMask active_mask = 0U;
     uint8_t scan;
 
     if (service->frame_output.pending) {
         return true;
     }
-    if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
-        return false;
+    if (service->backend == SERVICE_BACKEND_SIMULATOR) {
+        if (meiso_composition_edge_snapshot(service->edge, &edge_snapshot) !=
+            MEISO_EDGE_OK) {
+            return false;
+        }
+        if (edge_snapshot.actual[
+                MEISO_COMPOSITION_EDGE_ACTUAL_RENDER_MEDIA
+            ].present && edge_snapshot.actual[
+                MEISO_COMPOSITION_EDGE_ACTUAL_RENDER_MEDIA
+            ].effective_enabled) {
+            active_mask |= MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER;
+        }
+        if (edge_snapshot.actual[
+                MEISO_COMPOSITION_EDGE_ACTUAL_CAMERA_MEDIA
+            ].present && edge_snapshot.actual[
+                MEISO_COMPOSITION_EDGE_ACTUAL_CAMERA_MEDIA
+            ].effective_enabled) {
+            active_mask |= MEISO_COMPOSITION_HOST_APP_MEDIA_CAMERA;
+        }
+    } else {
+        if (!meiso_composition_host_app_snapshot(service->app, &snapshot)) {
+            return false;
+        }
+        if (!snapshot.media_bound) {
+            return true;
+        }
+        active_mask = snapshot.media_active_route_mask;
     }
-    if (!snapshot.media_bound || snapshot.media_active_route_mask == 0U) {
+    if (active_mask == 0U) {
         return true;
     }
-    if ((snapshot.media_active_route_mask &
+    if ((active_mask &
          (uint8_t)(UINT8_C(1) << service->frame_drain_cursor)) == 0U) {
         service->frame_drain_cursor =
-            (snapshot.media_active_route_mask &
+            (active_mask &
              MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER) != 0U ? 0U : 1U;
     }
     for (scan = 0U; scan < MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT;
@@ -2742,7 +2936,7 @@ static bool drain_latest_frames(Service *service)
             MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA;
         bool emitted;
 
-        if ((snapshot.media_active_route_mask & route_mask) == 0U) {
+        if ((active_mask & route_mask) == 0U) {
             continue;
         }
         if (!queue_frame_output(service, source, &emitted)) {
@@ -2762,11 +2956,13 @@ static bool run_service(Service *service)
 {
     bool progress;
 
-    if (!emit_line(
+    if (!emit_line(service->backend == SERVICE_BACKEND_SIMULATOR ?
+            "{\"type\":\"service.ready\",\"profile\":\"composition-v3\","
+            "\"wire_owner\":\"simulator_service\",\"asset_import\":\"builtin_cube_only\","
+            "\"frame_projection\":\"CMFB/v1\"}" :
             "{\"type\":\"service.ready\",\"profile\":\"composition-v3\","
             "\"wire_owner\":\"native_service\",\"asset_import\":\"builtin_cube_only\","
-            "\"frame_projection\":\"CMFB/v1\"}"
-        )) {
+            "\"frame_projection\":\"CMFB/v1\"}")) {
         return false;
     }
     while (!service->close_requested) {
@@ -2782,6 +2978,8 @@ static bool run_service(Service *service)
         bool processed;
         uint8_t scan;
         bool virtual_action = false;
+
+        memset(&interest, 0, sizeof(interest));
 
         for (scan = 0U; scan < 3U; ++scan) {
             uint8_t domain = (uint8_t)((service->loop_cursor + scan) % 3U);
@@ -2825,8 +3023,11 @@ static bool run_service(Service *service)
             service->close_requested = true;
             break;
         }
-        if (!reconcile_media(service) || !drain_latest_frames(service) ||
-            !meiso_composition_host_app_readiness(service->app, &interest)) {
+        if ((service->backend == SERVICE_BACKEND_REMOTE &&
+             (!reconcile_media(service) ||
+              !meiso_composition_host_app_readiness(service->app,
+                                                     &interest))) ||
+            !drain_latest_frames(service)) {
             return false;
         }
 
@@ -2835,7 +3036,8 @@ static bool run_service(Service *service)
             descriptors[descriptor_count++] =
                 (struct pollfd){STDIN_FILENO, POLLIN, 0};
         }
-        if (interest.control_read || interest.control_write) {
+        if (service->backend == SERVICE_BACKEND_REMOTE &&
+            (interest.control_read || interest.control_write)) {
             control_index = (int)descriptor_count;
             descriptors[descriptor_count++] = (struct pollfd){
                 service->control_fd,
@@ -2843,7 +3045,8 @@ static bool run_service(Service *service)
                         (interest.control_write ? POLLOUT : 0)), 0
             };
         }
-        if (service->media_fd >= 0 &&
+        if (service->backend == SERVICE_BACKEND_REMOTE &&
+            service->media_fd >= 0 &&
             (service->media_connecting || interest.media_read ||
              interest.media_write)) {
             media_index = (int)descriptor_count;
@@ -2957,6 +3160,7 @@ int meiso_composition_debug_host_run(int argc, char **argv)
     int frame_fd = -1;
     int index;
     bool interactive = false;
+    bool simulator = false;
     ServiceConfig config;
     Service *service = NULL;
     struct sigaction action;
@@ -2975,6 +3179,12 @@ int meiso_composition_debug_host_run(int argc, char **argv)
                 return 2;
             }
             interactive = true;
+        } else if (strcmp(argv[index], "--simulator") == 0) {
+            if (simulator) {
+                fputs("E_ARGUMENT\n", stderr);
+                return 2;
+            }
+            simulator = true;
         } else if (strcmp(argv[index], "--frame-fd") == 0 &&
                    index + 1 < argc && frame_fd < 0) {
             if (!parse_frame_fd(argv[++index], &frame_fd)) {
@@ -2986,8 +3196,12 @@ int meiso_composition_debug_host_run(int argc, char **argv)
             return 2;
         }
     }
-    if (config_path == NULL || !interactive ||
-        !load_config(config_path, &config)) {
+    if (!interactive || (simulator && config_path != NULL)) {
+        fputs("E_ARGUMENT\n", stderr);
+        return 2;
+    }
+    if (!simulator && (config_path == NULL ||
+                       !load_config(config_path, &config))) {
         fputs("E_CONFIG\n", stderr);
         return 2;
     }
@@ -3004,7 +3218,8 @@ int meiso_composition_debug_host_run(int argc, char **argv)
         fputs("E_MEMORY\n", stderr);
         goto done;
     }
-    if (!initialize_service(service, &config, frame_fd)) {
+    if (!(simulator ? initialize_simulator_service(service, frame_fd) :
+                      initialize_remote_service(service, &config, frame_fd))) {
         fputs("E_INIT\n", stderr);
         goto done;
     }

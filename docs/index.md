@@ -22,6 +22,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   `include/meiso_composition_edge.h` 只给应用 opaque handle、typed command/snapshot 和
   media borrow；`include/meiso_composition_edge_simulator.h`提供caller-owned显式step simulator，
   包含deterministic Wi-Fi、可选DeviceTelemetry、两路media与opt-in离线Mesh→Scene/C2→RenderResult子集；
+  `devtools/macos/composition_debug_host.c`的显式`--simulator`模式和本地Dashboard
+  `--native-simulator`把同一opaque handle接成真实native离线编辑器子进程；该入口不建立Session/TCP、
+  不发布CMFB frame，也不扩大target或physical evidence；
   [Composition Edge deterministic trace v1](composition-edge-trace-v1.md)固定caller-owned canonical
   trace bytes、closed event order、integrity与逐record replay；
   `devtools/composition_virtual_edge_host.*`承载当前HostApp integration与两backend dispatch，仍由

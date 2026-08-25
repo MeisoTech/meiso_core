@@ -1313,18 +1313,26 @@ done:
     return NULL;
 }
 
-static bool run_service(
+static bool run_service_mode(
     const char *config_contents,
+    bool simulator,
     const char *input,
     size_t input_size,
     RunResult *out_result
 )
 {
-    char config_path[sizeof("/tmp/meiso-composition-debug-host-XXXXXX")];
-    char *arguments[] = {
+    char config_path[sizeof("/tmp/meiso-composition-debug-host-XXXXXX")] =
+        {0};
+    char *remote_arguments[] = {
         (char *)"composition_debug_host",
         (char *)"--config",
         config_path,
+        (char *)"--interactive",
+        NULL
+    };
+    char *simulator_arguments[] = {
+        (char *)"composition_debug_host",
+        (char *)"--simulator",
         (char *)"--interactive",
         NULL
     };
@@ -1339,8 +1347,11 @@ static bool run_service(
     Writer writer;
     bool ok = false;
 
-    if (config_contents == NULL || input == NULL || out_result == NULL ||
-        !write_config_file(config_contents, config_path, sizeof(config_path))) {
+    if (input == NULL || out_result == NULL ||
+        (!simulator &&
+         (config_contents == NULL ||
+          !write_config_file(config_contents, config_path,
+                             sizeof(config_path))))) {
         return false;
     }
     memset(out_result, 0, sizeof(*out_result));
@@ -1373,7 +1384,10 @@ static bool run_service(
         goto done;
     }
     writer_started = true;
-    out_result->exit_code = meiso_composition_debug_host_run(4, arguments);
+    out_result->exit_code = meiso_composition_debug_host_run(
+        simulator ? 3 : 4,
+        simulator ? simulator_arguments : remote_arguments
+    );
     if (fflush(NULL) != 0 || dup2(saved_input, STDIN_FILENO) < 0 ||
         dup2(saved_output, STDOUT_FILENO) < 0 ||
         dup2(saved_error, STDERR_FILENO) < 0) {
@@ -1420,8 +1434,31 @@ done:
     close_fd(&output_pipe[1]);
     close_fd(&error_pipe[0]);
     close_fd(&error_pipe[1]);
-    (void)unlink(config_path);
+    if (!simulator) {
+        (void)unlink(config_path);
+    }
     return ok;
+}
+
+static bool run_service(
+    const char *config_contents,
+    const char *input,
+    size_t input_size,
+    RunResult *out_result
+)
+{
+    return run_service_mode(
+        config_contents, false, input, input_size, out_result
+    );
+}
+
+static bool run_simulator_service(
+    const char *input,
+    size_t input_size,
+    RunResult *out_result
+)
+{
+    return run_service_mode(NULL, true, input, input_size, out_result);
 }
 
 static bool run_media_service(
@@ -1866,6 +1903,86 @@ static bool test_sigpipe_restore(void)
     return true;
 }
 
+static bool test_offline_simulator_editor_flow(void)
+{
+    char input[INPUT_BYTES];
+    size_t size = 0U;
+    uint64_t request_id;
+    RunResult result;
+
+    CHECK(append_text(
+        input, sizeof(input), &size,
+        "{\"command\":\"asset.load_builtin\",\"request_id\":1,"
+        "\"asset_handle\":\"cube\"}\n"
+    ));
+    CHECK(append_scene(input, sizeof(input), &size, 2U, 1U, false));
+    CHECK(append_text(
+        input, sizeof(input), &size,
+        "{\"command\":\"set_presentation\",\"request_id\":3,"
+        "\"enabled\":true,\"use_safety_frame\":false,"
+        "\"target_width\":320,\"target_height\":240,"
+        "\"color_format\":\"rgba8888\","
+        "\"depth_format\":\"implementation32\","
+        "\"max_result_hz\":10,\"offline_lease_ms\":1000}\n"
+        "{\"command\":\"set_render_media\",\"request_id\":4,"
+        "\"enabled\":true,\"pixel_format\":\"rgba8888\","
+        "\"codec\":\"raw\",\"width\":320,\"height\":240,"
+        "\"fps_millihz\":1000,\"bitrate_bps\":0,"
+        "\"gop_frames\":1,\"request_key\":true}\n"
+        "{\"command\":\"set_camera_media\",\"request_id\":5,"
+        "\"enabled\":true,\"pixel_format\":\"nv12\","
+        "\"codec\":\"raw\",\"width\":320,\"height\":240,"
+        "\"fps_millihz\":1000,\"bitrate_bps\":0,"
+        "\"gop_frames\":1,\"request_key\":true}\n"
+        "{\"command\":\"set_wifi\",\"request_id\":6,"
+        "\"enabled\":true,\"selected_fields\":3,"
+        "\"sample_period_ms\":1000}\n"
+        "{\"command\":\"set_device\",\"request_id\":7,"
+        "\"enabled\":true,\"selected_fields\":14,"
+        "\"sample_period_ms\":1000}\n"
+    ));
+    for (request_id = 8U; request_id <= 16U; ++request_id) {
+        CHECK(append_text(
+            input, sizeof(input), &size,
+            "{\"command\":\"snapshot\",\"request_id\":%llu}\n",
+            (unsigned long long)request_id
+        ));
+    }
+    CHECK(append_text(
+        input, sizeof(input), &size,
+        "{\"command\":\"close\",\"request_id\":17}\n"
+    ));
+    CHECK(run_simulator_service(input, size, &result));
+    CHECK(result.exit_code == 0);
+    CHECK(result.writer_error == 0);
+    CHECK(result.error_size == 0U);
+    CHECK(strstr(
+        result.output,
+        "{\"type\":\"service.ready\",\"profile\":\"composition-v3\","
+        "\"wire_owner\":\"simulator_service\""
+    ) == result.output);
+    CHECK(occurrence_count(result.output, "\"type\":\"command.receipt\"") ==
+          7U);
+    CHECK(strstr(result.output, "\"channel\":\"presentation\"") != NULL);
+    CHECK(strstr(result.output, "\"channel\":\"scene\"") != NULL);
+    CHECK(strstr(result.output, "\"channel\":\"wifi\"") != NULL);
+    CHECK(strstr(result.output, "\"channel\":\"device\"") != NULL);
+    CHECK(strstr(result.output, "\"channel\":\"render_media\"") != NULL);
+    CHECK(strstr(result.output, "\"channel\":\"camera_media\"") != NULL);
+    CHECK(strstr(result.output, "\"type\":\"render.result\"") != NULL);
+    CHECK(strstr(result.output, "\"reason\":\"ready\"") != NULL);
+    CHECK(strstr(result.output, "\"control_ready\":false") != NULL);
+    CHECK(strstr(result.output, "\"media_bound\":false") != NULL);
+    CHECK(strstr(result.output, "\"media_mask\":\"none\"") != NULL);
+    CHECK(strstr(result.output, "\"render_frame\":false") != NULL);
+    CHECK(strstr(result.output, "\"camera_frame\":false") != NULL);
+    CHECK(strstr(result.output, "\"type\":\"media.connected\"") == NULL);
+    CHECK(strstr(result.output, "\"type\":\"closing\",\"request_id\":17") !=
+          NULL);
+    CHECK(output_is_closed_ndjson(result.output));
+    return true;
+}
+
 static bool test_media_reconnect_barrier_no_frame(void)
 {
     char config[CONFIG_BYTES];
@@ -1956,7 +2073,7 @@ int main(void)
     if (!test_config_rejections() || !test_numeric_connect_failure() ||
         !test_pre_ready_commands_and_redaction() ||
         !test_large_hup_drain() || !test_partial_line_eof() ||
-        !test_sigpipe_restore() ||
+        !test_sigpipe_restore() || !test_offline_simulator_editor_flow() ||
         !test_media_reconnect_barrier_no_frame()) {
         return 1;
     }
