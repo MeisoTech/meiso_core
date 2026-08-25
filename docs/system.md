@@ -63,6 +63,12 @@ Virtual Edge 不是透明远程内存：
 - simulator、in-process loopback、recorded replay 和 physical Edge 可以实现同一 facade，
   但各自证据范围不同。
 
+当前Composition Profile v3有两个可执行backend：remote/loopback HostApp adapter投影完整已实现子集；
+caller-owned deterministic simulator以显式activate/step实现Wi-Fi State/Stream与render/camera media
+State/read。两者返回同一种opaque handle，application-only TU不读取backend tag。Simulator不读wall
+clock、不建thread/socket，也不把recorded sample/frame冒充physical truth；未实现的Blob/Composition/
+device操作明确`unsupported`。
+
 `EdgeHandle` 的公开生命周期绑定一段连续的 Session/catalog truth。Host integration 拥有
 连接、event loop、Runtime pump 和 backend replacement；应用只能读取 handle 的
 `online / resource-graph-live / terminal`、本地 continuity 与 capability/resource view，
@@ -165,8 +171,9 @@ Core Stream data route；source v0 / wire v2 的三套 Host test 支持
 probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 Profile/platform evidence，
 不是portable Runtime的通用能力。Composition Profile v3 已有首个 Host-facing `EdgeHandle` facade，
 把 accepted 6/18 graph、typed State/Stream/Blob/Composition 与 external media read 投影给应用；它
-仍是固定 HostApp backend 的 Host evidence。通用hotplug、Action、Edge→Host/并行/resumable Blob
-route、通用 Virtual Edge backend、discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
+已有固定HostApp adapter与caller-owned deterministic simulator两种backend evidence；后者只覆盖Wi-Fi与
+两路media子集。通用hotplug、Action、Edge→Host/并行/resumable Blob route、通用plugin backend、
+discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
 专用的caller-owned fair scheduler；它是Runtime--SDK对象，不是Core/wire或通用产品QoS。
 `composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
 Blob carriage。Profile v1 保留 MRT0 v2，明确拒绝 Blob/IMMUTABLE route；Profile v2 显式选择

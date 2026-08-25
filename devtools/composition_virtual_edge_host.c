@@ -1,4 +1,5 @@
 #include "composition_virtual_edge_host.h"
+#include "meiso_composition_edge_simulator.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -9,6 +10,14 @@
     (MEISO_EDGE_OPERATION_STATE_READ | MEISO_EDGE_OPERATION_STATE_SUBMIT |   \
      MEISO_EDGE_OPERATION_STREAM_READ | MEISO_EDGE_OPERATION_BLOB_PUT |      \
      MEISO_EDGE_OPERATION_COMPOSITION | MEISO_EDGE_OPERATION_MEDIA_READ)
+#define SIMULATOR_SUPPORTED_OPERATIONS                                        \
+    (MEISO_EDGE_OPERATION_STATE_READ | MEISO_EDGE_OPERATION_STATE_SUBMIT |   \
+     MEISO_EDGE_OPERATION_STREAM_READ | MEISO_EDGE_OPERATION_MEDIA_READ)
+
+enum {
+    EDGE_BACKEND_HOST = 1,
+    EDGE_BACKEND_SIMULATOR = 2
+};
 
 _Static_assert(MEISO_COMPOSITION_EDGE_DESIRED_COUNT ==
                    MEISO_COMPOSITION_HOST_APP_DESIRED_COUNT,
@@ -81,8 +90,23 @@ typedef struct {
     MeisoCompositionMediaFrameRef ref;
 } MediaBorrow;
 
+typedef struct {
+    bool pending;
+    bool enabled;
+    MeisoCompositionMediaDesired desired;
+} SimulatorMediaPending;
+
+typedef struct {
+    uint8_t *buffer;
+    size_t capacity;
+    bool present;
+    bool borrowed;
+    MeisoEdgeMediaFrameView frame;
+} SimulatorMediaRoute;
+
 struct MeisoEdgeHandle {
     uint64_t magic;
+    uint8_t backend_kind;
     uintptr_t arena_begin;
     uintptr_t arena_end;
     uintptr_t host_arena_begin;
@@ -99,6 +123,24 @@ struct MeisoEdgeHandle {
     MeisoCompositionSessionV3RouteDescriptor
         routes[MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT];
     MediaBorrow media_borrows[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
+    MeisoCompositionSessionV3CatalogConfig simulator_catalog;
+    MeisoCompositionEdgeSnapshot simulator_snapshot;
+    MeisoOwnerScope simulator_desired_owner;
+    uint64_t simulator_next_command_id;
+    uint64_t simulator_wifi_epoch;
+    bool simulator_wifi_epoch_available;
+    uint64_t simulator_media_epoch[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
+    bool simulator_media_epoch_available[
+        MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT
+    ];
+    bool simulator_wifi_pending;
+    bool simulator_wifi_enabled;
+    MeisoWifiTelemetryDesiredParameters simulator_wifi_desired;
+    MeisoWifiTelemetrySample simulator_wifi_sample;
+    SimulatorMediaPending
+        simulator_media_pending[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
+    SimulatorMediaRoute
+        simulator_media[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
 };
 
 static bool checked_range(
@@ -119,6 +161,15 @@ static bool checked_range(
     }
     *out_begin = begin;
     *out_end = begin + size;
+    return true;
+}
+
+static bool checked_add_size(size_t lhs, size_t rhs, size_t *out)
+{
+    if (out == NULL || lhs > SIZE_MAX - rhs) {
+        return false;
+    }
+    *out = lhs + rhs;
     return true;
 }
 
@@ -147,17 +198,27 @@ static bool handle_valid(const MeisoEdgeHandle *handle)
     uintptr_t app_begin;
     uintptr_t app_end;
 
-    return handle != NULL && handle->magic == EDGE_HANDLE_MAGIC &&
-        handle->arena_begin == (uintptr_t)handle &&
-        handle->arena_end > handle->arena_begin &&
-        handle->arena_end - handle->arena_begin >= sizeof(*handle) &&
-        handle->host_arena_end > handle->host_arena_begin &&
+    if (handle == NULL || handle->magic != EDGE_HANDLE_MAGIC ||
+        (handle->backend_kind != EDGE_BACKEND_HOST &&
+         handle->backend_kind != EDGE_BACKEND_SIMULATOR)) {
+        return false;
+    }
+    if (handle->arena_begin != (uintptr_t)handle ||
+        handle->arena_end <= handle->arena_begin ||
+        handle->arena_end - handle->arena_begin < sizeof(*handle) ||
+        handle->catalog_generation == 0U ||
+        handle->continuity_serial == 0U) {
+        return false;
+    }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        return handle->host_app == NULL && handle->host_arena_begin == 0U &&
+            handle->host_arena_end == 0U;
+    }
+    return handle->host_arena_end > handle->host_arena_begin &&
         handle->host_app != NULL &&
         checked_range(handle->host_app, 1U, &app_begin, &app_end) &&
         range_inside(handle->host_arena_begin, handle->host_arena_end,
-                     app_begin, app_end) &&
-        handle->catalog_generation != 0U &&
-        handle->continuity_serial != 0U;
+                     app_begin, app_end);
 }
 
 static bool disjoint_from_handle_storage(
@@ -171,8 +232,9 @@ static bool disjoint_from_handle_storage(
 
     return checked_range(pointer, size, &begin, &end) &&
         !ranges_overlap(begin, end, handle->arena_begin, handle->arena_end) &&
-        !ranges_overlap(begin, end, handle->host_arena_begin,
-                        handle->host_arena_end);
+        (handle->backend_kind != EDGE_BACKEND_HOST ||
+         !ranges_overlap(begin, end, handle->host_arena_begin,
+                         handle->host_arena_end));
 }
 
 static bool optional_input_disjoint(
@@ -502,6 +564,7 @@ meiso_composition_virtual_edge_host_init(
         return MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_INTERNAL_FAILURE;
     }
     candidate.magic = EDGE_HANDLE_MAGIC;
+    candidate.backend_kind = EDGE_BACKEND_HOST;
     candidate.arena_begin = arena_begin;
     candidate.arena_end = owned_arena_end;
     candidate.host_arena_begin = host_begin;
@@ -555,7 +618,9 @@ MeisoEdgeStatus meiso_edge_snapshot(
                                       sizeof(*out_snapshot))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
-    if (!read_host_snapshot(handle, &host, &candidate)) {
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        candidate = handle->simulator_snapshot.edge;
+    } else if (!read_host_snapshot(handle, &host, &candidate)) {
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
     memmove(out_snapshot, &candidate, sizeof(candidate));
@@ -579,7 +644,9 @@ MeisoEdgeStatus meiso_edge_operation_supported(
                                       sizeof(*out_supported))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
-    if (!read_host_snapshot(handle, &host, &edge)) {
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        edge = handle->simulator_snapshot.edge;
+    } else if (!read_host_snapshot(handle, &host, &edge)) {
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
     if (edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
@@ -608,7 +675,9 @@ MeisoEdgeStatus meiso_edge_endpoint_at(
                                       sizeof(*out_endpoint))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
-    if (!read_host_snapshot(handle, &host, &edge)) {
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        edge = handle->simulator_snapshot.edge;
+    } else if (!read_host_snapshot(handle, &host, &edge)) {
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
     if (edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
@@ -644,7 +713,9 @@ MeisoEdgeStatus meiso_edge_resource_at(
                                       sizeof(*out_resource))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
-    if (!read_host_snapshot(handle, &host, &edge)) {
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        edge = handle->simulator_snapshot.edge;
+    } else if (!read_host_snapshot(handle, &host, &edge)) {
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
     if (edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
@@ -680,6 +751,111 @@ MeisoEdgeStatus meiso_edge_resource_at(
         MEISO_EDGE_PAYLOAD_EXTERNAL_MEDIA : MEISO_EDGE_PAYLOAD_INLINE;
     memmove(out_resource, &candidate, sizeof(candidate));
     return MEISO_EDGE_OK;
+}
+
+static MeisoEdgeStatus simulator_command_preflight(
+    const MeisoEdgeHandle *handle
+)
+{
+    if (handle->simulator_snapshot.edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
+        return MEISO_EDGE_TERMINAL;
+    }
+    if (handle->simulator_next_command_id == UINT64_MAX) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    return MEISO_EDGE_OK;
+}
+
+static MeisoEdgeStatus simulator_queue_desired(
+    MeisoEdgeHandle *handle,
+    MeisoCompositionEdgeDesiredChannel channel,
+    MeisoEdgeCommandKind kind,
+    bool enabled,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    MeisoCompositionEdgeDesiredView *desired;
+    MeisoEdgeCommandReceipt receipt;
+    uint64_t next_version;
+    MeisoEdgeStatus status = simulator_command_preflight(handle);
+
+    if (status != MEISO_EDGE_OK) {
+        return status;
+    }
+    desired = &handle->simulator_snapshot.desired[channel];
+    if (desired->state_version == UINT64_MAX ||
+        (desired->delivery_pending &&
+         desired->replaced_pending_count == UINT64_MAX)) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    next_version = desired->state_version + 1U;
+    memset(&receipt, 0, sizeof(receipt));
+    receipt.command_id = ++handle->simulator_next_command_id;
+    receipt.kind = kind;
+    receipt.local_result = desired->delivery_pending ?
+        MEISO_EDGE_LOCAL_REPLACED_PENDING : MEISO_EDGE_LOCAL_QUEUED;
+    receipt.replaced_command_present = desired->delivery_pending;
+    receipt.replaced_command_id = desired->delivery_pending ?
+        desired->command_id : 0U;
+    receipt.desired_state_present = true;
+    receipt.desired_channel = channel;
+    receipt.desired_state_version = next_version;
+    *desired = (MeisoCompositionEdgeDesiredView){
+        true,
+        enabled,
+        receipt.command_id,
+        handle->simulator_desired_owner,
+        next_version,
+        false,
+        true,
+        false,
+        false,
+        desired->replaced_pending_count +
+            (receipt.replaced_command_present ? 1U : 0U),
+        false,
+        0U,
+        {0},
+        0U,
+        false,
+        false,
+        false
+    };
+    memmove(out_receipt, &receipt, sizeof(receipt));
+    return MEISO_EDGE_OK;
+}
+
+static void simulator_apply_actual(
+    MeisoEdgeHandle *handle,
+    MeisoCompositionEdgeDesiredChannel channel,
+    uint64_t production_epoch
+)
+{
+    MeisoCompositionEdgeDesiredView *desired =
+        &handle->simulator_snapshot.desired[channel];
+    MeisoCompositionEdgeActualView *actual =
+        &handle->simulator_snapshot.actual[channel];
+    MeisoRuntimeDesiredReference reference = {
+        true, desired->owner, desired->state_version
+    };
+
+    desired->delivery_pending = false;
+    desired->delivery_accepted = true;
+    *actual = (MeisoCompositionEdgeActualView){
+        true,
+        desired->owner,
+        desired->state_version,
+        reference,
+        reference,
+        MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        desired->enabled,
+        desired->enabled ? MEISO_RUNTIME_PRODUCTION_RUNNING :
+            MEISO_RUNTIME_PRODUCTION_STOPPED,
+        desired->enabled ? MEISO_RUNTIME_PRODUCTION_REASON_NONE :
+            MEISO_RUNTIME_PRODUCTION_REASON_DISABLED,
+        desired->enabled ? production_epoch : 0U,
+        true
+    };
 }
 
 static MeisoEdgeStatus finish_command(
@@ -721,6 +897,10 @@ MeisoEdgeStatus meiso_composition_edge_put_mesh(
                        sizeof(*out_receipt))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        preflight = simulator_command_preflight(handle);
+        return preflight == MEISO_EDGE_OK ? MEISO_EDGE_UNSUPPORTED : preflight;
+    }
     preflight = command_preflight(handle, &host);
     if (preflight != MEISO_EDGE_OK) {
         return preflight;
@@ -759,6 +939,10 @@ MeisoEdgeStatus meiso_composition_edge_set_scene(
     if (!typed_command_ranges_valid(handle, value, input_size, out_receipt)) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        preflight = simulator_command_preflight(handle);
+        return preflight == MEISO_EDGE_OK ? MEISO_EDGE_UNSUPPORTED : preflight;
+    }
     preflight = command_preflight(handle, &host);
     if (preflight != MEISO_EDGE_OK) {
         return preflight;
@@ -786,6 +970,10 @@ MeisoEdgeStatus meiso_composition_edge_set_presentation(
                                     out_receipt)) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        preflight = simulator_command_preflight(handle);
+        return preflight == MEISO_EDGE_OK ? MEISO_EDGE_UNSUPPORTED : preflight;
+    }
     if (settings != NULL) {
         mapped = (MeisoCompositionHostAppPresentationSettings){
             settings->flags,
@@ -808,7 +996,77 @@ MeisoEdgeStatus meiso_composition_edge_set_presentation(
                           &receipt, out_receipt);
 }
 
-#define DEFINE_TYPED_COMMAND(function_name, host_function, value_type)           \
+static MeisoEdgeStatus simulator_set_wifi(
+    MeisoEdgeHandle *handle,
+    bool enabled,
+    const MeisoWifiTelemetryDesiredParameters *value,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    MeisoEdgeStatus status;
+
+    if ((enabled && (value == NULL ||
+                     !meiso_wifi_telemetry_parameters_supported(
+                         &handle->simulator_catalog.wifi_capability, value))) ||
+        (!enabled && value != NULL)) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (enabled && !handle->simulator_wifi_epoch_available) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    status = simulator_queue_desired(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_WIFI,
+        MEISO_EDGE_COMMAND_SET_WIFI, enabled, out_receipt
+    );
+    if (status == MEISO_EDGE_OK) {
+        handle->simulator_wifi_pending = true;
+        handle->simulator_wifi_enabled = enabled;
+        handle->simulator_wifi_desired = enabled ? *value :
+            (MeisoWifiTelemetryDesiredParameters){0U, 0U};
+    }
+    return status;
+}
+
+static MeisoEdgeStatus simulator_set_media(
+    MeisoEdgeHandle *handle,
+    size_t index,
+    bool enabled,
+    const MeisoCompositionMediaDesired *value,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    const MeisoCompositionMediaCapability *capability = index == 0U ?
+        &handle->simulator_catalog.render_media_capability :
+        &handle->simulator_catalog.camera_media_capability;
+    MeisoCompositionEdgeDesiredChannel channel = index == 0U ?
+        MEISO_COMPOSITION_EDGE_DESIRED_RENDER_MEDIA :
+        MEISO_COMPOSITION_EDGE_DESIRED_CAMERA_MEDIA;
+    MeisoEdgeCommandKind kind = index == 0U ?
+        MEISO_EDGE_COMMAND_SET_RENDER_MEDIA :
+        MEISO_EDGE_COMMAND_SET_CAMERA_MEDIA;
+    MeisoEdgeStatus status;
+
+    if ((enabled && (value == NULL ||
+                     !meiso_composition_media_desired_supported(
+                         capability, value))) || (!enabled && value != NULL)) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (enabled && !handle->simulator_media_epoch_available[index]) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    status = simulator_queue_desired(
+        handle, channel, kind, enabled, out_receipt
+    );
+    if (status == MEISO_EDGE_OK) {
+        handle->simulator_media_pending[index].pending = true;
+        handle->simulator_media_pending[index].enabled = enabled;
+        handle->simulator_media_pending[index].desired = enabled ? *value :
+            (MeisoCompositionMediaDesired){0};
+    }
+    return status;
+}
+
+#define DEFINE_TYPED_COMMAND(function_name, host_function, value_type, sim_body) \
 MeisoEdgeStatus function_name(                                                  \
     MeisoEdgeHandle *handle, bool enabled, const value_type *value,             \
     MeisoEdgeCommandReceipt *out_receipt                                        \
@@ -821,6 +1079,9 @@ MeisoEdgeStatus function_name(                                                  
     if (!typed_command_ranges_valid(handle, value, input_size, out_receipt)) {   \
         return MEISO_EDGE_INVALID_ARGUMENT;                                     \
     }                                                                           \
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {                       \
+        sim_body;                                                               \
+    }                                                                           \
     preflight = command_preflight(handle, &host);                               \
     if (preflight != MEISO_EDGE_OK) {                                           \
         return preflight;                                                       \
@@ -832,16 +1093,25 @@ MeisoEdgeStatus function_name(                                                  
 
 DEFINE_TYPED_COMMAND(meiso_composition_edge_set_wifi,
                      meiso_composition_host_app_set_wifi,
-                     MeisoWifiTelemetryDesiredParameters)
+                     MeisoWifiTelemetryDesiredParameters,
+                     return simulator_set_wifi(handle, enabled, value,
+                                               out_receipt))
 DEFINE_TYPED_COMMAND(meiso_composition_edge_set_device,
                      meiso_composition_host_app_set_device,
-                     MeisoDeviceTelemetryParameters)
+                     MeisoDeviceTelemetryParameters,
+                     preflight = simulator_command_preflight(handle);
+                     return preflight == MEISO_EDGE_OK ?
+                         MEISO_EDGE_UNSUPPORTED : preflight)
 DEFINE_TYPED_COMMAND(meiso_composition_edge_set_render_media,
                      meiso_composition_host_app_set_render_media,
-                     MeisoCompositionMediaDesired)
+                     MeisoCompositionMediaDesired,
+                     return simulator_set_media(handle, 0U, enabled, value,
+                                                out_receipt))
 DEFINE_TYPED_COMMAND(meiso_composition_edge_set_camera_media,
                      meiso_composition_host_app_set_camera_media,
-                     MeisoCompositionMediaDesired)
+                     MeisoCompositionMediaDesired,
+                     return simulator_set_media(handle, 1U, enabled, value,
+                                                out_receipt))
 
 #undef DEFINE_TYPED_COMMAND
 
@@ -936,6 +1206,11 @@ MeisoEdgeStatus meiso_composition_edge_snapshot(
         !disjoint_from_handle_storage(handle, out_snapshot,
                                       sizeof(*out_snapshot))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        memmove(out_snapshot, &handle->simulator_snapshot,
+                sizeof(*out_snapshot));
+        return MEISO_EDGE_OK;
     }
     memset(&candidate, 0, sizeof(candidate));
     if (!meiso_composition_host_app_snapshot(handle->host_app, &host) ||
@@ -1058,6 +1333,29 @@ MeisoEdgeStatus meiso_composition_edge_media_latest(
     if (index < 0) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        SimulatorMediaRoute *route =
+            &handle->simulator_media[(size_t)index];
+        const MeisoEdgeSnapshot *sim_edge =
+            &handle->simulator_snapshot.edge;
+        if (sim_edge->phase == MEISO_EDGE_PHASE_TERMINAL) {
+            return MEISO_EDGE_TERMINAL;
+        }
+        if (!sim_edge->resource_graph_live ||
+            !handle->simulator_snapshot.media[(size_t)index]
+                 .actual_binding_ready) {
+            return MEISO_EDGE_NOT_READY;
+        }
+        if (!route->present) {
+            return MEISO_EDGE_NO_DATA;
+        }
+        if (route->borrowed) {
+            return MEISO_EDGE_BUSY;
+        }
+        route->borrowed = true;
+        memmove(out_frame, &route->frame, sizeof(*out_frame));
+        return MEISO_EDGE_OK;
+    }
     if (!read_host_snapshot(handle, &host, &edge)) {
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
@@ -1123,6 +1421,39 @@ MeisoEdgeStatus meiso_composition_edge_media_release(
     if (index < 0) {
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
+    if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
+        SimulatorMediaRoute *route =
+            &handle->simulator_media[(size_t)index];
+        const MeisoEdgeSnapshot *sim_edge =
+            &handle->simulator_snapshot.edge;
+        if (sim_edge->phase == MEISO_EDGE_PHASE_TERMINAL) {
+            return MEISO_EDGE_TERMINAL;
+        }
+        if (!sim_edge->resource_graph_live) {
+            return MEISO_EDGE_NOT_READY;
+        }
+        if (!route->borrowed ||
+            expected_frame->continuity_serial !=
+                handle->continuity_serial ||
+            expected_frame->source != route->frame.key.source ||
+            expected_frame->media_stream_epoch !=
+                route->frame.key.media_stream_epoch ||
+            expected_frame->frame_sequence !=
+                route->frame.key.frame_sequence) {
+            return MEISO_EDGE_STALE;
+        }
+        route->borrowed = false;
+        route->present = false;
+        memset(&route->frame, 0, sizeof(route->frame));
+        handle->simulator_snapshot.media[(size_t)index].latest_present = false;
+        handle->simulator_snapshot.media[(size_t)index]
+            .latest_frame_sequence = 0U;
+        handle->simulator_snapshot.media[(size_t)index]
+            .latest_source_time = (MeisoTimePoint){0U, 0U};
+        handle->simulator_snapshot.media[(size_t)index]
+            .latest_access_unit_bytes = 0U;
+        return MEISO_EDGE_OK;
+    }
     if (!read_host_snapshot(handle, &host, &edge)) {
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
@@ -1145,4 +1476,548 @@ MeisoEdgeStatus meiso_composition_edge_media_release(
         handle->host_app, &borrow->ref);
     memset(borrow, 0, sizeof(*borrow));
     return status_from_host(host_status);
+}
+
+size_t meiso_composition_edge_simulator_alignment_required(void)
+{
+    return _Alignof(MeisoEdgeHandle);
+}
+
+size_t meiso_composition_edge_simulator_memory_required(
+    const MeisoCompositionEdgeSimulatorConfig *config
+)
+{
+    size_t required;
+
+    if (config == NULL ||
+        !checked_add_size(sizeof(MeisoEdgeHandle),
+                          config->catalog.render_media_capability
+                              .max_access_unit_bytes,
+                          &required) ||
+        !checked_add_size(required,
+                          config->catalog.camera_media_capability
+                              .max_access_unit_bytes,
+                          &required)) {
+        return 0U;
+    }
+    return required;
+}
+
+MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
+    void *arena,
+    size_t arena_size,
+    const MeisoCompositionEdgeSimulatorConfig *config,
+    MeisoEdgeHandle **out_handle
+)
+{
+    MeisoEdgeHandle candidate;
+    uintptr_t arena_begin;
+    uintptr_t arena_end;
+    uintptr_t config_begin;
+    uintptr_t config_end;
+    uintptr_t output_begin;
+    uintptr_t output_end;
+    size_t required;
+    size_t i;
+    size_t wifi_sample_wire_size = 0U;
+    uint8_t wifi_sample_wire[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
+    uint8_t *render_buffer;
+    uint8_t *camera_buffer;
+
+    required = meiso_composition_edge_simulator_memory_required(config);
+    if (arena == NULL || config == NULL || out_handle == NULL ||
+        required == 0U || config->catalog_generation == 0U ||
+        config->continuity_serial == 0U ||
+        !meiso_owner_scope_valid(config->desired_owner) ||
+        config->wifi_production_epoch == 0U ||
+        config->render_media_stream_epoch == 0U ||
+        config->camera_media_stream_epoch == 0U ||
+        !checked_range(arena, arena_size, &arena_begin, &arena_end) ||
+        !checked_range(config, sizeof(*config), &config_begin, &config_end) ||
+        !checked_range(out_handle, sizeof(*out_handle), &output_begin,
+                       &output_end) ||
+        ranges_overlap(config_begin, config_end, output_begin, output_end)) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_ARGUMENT;
+    }
+    if (meiso_wifi_telemetry_sample_encode(
+            &config->wifi_sample,
+            (MeisoMutableBuffer){wifi_sample_wire, sizeof(wifi_sample_wire)},
+            &wifi_sample_wire_size
+        ) != MEISO_WIFI_TELEMETRY_CODEC_OK ||
+        wifi_sample_wire_size != MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE ||
+        (config->wifi_sample.selected_fields &
+         ~config->catalog.wifi_capability.supported_fields) != 0U) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG;
+    }
+    if ((arena_begin % _Alignof(MeisoEdgeHandle)) != 0U) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_MISALIGNED_ARENA;
+    }
+    if (arena_size < required) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_ARENA_TOO_SMALL;
+    }
+    if (ranges_overlap(arena_begin, arena_begin + required,
+                       config_begin, config_end) ||
+        ranges_overlap(arena_begin, arena_begin + required,
+                       output_begin, output_end)) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_ARGUMENT;
+    }
+
+    memset(&candidate, 0, sizeof(candidate));
+    if (meiso_composition_session_v3_build_catalog(
+            &config->catalog,
+            (MeisoMutableBuffer){
+                candidate.dynamic_capability,
+                sizeof(candidate.dynamic_capability)
+            },
+            candidate.endpoints,
+            MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT,
+            candidate.routes,
+            MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
+        ) != MEISO_COMPOSITION_SESSION_V3_OK) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG;
+    }
+    candidate.magic = EDGE_HANDLE_MAGIC;
+    candidate.backend_kind = EDGE_BACKEND_SIMULATOR;
+    candidate.arena_begin = arena_begin;
+    candidate.arena_end = arena_begin + required;
+    candidate.catalog_generation = config->catalog_generation;
+    candidate.continuity_serial = config->continuity_serial;
+    candidate.profile = *meiso_composition_scene_profile_v3();
+    candidate.simulator_catalog = config->catalog;
+    candidate.simulator_desired_owner = config->desired_owner;
+    candidate.simulator_wifi_epoch = config->wifi_production_epoch;
+    candidate.simulator_wifi_epoch_available = true;
+    candidate.simulator_media_epoch[0] =
+        config->render_media_stream_epoch;
+    candidate.simulator_media_epoch[1] =
+        config->camera_media_stream_epoch;
+    candidate.simulator_media_epoch_available[0] = true;
+    candidate.simulator_media_epoch_available[1] = true;
+    candidate.simulator_wifi_sample = config->wifi_sample;
+    candidate.simulator_snapshot.edge = (MeisoEdgeSnapshot){
+        MEISO_VIRTUAL_EDGE_API_VERSION,
+        candidate.profile,
+        MEISO_EDGE_PHASE_BOOTSTRAPPING,
+        MEISO_EDGE_TERMINAL_NONE,
+        false,
+        false,
+        config->continuity_serial,
+        0U,
+        0U,
+        0U,
+        0U
+    };
+    render_buffer = (uint8_t *)arena + sizeof(MeisoEdgeHandle);
+    camera_buffer = render_buffer +
+        config->catalog.render_media_capability.max_access_unit_bytes;
+    candidate.simulator_media[0].buffer = render_buffer;
+    candidate.simulator_media[0].capacity =
+        config->catalog.render_media_capability.max_access_unit_bytes;
+    candidate.simulator_media[1].buffer = camera_buffer;
+    candidate.simulator_media[1].capacity =
+        config->catalog.camera_media_capability.max_access_unit_bytes;
+    for (i = 0U; i < MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT; ++i) {
+        const uintptr_t capability_begin =
+            (uintptr_t)candidate.endpoints[i].capability.data;
+        const uintptr_t dynamic_begin =
+            (uintptr_t)candidate.dynamic_capability;
+        const uintptr_t dynamic_end =
+            dynamic_begin + sizeof(candidate.dynamic_capability);
+        if (candidate.endpoints[i].capability.size != 0U &&
+            capability_begin >= dynamic_begin && capability_begin < dynamic_end) {
+            const size_t offset = (size_t)(capability_begin - dynamic_begin);
+            if (offset > sizeof(candidate.dynamic_capability) ||
+                candidate.endpoints[i].capability.size >
+                    sizeof(candidate.dynamic_capability) - offset) {
+                return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INTERNAL_FAILURE;
+            }
+            candidate.endpoints[i].capability.data =
+                (const uint8_t *)arena +
+                offsetof(MeisoEdgeHandle, dynamic_capability) + offset;
+        }
+    }
+    memset(arena, 0, required);
+    memmove(arena, &candidate, sizeof(candidate));
+    *out_handle = (MeisoEdgeHandle *)arena;
+    return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_OK;
+}
+
+MeisoEdgeStatus meiso_composition_edge_simulator_activate(
+    MeisoEdgeHandle *handle
+)
+{
+    MeisoEdgeSnapshot *edge;
+
+    if (!handle_valid(handle) ||
+        handle->backend_kind != EDGE_BACKEND_SIMULATOR) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    edge = &handle->simulator_snapshot.edge;
+    if (edge->phase == MEISO_EDGE_PHASE_TERMINAL) {
+        return MEISO_EDGE_TERMINAL;
+    }
+    if (edge->phase == MEISO_EDGE_PHASE_READY) {
+        return MEISO_EDGE_CONFLICT;
+    }
+    edge->phase = MEISO_EDGE_PHASE_READY;
+    edge->online = true;
+    edge->resource_graph_live = true;
+    edge->catalog_generation = handle->catalog_generation;
+    edge->operations = SIMULATOR_SUPPORTED_OPERATIONS;
+    edge->endpoint_count = MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT;
+    edge->resource_count = MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT;
+    return MEISO_EDGE_OK;
+}
+
+static void simulator_apply_wifi(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    MeisoCompositionEdgeSnapshot *snapshot = &handle->simulator_snapshot;
+    MeisoCompositionEdgeInlineView *stream =
+        &snapshot->inline_streams[MEISO_COMPOSITION_EDGE_INLINE_WIFI];
+
+    simulator_apply_actual(handle, MEISO_COMPOSITION_EDGE_DESIRED_WIFI,
+                           handle->simulator_wifi_epoch);
+    handle->simulator_wifi_pending = false;
+    snapshot->wifi_effective_present = handle->simulator_wifi_enabled;
+    snapshot->wifi_effective = handle->simulator_wifi_enabled ?
+        (MeisoWifiTelemetryEffectiveParameters){
+            handle->simulator_wifi_desired.selected_fields,
+            handle->simulator_wifi_desired.sample_period_ms
+        } : (MeisoWifiTelemetryEffectiveParameters){0U, 0U};
+    snapshot->wifi_sample_present = handle->simulator_wifi_enabled;
+    if (!handle->simulator_wifi_enabled) {
+        memset(&snapshot->wifi_sample, 0, sizeof(snapshot->wifi_sample));
+        memset(stream, 0, sizeof(*stream));
+        return;
+    }
+    snapshot->wifi_sample = handle->simulator_wifi_sample;
+    snapshot->wifi_sample.selected_fields =
+        handle->simulator_wifi_desired.selected_fields;
+    snapshot->wifi_sample.present_fields &=
+        handle->simulator_wifi_desired.selected_fields;
+    if ((snapshot->wifi_sample.present_fields &
+         MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE) == 0U) {
+        snapshot->wifi_sample.link_state = false;
+    }
+    if ((snapshot->wifi_sample.present_fields &
+         MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM) == 0U) {
+        snapshot->wifi_sample.signal_mbm = 0;
+    }
+#define CLEAR_WIFI_COUNTER(field, mask)                                        \
+    do {                                                                       \
+        if ((snapshot->wifi_sample.present_fields & (mask)) == 0U) {           \
+            snapshot->wifi_sample.field = 0U;                                  \
+        }                                                                      \
+    } while (0)
+    CLEAR_WIFI_COUNTER(rx_bytes, MEISO_WIFI_TELEMETRY_FIELD_RX_BYTES);
+    CLEAR_WIFI_COUNTER(tx_bytes, MEISO_WIFI_TELEMETRY_FIELD_TX_BYTES);
+    CLEAR_WIFI_COUNTER(rx_packets, MEISO_WIFI_TELEMETRY_FIELD_RX_PACKETS);
+    CLEAR_WIFI_COUNTER(tx_packets, MEISO_WIFI_TELEMETRY_FIELD_TX_PACKETS);
+    CLEAR_WIFI_COUNTER(rx_dropped, MEISO_WIFI_TELEMETRY_FIELD_RX_DROPPED);
+    CLEAR_WIFI_COUNTER(tx_dropped, MEISO_WIFI_TELEMETRY_FIELD_TX_DROPPED);
+    CLEAR_WIFI_COUNTER(rx_errors, MEISO_WIFI_TELEMETRY_FIELD_RX_ERRORS);
+    CLEAR_WIFI_COUNTER(tx_errors, MEISO_WIFI_TELEMETRY_FIELD_TX_ERRORS);
+#undef CLEAR_WIFI_COUNTER
+    *stream = (MeisoCompositionEdgeInlineView){
+        true,
+        {handle->simulator_desired_owner, handle->simulator_wifi_epoch, 1U},
+        now,
+        MEISO_STREAM_RECEIVE_FLAG_NONE,
+        0U,
+        stream->received_count + 1U,
+        0U
+    };
+    if (handle->simulator_wifi_epoch == UINT64_MAX) {
+        handle->simulator_wifi_epoch_available = false;
+    } else {
+        ++handle->simulator_wifi_epoch;
+    }
+}
+
+static void simulator_apply_media(MeisoEdgeHandle *handle, size_t index)
+{
+    SimulatorMediaPending *pending =
+        &handle->simulator_media_pending[index];
+    MeisoCompositionEdgeSnapshot *snapshot = &handle->simulator_snapshot;
+    const MeisoCompositionEdgeDesiredChannel channel = index == 0U ?
+        MEISO_COMPOSITION_EDGE_DESIRED_RENDER_MEDIA :
+        MEISO_COMPOSITION_EDGE_DESIRED_CAMERA_MEDIA;
+    const MeisoCompositionMediaSource source = index == 0U ?
+        MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW :
+        MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA;
+    const uint64_t epoch = handle->simulator_media_epoch[index];
+    MeisoCompositionEdgeMediaActual *actual = index == 0U ?
+        &snapshot->render_media_actual : &snapshot->camera_media_actual;
+
+    simulator_apply_actual(handle, channel, epoch);
+    pending->pending = false;
+    memset(&handle->simulator_media[index].frame, 0,
+           sizeof(handle->simulator_media[index].frame));
+    handle->simulator_media[index].present = false;
+    handle->simulator_media[index].borrowed = false;
+    snapshot->media[index] = (MeisoCompositionEdgeMediaRouteView){
+        pending->enabled, false, source, 0U, {0U, 0U}, 0U, 0U, 0U, 0U, 0U,
+        0U
+    };
+    if (index == 0U) {
+        snapshot->render_media_actual_present = pending->enabled;
+    } else {
+        snapshot->camera_media_actual_present = pending->enabled;
+    }
+    if (pending->enabled) {
+        *actual = (MeisoCompositionEdgeMediaActual){
+            source, pending->desired, epoch, 0U, 0U, 0U
+        };
+        if (handle->simulator_media_epoch[index] == UINT64_MAX) {
+            handle->simulator_media_epoch_available[index] = false;
+        } else {
+            ++handle->simulator_media_epoch[index];
+        }
+    } else {
+        memset(actual, 0, sizeof(*actual));
+    }
+}
+
+static bool simulator_media_size_exact(
+    const MeisoCompositionEdgeSimulatorFrame *frame
+)
+{
+    uint64_t pixels = (uint64_t)frame->width * frame->height;
+    uint64_t bytes;
+
+    switch (frame->pixel_format) {
+    case MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888:
+        bytes = pixels * 4U;
+        break;
+    case MEISO_COMPOSITION_MEDIA_PIXEL_RGB565:
+    case MEISO_COMPOSITION_MEDIA_PIXEL_YUYV:
+        bytes = pixels * 2U;
+        break;
+    case MEISO_COMPOSITION_MEDIA_PIXEL_NV12:
+        if ((frame->width & 1U) != 0U || (frame->height & 1U) != 0U) {
+            return false;
+        }
+        bytes = pixels + pixels / 2U;
+        break;
+    default:
+        return false;
+    }
+    return bytes == frame->access_unit.size;
+}
+
+static bool simulator_frame_scene_fields_valid(
+    const MeisoCompositionEdgeSimulatorFrame *frame
+)
+{
+    if (frame->dependency_sequence != 0U) {
+        return false;
+    }
+    if (frame->source == MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW) {
+        return meiso_owner_scope_valid(frame->applied_scene_owner) &&
+            frame->applied_scene_owner.role == MEISO_OWNER_ROLE_HOST &&
+            frame->applied_scene_state_version != 0U &&
+            frame->active_plan_generation != 0U &&
+            frame->world_generation != 0U;
+    }
+    return frame->applied_scene_owner.role == 0U &&
+        frame->applied_scene_owner.incarnation == 0U &&
+        frame->applied_scene_state_version == 0U &&
+        frame->active_plan_generation == 0U &&
+        frame->world_generation == 0U;
+}
+
+MeisoEdgeStatus meiso_composition_edge_simulator_step(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now,
+    MeisoCompositionEdgeSimulatorTransition *out_transition
+)
+{
+    MeisoCompositionEdgeSimulatorTransition transition =
+        MEISO_COMPOSITION_EDGE_SIMULATOR_IDLE;
+
+    if (!handle_valid(handle) ||
+        handle->backend_kind != EDGE_BACKEND_SIMULATOR ||
+        out_transition == NULL || !meiso_time_point_valid(now) ||
+        !disjoint_from_handle_storage(handle, out_transition,
+                                      sizeof(*out_transition))) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (handle->simulator_snapshot.edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
+        return MEISO_EDGE_TERMINAL;
+    }
+    if (!handle->simulator_snapshot.edge.resource_graph_live) {
+        return MEISO_EDGE_NOT_READY;
+    }
+    if (handle->simulator_wifi_pending) {
+        if (handle->simulator_wifi_enabled &&
+            handle->simulator_snapshot.inline_streams[
+                MEISO_COMPOSITION_EDGE_INLINE_WIFI
+            ].received_count == UINT64_MAX) {
+            return MEISO_EDGE_COUNTER_EXHAUSTED;
+        }
+        simulator_apply_wifi(handle, now);
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_WIFI_APPLIED;
+    } else if (handle->simulator_media_pending[0].pending) {
+        simulator_apply_media(handle, 0U);
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_MEDIA_APPLIED;
+    } else if (handle->simulator_media_pending[1].pending) {
+        simulator_apply_media(handle, 1U);
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_CAMERA_MEDIA_APPLIED;
+    }
+    *out_transition = transition;
+    return MEISO_EDGE_OK;
+}
+
+MeisoEdgeStatus meiso_composition_edge_simulator_publish_frame(
+    MeisoEdgeHandle *handle,
+    const MeisoCompositionEdgeSimulatorFrame *frame
+)
+{
+    SimulatorMediaRoute *route;
+    MeisoCompositionEdgeMediaRouteView *snapshot_route;
+    const MeisoCompositionEdgeMediaActual *actual;
+    uint64_t gap = 0U;
+    int index;
+
+    if (!handle_valid(handle) ||
+        handle->backend_kind != EDGE_BACKEND_SIMULATOR || frame == NULL ||
+        !optional_input_disjoint(handle, frame, sizeof(*frame)) ||
+        !meiso_byte_view_valid(frame->access_unit) ||
+        !optional_input_disjoint(handle, frame->access_unit.data,
+                                 frame->access_unit.size) ||
+        !disjoint_pair(frame, sizeof(*frame), frame->access_unit.data,
+                       frame->access_unit.size) ||
+        !meiso_time_point_valid(frame->source_time) ||
+        frame->access_unit.size == 0U ||
+        (frame->flags &
+         ~(MEISO_COMPOSITION_MEDIA_FRAME_BEGIN |
+           MEISO_COMPOSITION_MEDIA_FRAME_END |
+           MEISO_COMPOSITION_MEDIA_FRAME_KEY |
+           MEISO_COMPOSITION_MEDIA_FRAME_RECOVERY)) != 0U) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (handle->simulator_snapshot.edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
+        return MEISO_EDGE_TERMINAL;
+    }
+    index = media_index(frame->source);
+    if (index < 0) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    route = &handle->simulator_media[(size_t)index];
+    snapshot_route = &handle->simulator_snapshot.media[(size_t)index];
+    actual = index == 0 ? &handle->simulator_snapshot.render_media_actual :
+        &handle->simulator_snapshot.camera_media_actual;
+    if (!handle->simulator_snapshot.edge.resource_graph_live ||
+        !snapshot_route->actual_binding_ready ||
+        frame->media_stream_epoch != actual->media_stream_epoch) {
+        return MEISO_EDGE_NOT_READY;
+    }
+    if (route->borrowed) {
+        return MEISO_EDGE_BUSY;
+    }
+    if (frame->frame_sequence == 0U ||
+        frame->frame_sequence <= snapshot_route->published_sequence_high_water ||
+        frame->producer_dropped_frames <
+            snapshot_route->producer_drop_high_water) {
+        return MEISO_EDGE_STALE;
+    }
+    if (frame->pixel_format != actual->effective.pixel_format ||
+        frame->codec != actual->effective.codec ||
+        frame->width != actual->effective.width ||
+        frame->height != actual->effective.height ||
+        (frame->flags & MEISO_COMPOSITION_MEDIA_FRAME_KEY) == 0U ||
+        (frame->flags &
+         (MeisoCompositionMediaFrameFlags)~
+             (MEISO_COMPOSITION_MEDIA_FRAME_KEY |
+              MEISO_COMPOSITION_MEDIA_FRAME_RECOVERY)) != 0U ||
+        !simulator_frame_scene_fields_valid(frame) ||
+        !simulator_media_size_exact(frame)) {
+        return MEISO_EDGE_CONFLICT;
+    }
+    if (frame->access_unit.size > route->capacity) {
+        return MEISO_EDGE_CAPACITY;
+    }
+    if (snapshot_route->published_sequence_high_water != 0U) {
+        gap = frame->frame_sequence -
+            snapshot_route->published_sequence_high_water - 1U;
+    }
+    if (gap > UINT64_MAX - snapshot_route->sequence_gap_frames ||
+        (route->present &&
+         snapshot_route->unread_latest_frames_dropped == UINT64_MAX)) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    if (route->present) {
+        ++snapshot_route->unread_latest_frames_dropped;
+    }
+    memmove(route->buffer, frame->access_unit.data, frame->access_unit.size);
+    route->frame = (MeisoEdgeMediaFrameView){
+        {handle->continuity_serial, frame->source,
+         frame->media_stream_epoch, frame->frame_sequence},
+        frame->source_time,
+        frame->applied_scene_owner,
+        frame->applied_scene_state_version,
+        frame->active_plan_generation,
+        frame->world_generation,
+        frame->dependency_sequence,
+        frame->producer_dropped_frames,
+        frame->pixel_format,
+        frame->codec,
+        frame->width,
+        frame->height,
+        frame->flags,
+        {route->buffer, frame->access_unit.size}
+    };
+    route->present = true;
+    snapshot_route->latest_present = true;
+    snapshot_route->latest_frame_sequence = frame->frame_sequence;
+    snapshot_route->latest_source_time = frame->source_time;
+    snapshot_route->latest_access_unit_bytes =
+        (uint32_t)frame->access_unit.size;
+    snapshot_route->published_sequence_high_water = frame->frame_sequence;
+    snapshot_route->sequence_gap_frames += gap;
+    snapshot_route->producer_drop_high_water =
+        frame->producer_dropped_frames;
+    return MEISO_EDGE_OK;
+}
+
+MeisoEdgeStatus meiso_composition_edge_simulator_terminate(
+    MeisoEdgeHandle *handle,
+    MeisoEdgeTerminalReason reason
+)
+{
+    MeisoEdgeSnapshot edge;
+
+    if (!handle_valid(handle) ||
+        handle->backend_kind != EDGE_BACKEND_SIMULATOR ||
+        reason == MEISO_EDGE_TERMINAL_NONE ||
+        reason > MEISO_EDGE_TERMINAL_INTERNAL_FAILURE) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (handle->simulator_snapshot.edge.phase == MEISO_EDGE_PHASE_TERMINAL) {
+        return MEISO_EDGE_TERMINAL;
+    }
+    edge = (MeisoEdgeSnapshot){
+        MEISO_VIRTUAL_EDGE_API_VERSION,
+        handle->profile,
+        MEISO_EDGE_PHASE_TERMINAL,
+        reason,
+        false,
+        false,
+        handle->continuity_serial,
+        0U,
+        0U,
+        0U,
+        0U
+    };
+    memset(&handle->simulator_snapshot, 0,
+           sizeof(handle->simulator_snapshot));
+    handle->simulator_snapshot.edge = edge;
+    handle->simulator_wifi_pending = false;
+    memset(handle->simulator_media_pending, 0,
+           sizeof(handle->simulator_media_pending));
+    memset(handle->simulator_media, 0, sizeof(handle->simulator_media));
+    return MEISO_EDGE_OK;
 }

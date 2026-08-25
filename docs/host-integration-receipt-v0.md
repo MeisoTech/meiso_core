@@ -113,8 +113,10 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 
 当前 Runtime source v0 承载 Host-owned desired State、Edge-owned actual State、Edge-owned data
 Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Composition Profile v3
-已有固定HostApp backend的typed SDK/Virtual Edge facade及两路external MediaStream read；Action、
-通用typed dispatcher、Edge→Host/并行/resumable Blob与backend-independent Virtual Edge仍未实现；R2a scheduler
+已有固定HostApp backend的typed SDK/Virtual Edge facade及两路external MediaStream read；另一个
+caller-owned deterministic simulator通过同一handle实现Wi-Fi desired→Actual/Stream和render/camera
+media replay，但明确不实现Blob/Composition/device。Action、通用typed dispatcher、Edge→Host/并行/
+resumable Blob与开放plugin backend ABI仍未实现；R2a scheduler
 是Composition Profile v2的独立Runtime--SDK对象，不是通用Host SDK。缺失能力必须明确`unsupported`，
 不能用私有消息旁路。
 

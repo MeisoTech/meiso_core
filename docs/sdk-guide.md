@@ -107,6 +107,19 @@ translation unit 只 include public SDK/Profile header，保证业务代码无�
 pump 或 devtools type。该 evidence 是 Host facade/loopback evidence，不证明 physical Edge、自动
 reconnect、Action、任意 Profile 或跨 backend ABI。
 
+### Deterministic simulator / replay backend
+
+第二个 backend 必须继续返回同一种 opaque `MeisoEdgeHandle`，应用不得通过 cast、private include、
+backend tag 或测试旁路区别 remote HostApp 与 simulator。它只需要实现实际用于本地编辑器测试的
+Composition 子集，但 `operations` 与每个 unsupported 返回值必须诚实一致。
+
+Simulator 使用 caller-owned arena、显式 activate/step、调用方提供的 source time 与完整 media
+access unit；不读 wall clock、不建线程/socket、不分配 heap。每次 step 最多完成一个 queued desired，
+并把 local receipt、delivery accepted、Actual observed/applied、Stream sample 与 media availability
+分阶段公开。terminal 会清 live graph、typed truth 与 borrow，旧 handle 不可复活；新的 run 必须新 arena、
+新 nonzero continuity serial。Recorded sample/frame 只证明 deterministic replay，不证明 physical Edge、
+fresh sensor 或 transport。
+
 ## 一个 Edge、多个本地 runtime
 
 一个 Edge implementation 可以横跨多个 core、OS 或进程。对外 Core 管理公开

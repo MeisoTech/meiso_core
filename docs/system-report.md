@@ -559,13 +559,21 @@ Composition与media read，State watch、Stream publish、Action和Blob lookup�
 锁定Wi-Fi State/Stream、camera 115200B NV12 exact borrow/release及terminal清理。fresh Debug、Release与
 ASan+UBSan全仓CTest均48/48，公开C/C++ header strict，相关product/application/test analyzer为0。
 这些只构成固定HostApp backend的`HOST_SEMANTIC_VERIFIED / TRANSPORT_VERIFIED` facade evidence；不
-证明通用backend ABI、simulator/replay、watch/Action、自动reconnect、physical Edge或新target结果。
+证明通用backend ABI、watch/Action、自动reconnect、physical Edge或新target结果。
 
 同日，macOS Composition Debug Host 的业务面完成迁移：七类 typed command、Composition snapshot、
 mesh publication 状态与两路 media latest/release 均经公开 facade；HostApp 直接调用只保留在
 readiness/pump、control/media 连接、slot admission 与 lifecycle cleanup。现有 real-AF_INET native
 service regression 保持 NDJSON/CMFB schema 与媒体连接行为不变。这进一步证明首个 facade 已被真实
 Host 应用路径消费，但不把 debug service、Dashboard 或固定 HostApp adapter 冒充通用 SDK backend。
+
+随后新增caller-owned deterministic simulator作为第二种`MeisoEdgeHandle` backend。它以显式activate/
+step、调用方source time和完整access unit实现Wi-Fi desired→accepted Actual/Stream，以及render/camera
+media desired、fresh epoch、latest/exact release；Blob、Composition、device与Action明确unsupported。
+同一application-only TU在HostApp和simulator两条路径运行，field-exact replay、camera desired replacement、
+115200-byte NV12与307200-byte RGBA复制、terminal borrow清理和fresh continuity均有vector。fresh Debug、
+Release与ASan+UBSan全仓CTest均49/49；公开C/C++ header strict，product/application/test analyzer均为0。
+该证据只说明确定性本地replay，不说明network、driver、sensor freshness或physical output。
 
 ## 已验证的负面结论
 
@@ -581,8 +589,8 @@ Host 应用路径消费，但不把 debug service、Dashboard 或固定 HostApp 
 
 ## 未实现与未知
 
-- 超出首个Composition Profile v3固定HostApp切片的通用`EdgeHandle` backend ABI、simulator/replay、
-  State watch、Stream publish、Action、Blob lookup与自动reconnect；
+- 超出当前固定HostApp/simulator dispatch的开放`EdgeHandle` plugin ABI、record-file format、State watch、
+  Stream publish、Action、Blob lookup与自动reconnect；
 - product Runtime 的 endpoint facet/direction/QoS/permission schema、通用 hotplug、Host
   orchestration 与 typed dispatcher；
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
