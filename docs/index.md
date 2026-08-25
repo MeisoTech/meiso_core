@@ -21,6 +21,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - Composition Profile v3 Host facade：公开 `include/meiso_virtual_edge.h` 与
   `include/meiso_composition_edge.h` 只给应用 opaque handle、typed command/snapshot 和
   media borrow；`include/meiso_composition_edge_simulator.h`提供caller-owned显式step simulator；
+  [Composition Edge deterministic trace v1](composition-edge-trace-v1.md)固定caller-owned canonical
+  trace bytes、closed event order、integrity与逐record replay；
   `devtools/composition_virtual_edge_host.*`承载当前HostApp integration与两backend dispatch，仍由
   integration独占socket/event loop；
 - [Resource semantic core v0](resource-core-v0.md)：当前 portable primitives、内存模型与

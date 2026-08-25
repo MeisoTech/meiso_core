@@ -27,7 +27,7 @@ portable C11 参考实现和可重复实验。
 | K1a reference renderer | bounded 320×240 synthetic offscreen renderer 与 offline runner | `HOST_OFFSCREEN_REFERENCE_VERIFIED`、`TARGET_BUILD_VERIFIED`、`TARGET_NOT_RUN`；不证明几何正确、driver、scanout 或物理显示 |
 | K230D camera capture | bounded Linux V4L2 four-buffer NV12 adapter 与一次三帧 target receipt | `BOARD_VERIFIED` 仅指单适配器物理采集；不证明 CameraMedia transport、combined service、性能或 E2E |
 | K230D Composition debug chain | 同一Session内Blob、Scene/C2、CPU render、Render/Camera Media、Wi-Fi/DeviceTelemetry与local Web bridge | [一次受控四门实机证据](docs/k230d-composition-debug-e2e-v0.md)；不证明physical display、安全transport、自动恢复、性能或长稳 |
-| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release，以及caller-owned deterministic simulator | HostApp/AF_INET与simulator两种backend；simulator仅实现Wi-Fi和两路media子集，不等于通用plugin ABI、reconnect、watch/Action或跨Profile ABI |
+| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release、caller-owned deterministic simulator与canonical trace v1 | HostApp/AF_INET与simulator两种backend；trace只重放synthetic Wi-Fi和两路media，不等于通用plugin ABI、reconnect、watch/Action、target或physical evidence |
 
 逐版本提交、CI、资源账本和 target receipt 统一记录在
 [系统进展](docs/system-report.md)，不在首页重复维护。
@@ -65,6 +65,7 @@ ctest --preset windows-msvc-debug
 - [Session Core v0](docs/session-core-v0.md) 与
   [Runtime negotiation core v0](docs/runtime-core-v0.md)
 - [Host 集成回执 v0](docs/host-integration-receipt-v0.md)
+- [Composition Edge deterministic trace v1](docs/composition-edge-trace-v1.md)
 
 实验与 target：
 
@@ -78,8 +79,8 @@ ctest --preset windows-msvc-debug
 ## 尚未完成
 
 当前仓库不是 application-facing 完整产品：已有 Composition Profile v3 的首个 Virtual Edge/SDK
-facade与deterministic simulator，但通用backend plugin、discovery/reconnect、State watch、Action、
-认证与安全transport尚未完成。
+facade、deterministic simulator与固定版本canonical trace，但通用backend plugin、discovery/reconnect、
+State watch、Action、认证与安全transport尚未完成。
 Composition debug candidate已有一次准确K230D上的combined offscreen render/camera
 MediaStream与local Web bridge证据，但自动reconnect/resume、通用fresh Edge、性能、长稳和physical
 presentation evidence仍未完成。

@@ -1,4 +1,5 @@
 #include "composition_virtual_edge_host.h"
+#include "composition_virtual_edge_host_internal.h"
 #include "meiso_composition_edge_simulator.h"
 
 #include <limits.h>
@@ -2020,4 +2021,161 @@ MeisoEdgeStatus meiso_composition_edge_simulator_terminate(
            sizeof(handle->simulator_media_pending));
     memset(handle->simulator_media, 0, sizeof(handle->simulator_media));
     return MEISO_EDGE_OK;
+}
+
+static bool simulator_catalog_equal(
+    const MeisoCompositionSessionV3CatalogConfig *lhs,
+    const MeisoCompositionSessionV3CatalogConfig *rhs
+)
+{
+    uint8_t lhs_wire[MEISO_COMPOSITION_MEDIA_CAPABILITY_WIRE_SIZE];
+    uint8_t rhs_wire[MEISO_COMPOSITION_MEDIA_CAPABILITY_WIRE_SIZE];
+    size_t lhs_size;
+    size_t rhs_size;
+
+    if (lhs == NULL || rhs == NULL ||
+        lhs->wifi_incarnation != rhs->wifi_incarnation ||
+        lhs->presentation_incarnation != rhs->presentation_incarnation ||
+        lhs->scene_incarnation != rhs->scene_incarnation ||
+        lhs->device_telemetry_incarnation !=
+            rhs->device_telemetry_incarnation ||
+        lhs->render_media_incarnation != rhs->render_media_incarnation ||
+        lhs->camera_media_incarnation != rhs->camera_media_incarnation) {
+        return false;
+    }
+    lhs_size = 0U;
+    rhs_size = 0U;
+    if (meiso_wifi_telemetry_capability_encode(
+            &lhs->wifi_capability,
+            (MeisoMutableBuffer){lhs_wire, sizeof(lhs_wire)}, &lhs_size
+        ) != MEISO_WIFI_TELEMETRY_CODEC_OK ||
+        meiso_wifi_telemetry_capability_encode(
+            &rhs->wifi_capability,
+            (MeisoMutableBuffer){rhs_wire, sizeof(rhs_wire)}, &rhs_size
+        ) != MEISO_WIFI_TELEMETRY_CODEC_OK || lhs_size != rhs_size ||
+        memcmp(lhs_wire, rhs_wire, lhs_size) != 0) {
+        return false;
+    }
+    lhs_size = 0U;
+    rhs_size = 0U;
+    if (meiso_device_telemetry_capability_encode(
+            &lhs->device_telemetry_capability,
+            (MeisoMutableBuffer){lhs_wire, sizeof(lhs_wire)}, &lhs_size
+        ) != MEISO_DEVICE_TELEMETRY_CODEC_OK ||
+        meiso_device_telemetry_capability_encode(
+            &rhs->device_telemetry_capability,
+            (MeisoMutableBuffer){rhs_wire, sizeof(rhs_wire)}, &rhs_size
+        ) != MEISO_DEVICE_TELEMETRY_CODEC_OK || lhs_size != rhs_size ||
+        memcmp(lhs_wire, rhs_wire, lhs_size) != 0) {
+        return false;
+    }
+    lhs_size = 0U;
+    rhs_size = 0U;
+    if (meiso_composition_media_capability_encode(
+            &lhs->render_media_capability,
+            (MeisoMutableBuffer){lhs_wire, sizeof(lhs_wire)}, &lhs_size
+        ) != MEISO_COMPOSITION_SESSION_V3_OK ||
+        meiso_composition_media_capability_encode(
+            &rhs->render_media_capability,
+            (MeisoMutableBuffer){rhs_wire, sizeof(rhs_wire)}, &rhs_size
+        ) != MEISO_COMPOSITION_SESSION_V3_OK || lhs_size != rhs_size ||
+        memcmp(lhs_wire, rhs_wire, lhs_size) != 0) {
+        return false;
+    }
+    lhs_size = 0U;
+    rhs_size = 0U;
+    return meiso_composition_media_capability_encode(
+               &lhs->camera_media_capability,
+               (MeisoMutableBuffer){lhs_wire, sizeof(lhs_wire)}, &lhs_size
+           ) == MEISO_COMPOSITION_SESSION_V3_OK &&
+        meiso_composition_media_capability_encode(
+            &rhs->camera_media_capability,
+            (MeisoMutableBuffer){rhs_wire, sizeof(rhs_wire)}, &rhs_size
+        ) == MEISO_COMPOSITION_SESSION_V3_OK && lhs_size == rhs_size &&
+        memcmp(lhs_wire, rhs_wire, lhs_size) == 0;
+}
+
+static bool simulator_wifi_sample_equal(
+    const MeisoWifiTelemetrySample *lhs,
+    const MeisoWifiTelemetrySample *rhs
+)
+{
+    uint8_t lhs_wire[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
+    uint8_t rhs_wire[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
+    size_t lhs_size = 0U;
+    size_t rhs_size = 0U;
+
+    return lhs != NULL && rhs != NULL &&
+        meiso_wifi_telemetry_sample_encode(
+            lhs, (MeisoMutableBuffer){lhs_wire, sizeof(lhs_wire)}, &lhs_size
+        ) == MEISO_WIFI_TELEMETRY_CODEC_OK &&
+        meiso_wifi_telemetry_sample_encode(
+            rhs, (MeisoMutableBuffer){rhs_wire, sizeof(rhs_wire)}, &rhs_size
+        ) == MEISO_WIFI_TELEMETRY_CODEC_OK && lhs_size == rhs_size &&
+        memcmp(lhs_wire, rhs_wire, lhs_size) == 0;
+}
+
+bool meiso_composition_edge_internal_simulator_storage_disjoint(
+    const MeisoEdgeHandle *handle,
+    const void *pointer,
+    size_t size
+)
+{
+    return handle_valid(handle) &&
+        handle->backend_kind == EDGE_BACKEND_SIMULATOR &&
+        disjoint_from_handle_storage(handle, pointer, size);
+}
+
+bool meiso_composition_edge_internal_simulator_fresh_matches(
+    const MeisoEdgeHandle *handle,
+    const MeisoCompositionEdgeSimulatorConfig *config
+)
+{
+    size_t i;
+
+    if (!handle_valid(handle) ||
+        handle->backend_kind != EDGE_BACKEND_SIMULATOR || config == NULL ||
+        handle->catalog_generation != config->catalog_generation ||
+        handle->continuity_serial != config->continuity_serial ||
+        !meiso_owner_scope_equal(handle->simulator_desired_owner,
+                                 config->desired_owner) ||
+        handle->simulator_wifi_epoch != config->wifi_production_epoch ||
+        handle->simulator_media_epoch[0] !=
+            config->render_media_stream_epoch ||
+        handle->simulator_media_epoch[1] !=
+            config->camera_media_stream_epoch ||
+        !handle->simulator_wifi_epoch_available ||
+        !handle->simulator_media_epoch_available[0] ||
+        !handle->simulator_media_epoch_available[1] ||
+        handle->simulator_next_command_id != 0U ||
+        handle->simulator_wifi_pending ||
+        handle->simulator_snapshot.edge.phase !=
+            MEISO_EDGE_PHASE_BOOTSTRAPPING ||
+        handle->simulator_snapshot.edge.online ||
+        handle->simulator_snapshot.edge.resource_graph_live ||
+        handle->simulator_snapshot.wifi_effective_present ||
+        handle->simulator_snapshot.wifi_sample_present ||
+        handle->simulator_snapshot.render_media_actual_present ||
+        handle->simulator_snapshot.camera_media_actual_present ||
+        !simulator_catalog_equal(&handle->simulator_catalog,
+                                 &config->catalog) ||
+        !simulator_wifi_sample_equal(&handle->simulator_wifi_sample,
+                                     &config->wifi_sample)) {
+        return false;
+    }
+    for (i = 0U; i < MEISO_COMPOSITION_EDGE_DESIRED_COUNT; ++i) {
+        if (handle->simulator_snapshot.desired[i].requested ||
+            handle->simulator_snapshot.actual[i].present) {
+            return false;
+        }
+    }
+    for (i = 0U; i < MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT; ++i) {
+        if (handle->simulator_media_pending[i].pending ||
+            handle->simulator_media[i].present ||
+            handle->simulator_media[i].borrowed ||
+            handle->simulator_snapshot.media[i].latest_present) {
+            return false;
+        }
+    }
+    return true;
 }

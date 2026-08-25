@@ -575,6 +575,19 @@ media desired、fresh epoch、latest/exact release；Blob、Composition、device
 Release与ASan+UBSan全仓CTest均49/49；公开C/C++ header strict，product/application/test analyzer均为0。
 该证据只说明确定性本地replay，不说明network、driver、sensor freshness或physical output。
 
+随后冻结Composition Edge deterministic trace v1。writer把simulator config、pre-READY command、activate、
+step、完整render/camera frame与terminal记录为caller-owned、big-endian、CRC32C保护的bounded canonical
+bytes；reader在提交arena前验证整份header、record shape、sequence、CRC与closed event order，再以逐record
+candidate-first cursor驱动exact fresh simulator。测试锁定12-record、730792-byte完整run，包含Wi-Fi
+Actual/Stream、两帧307200-byte RGBA8888、115200-byte NV12、media borrow导致的retryable zero-progress、
+tamper detection与terminal COMPLETE。该格式不打开path、不持fd、不分配heap；调用方如需文件或transport
+自行保存完整bytes。它始终带`SYNTHETIC` evidence flag，不证明network、K230D、camera、display、security、
+performance或soak。
+fresh Debug、Release与ASan+UBSan全仓CTest均50/50；trace/Host product与trace test在额外
+`-Wconversion -Wsign-conversion -Wshadow`下strict C11通过，公开header strict C++17通过，三TU
+clang analyzer均为0，28-file Markdown link与public symbol门通过。这些是portable source/codec/
+simulator evidence，不扩大上述synthetic边界。
+
 ## 已验证的负面结论
 
 - 把每帧 raw camera 当成可靠完整 transfer 会造成高带宽与旧数据阻塞，不适合连续 Stream；
@@ -589,7 +602,7 @@ Release与ASan+UBSan全仓CTest均49/49；公开C/C++ header strict，product/ap
 
 ## 未实现与未知
 
-- 超出当前固定HostApp/simulator dispatch的开放`EdgeHandle` plugin ABI、record-file format、State watch、
+- 超出当前固定HostApp/simulator dispatch的开放`EdgeHandle` plugin ABI、通用文件/目录管理、State watch、
   Stream publish、Action、Blob lookup与自动reconnect；
 - product Runtime 的 endpoint facet/direction/QoS/permission schema、通用 hotplug、Host
   orchestration 与 typed dispatcher；

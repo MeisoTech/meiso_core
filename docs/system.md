@@ -69,6 +69,12 @@ State/read。两者返回同一种opaque handle，application-only TU不读取ba
 clock、不建thread/socket，也不把recorded sample/frame冒充physical truth；未实现的Blob/Composition/
 device操作明确`unsupported`。
 
+Recorded backend artifact使用固定版本、closed-kind、bounded的canonical in-memory trace；它只记录
+simulator config、typed desired、显式step/time、完整media unit与terminal，不记录或发明Session/Runtime
+wire。reader在暴露config前完整验证header、每record integrity、容量、事件顺序和payload，再以单record
+原子cursor驱动fresh simulator。文件或transport I/O继续由caller拥有，trace失败不能吞掉后续record，
+recorded truth始终保持synthetic evidence标签。
+
 `EdgeHandle` 的公开生命周期绑定一段连续的 Session/catalog truth。Host integration 拥有
 连接、event loop、Runtime pump 和 backend replacement；应用只能读取 handle 的
 `online / resource-graph-live / terminal`、本地 continuity 与 capability/resource view，

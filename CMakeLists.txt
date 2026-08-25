@@ -246,6 +246,7 @@ if(UNIX)
     add_library(
         meiso_composition_virtual_edge
         devtools/composition_virtual_edge_host.c
+        devtools/composition_edge_trace.c
     )
     target_include_directories(
         meiso_composition_virtual_edge
@@ -641,6 +642,21 @@ if(TARGET meiso_composition_virtual_edge)
     )
     meiso_enable_warnings(meiso_composition_virtual_edge_simulator_test)
 
+    add_executable(
+        meiso_composition_edge_trace_test
+        tests/test_composition_edge_trace.c
+        $<TARGET_OBJECTS:meiso_composition_virtual_edge_application_test_object>
+    )
+    target_include_directories(
+        meiso_composition_edge_trace_test
+        PRIVATE tests
+    )
+    target_link_libraries(
+        meiso_composition_edge_trace_test
+        PRIVATE meiso_composition_virtual_edge
+    )
+    meiso_enable_warnings(meiso_composition_edge_trace_test)
+
     find_package(Threads REQUIRED)
     add_executable(
         meiso_composition_debug_host_test
@@ -982,6 +998,12 @@ if(TARGET meiso_composition_virtual_edge_simulator_test)
     add_test(
         NAME meiso_composition_virtual_edge_simulator_test
         COMMAND meiso_composition_virtual_edge_simulator_test
+    )
+endif()
+if(TARGET meiso_composition_edge_trace_test)
+    add_test(
+        NAME meiso_composition_edge_trace_test
+        COMMAND meiso_composition_edge_trace_test
     )
 endif()
 if(TARGET meiso_composition_debug_host_test)
