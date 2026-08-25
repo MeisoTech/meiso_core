@@ -183,6 +183,13 @@ static bool config_fields_equal(
             rhs->device_sample.memory_total_bytes &&
         lhs->device_sample.memory_available_bytes ==
             rhs->device_sample.memory_available_bytes &&
+        lhs->composition_enabled == rhs->composition_enabled &&
+        lhs->composition_blob_slot_count ==
+            rhs->composition_blob_slot_count &&
+        lhs->composition_clock_epoch == rhs->composition_clock_epoch &&
+        lhs->presentation_production_epoch ==
+            rhs->presentation_production_epoch &&
+        lhs->scene_production_epoch == rhs->scene_production_epoch &&
         lhs->catalog.wifi_incarnation == rhs->catalog.wifi_incarnation &&
         lhs->catalog.presentation_incarnation ==
             rhs->catalog.presentation_incarnation &&
@@ -344,6 +351,32 @@ int main(void)
     wrong_config.device_sample.present_fields =
         MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM;
     wrong_config.device_sample.cpu_load_ppm = 250000U;
+    CHECK(meiso_composition_edge_trace_writer_init(
+              writer_arena, writer_size,
+              (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},
+              &wrong_config, &writer
+          ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_CONFIG &&
+          bytes_all(writer_arena, writer_size + writer_alignment, 0xa5) &&
+          bytes_all(trace_bytes, TRACE_CAPACITY, 0xa5) &&
+          writer ==
+              (MeisoCompositionEdgeTraceWriter *)(uintptr_t)UINT64_C(0x1234));
+    wrong_config = config;
+    wrong_config.composition_enabled = true;
+    wrong_config.composition_blob_slot_count = 1U;
+    wrong_config.composition_clock_epoch = 701U;
+    wrong_config.presentation_production_epoch = 801U;
+    wrong_config.scene_production_epoch = 901U;
+    CHECK(meiso_composition_edge_trace_writer_init(
+              writer_arena, writer_size,
+              (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},
+              &wrong_config, &writer
+          ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_CONFIG &&
+          bytes_all(writer_arena, writer_size + writer_alignment, 0xa5) &&
+          bytes_all(trace_bytes, TRACE_CAPACITY, 0xa5) &&
+          writer ==
+              (MeisoCompositionEdgeTraceWriter *)(uintptr_t)UINT64_C(0x1234));
+    wrong_config = config;
+    wrong_config.scene_production_epoch = 1U;
     CHECK(meiso_composition_edge_trace_writer_init(
               writer_arena, writer_size,
               (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},

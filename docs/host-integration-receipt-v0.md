@@ -115,10 +115,11 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Composition Profile v3
 已有固定HostApp backend的typed SDK/Virtual Edge facade及两路external MediaStream read；另一个
 caller-owned deterministic simulator通过同一handle实现Wi-Fi desired→Actual/Stream和render/camera
-media replay，并可由config显式启用deterministic DeviceTelemetry desired→Actual/Stream；固定v1 trace只把
+media replay，并可由config显式启用deterministic DeviceTelemetry desired→Actual/Stream以及
+Mesh publish→SceneStore/C2→synthetic RenderResult离线Composition闭环；固定v1 trace只把
 Wi-Fi/media synthetic子集编码为bounded canonical bytes，并以fresh simulator
-逐record重放。trace不打开文件、不持fd，也不能替代network/target/physical evidence。两者均明确不实现
-Blob/Composition。Action、通用typed dispatcher、Edge→Host/并行/
+逐record重放。trace不打开文件、不持fd，也不能替代network/target/physical evidence。Action、通用typed
+dispatcher、Edge→Host/并行/
 resumable Blob与开放plugin backend ABI仍未实现；R2a scheduler
 是Composition Profile v2的独立Runtime--SDK对象，不是通用Host SDK。缺失能力必须明确`unsupported`，
 不能用私有消息旁路。

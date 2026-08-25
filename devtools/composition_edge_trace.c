@@ -276,6 +276,11 @@ static bool trace_config_valid(
         !config->device_telemetry_enabled &&
         config->device_production_epoch == 0U &&
         trace_device_sample_zero(&config->device_sample) &&
+        !config->composition_enabled &&
+        config->composition_blob_slot_count == 0U &&
+        config->composition_clock_epoch == 0U &&
+        config->presentation_production_epoch == 0U &&
+        config->scene_production_epoch == 0U &&
         config->catalog.render_media_capability.max_access_unit_bytes != 0U &&
         config->catalog.render_media_capability.max_access_unit_bytes <=
             MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES &&

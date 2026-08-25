@@ -643,6 +643,18 @@ if(TARGET meiso_composition_virtual_edge)
     meiso_enable_warnings(meiso_composition_virtual_edge_simulator_test)
 
     add_executable(
+        meiso_composition_virtual_edge_simulator_composition_test
+        tests/test_composition_virtual_edge_simulator_composition.c
+    )
+    target_link_libraries(
+        meiso_composition_virtual_edge_simulator_composition_test
+        PRIVATE meiso_composition_virtual_edge
+    )
+    meiso_enable_warnings(
+        meiso_composition_virtual_edge_simulator_composition_test
+    )
+
+    add_executable(
         meiso_composition_edge_trace_test
         tests/test_composition_edge_trace.c
         $<TARGET_OBJECTS:meiso_composition_virtual_edge_application_test_object>
@@ -998,6 +1010,13 @@ if(TARGET meiso_composition_virtual_edge_simulator_test)
     add_test(
         NAME meiso_composition_virtual_edge_simulator_test
         COMMAND meiso_composition_virtual_edge_simulator_test
+    )
+endif()
+
+if(TARGET meiso_composition_virtual_edge_simulator_composition_test)
+    add_test(
+        NAME meiso_composition_virtual_edge_simulator_composition_test
+        COMMAND meiso_composition_virtual_edge_simulator_composition_test
     )
 endif()
 if(TARGET meiso_composition_edge_trace_test)

@@ -1,6 +1,8 @@
 #include "composition_virtual_edge_host.h"
 #include "composition_virtual_edge_host_internal.h"
+#include "composition_coordinator.h"
 #include "meiso_composition_edge_simulator.h"
+#include "scene_store.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -105,6 +107,32 @@ typedef struct {
     MeisoEdgeMediaFrameView frame;
 } SimulatorMediaRoute;
 
+typedef struct {
+    bool pending;
+    bool enabled;
+    MeisoCompositionSceneDesired value;
+} SimulatorScenePending;
+
+typedef struct {
+    bool pending;
+    bool enabled;
+    MeisoCompositionEdgePresentationSettings settings;
+    MeisoCompositionScenePresentationPlan plan;
+} SimulatorPresentationPending;
+
+typedef struct {
+    size_t required;
+    size_t render_offset;
+    size_t camera_offset;
+    size_t mesh_offset;
+    size_t blob_offset;
+    size_t blob_size;
+    size_t scene_offset;
+    size_t scene_size;
+    size_t coordinator_offset;
+    size_t coordinator_size;
+} SimulatorLayout;
+
 struct MeisoEdgeHandle {
     uint64_t magic;
     uint8_t backend_kind;
@@ -149,6 +177,43 @@ struct MeisoEdgeHandle {
         simulator_media_pending[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
     SimulatorMediaRoute
         simulator_media[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
+    bool simulator_composition_supported;
+    bool simulator_composition_initialized;
+    uint32_t simulator_blob_slot_count;
+    uint64_t simulator_composition_clock_epoch;
+    uint64_t simulator_presentation_epoch;
+    bool simulator_presentation_epoch_available;
+    uint64_t simulator_scene_epoch;
+    bool simulator_scene_epoch_available;
+    uint64_t simulator_next_plan_generation;
+    bool simulator_plan_generation_available;
+    uint64_t simulator_published_blob_bytes;
+    uint64_t simulator_render_result_sequence;
+    uint8_t *simulator_mesh_buffer;
+    size_t simulator_mesh_buffer_capacity;
+    bool simulator_mesh_pending;
+    size_t simulator_mesh_size;
+    MeisoContentId simulator_mesh_content_id;
+    void *simulator_blob_arena;
+    size_t simulator_blob_arena_size;
+    MeisoBlobStore *simulator_blob_store;
+    void *simulator_scene_arena;
+    size_t simulator_scene_arena_size;
+    MeisoCompositionSceneStore *simulator_scene_store;
+    void *simulator_coordinator_arena;
+    size_t simulator_coordinator_arena_size;
+    MeisoCompositionCoordinator *simulator_coordinator;
+    SimulatorScenePending simulator_scene_pending;
+    bool simulator_scene_retry_pending;
+    bool simulator_scene_retry_ready;
+    bool simulator_scene_value_present;
+    bool simulator_scene_enabled;
+    MeisoCompositionSceneDesired simulator_scene_value;
+    SimulatorPresentationPending simulator_presentation_pending;
+    bool simulator_presentation_plan_present;
+    bool simulator_presentation_activation_pending;
+    MeisoCompositionScenePresentationPlan simulator_presentation_plan;
+    bool simulator_render_result_pending;
 };
 
 static bool checked_range(
@@ -178,6 +243,105 @@ static bool checked_add_size(size_t lhs, size_t rhs, size_t *out)
         return false;
     }
     *out = lhs + rhs;
+    return true;
+}
+
+static bool checked_align_size(size_t value, size_t alignment, size_t *out)
+{
+    size_t remainder;
+    size_t padding;
+
+    if (alignment == 0U || out == NULL) {
+        return false;
+    }
+    remainder = value % alignment;
+    padding = remainder == 0U ? 0U : alignment - remainder;
+    return checked_add_size(value, padding, out);
+}
+
+static bool simulator_layout(
+    const MeisoCompositionEdgeSimulatorConfig *config,
+    SimulatorLayout *out_layout
+)
+{
+    const MeisoResourceDescriptor *blob_descriptor;
+    MeisoBlobConfig blob_config;
+    SimulatorLayout layout;
+    size_t cursor;
+
+    if (config == NULL || out_layout == NULL) {
+        return false;
+    }
+    memset(&layout, 0, sizeof(layout));
+    cursor = sizeof(MeisoEdgeHandle);
+    layout.render_offset = cursor;
+    if (!checked_add_size(
+            cursor,
+            config->catalog.render_media_capability.max_access_unit_bytes,
+            &cursor
+        )) {
+        return false;
+    }
+    layout.camera_offset = cursor;
+    if (!checked_add_size(
+            cursor,
+            config->catalog.camera_media_capability.max_access_unit_bytes,
+            &cursor
+        )) {
+        return false;
+    }
+    if (!config->composition_enabled) {
+        layout.required = cursor;
+        *out_layout = layout;
+        return true;
+    }
+    if (config->composition_blob_slot_count == 0U ||
+        config->composition_blob_slot_count >
+            MEISO_COMPOSITION_SCENE_MAX_PUBLISHED_BLOBS) {
+        return false;
+    }
+    layout.mesh_offset = cursor;
+    if (!checked_add_size(
+            cursor, MEISO_COMPOSITION_SCENE_MAX_MESH_BLOB_SIZE, &cursor
+        )) {
+        return false;
+    }
+    blob_descriptor = meiso_composition_scene_resource(
+        MEISO_COMPOSITION_SCENE_RESOURCE_MESH_BLOB
+    );
+    blob_config.published_slot_count = config->composition_blob_slot_count;
+    layout.blob_size = meiso_blob_store_memory_required(
+        blob_descriptor, &blob_config
+    );
+    layout.scene_size = meiso_composition_scene_store_memory_required();
+    layout.coordinator_size =
+        meiso_composition_coordinator_memory_required();
+    if (blob_descriptor == NULL || layout.blob_size == 0U ||
+        layout.scene_size == 0U || layout.coordinator_size == 0U ||
+        !checked_align_size(
+            cursor, meiso_blob_alignment_required(), &layout.blob_offset
+        ) ||
+        !checked_add_size(
+            layout.blob_offset, layout.blob_size, &cursor
+        ) ||
+        !checked_align_size(
+            cursor, meiso_composition_scene_store_alignment_required(),
+            &layout.scene_offset
+        ) ||
+        !checked_add_size(
+            layout.scene_offset, layout.scene_size, &cursor
+        ) ||
+        !checked_align_size(
+            cursor, meiso_composition_coordinator_alignment_required(),
+            &layout.coordinator_offset
+        ) ||
+        !checked_add_size(
+            layout.coordinator_offset, layout.coordinator_size, &cursor
+        )) {
+        return false;
+    }
+    layout.required = cursor;
+    *out_layout = layout;
     return true;
 }
 
@@ -832,9 +996,11 @@ static MeisoEdgeStatus simulator_queue_desired(
     return MEISO_EDGE_OK;
 }
 
-static void simulator_apply_actual(
+static void simulator_apply_actual_state(
     MeisoEdgeHandle *handle,
     MeisoCompositionEdgeDesiredChannel channel,
+    bool enabled,
+    bool running,
     uint64_t production_epoch
 )
 {
@@ -856,14 +1022,59 @@ static void simulator_apply_actual(
         reference,
         MEISO_RUNTIME_APPLY_APPLIED,
         MEISO_RUNTIME_AVAILABILITY_PRESENT,
-        desired->enabled,
-        desired->enabled ? MEISO_RUNTIME_PRODUCTION_RUNNING :
+        enabled && running,
+        enabled ? (running ? MEISO_RUNTIME_PRODUCTION_RUNNING :
+                         MEISO_RUNTIME_PRODUCTION_STARTING) :
             MEISO_RUNTIME_PRODUCTION_STOPPED,
-        desired->enabled ? MEISO_RUNTIME_PRODUCTION_REASON_NONE :
+        enabled ? (running ? MEISO_RUNTIME_PRODUCTION_REASON_NONE :
+                         MEISO_RUNTIME_PRODUCTION_REASON_APPLYING) :
             MEISO_RUNTIME_PRODUCTION_REASON_DISABLED,
-        desired->enabled ? production_epoch : 0U,
+        enabled && running ? production_epoch : 0U,
         true
     };
+}
+
+static void simulator_apply_actual(
+    MeisoEdgeHandle *handle,
+    MeisoCompositionEdgeDesiredChannel channel,
+    uint64_t production_epoch
+)
+{
+    const bool enabled =
+        handle->simulator_snapshot.desired[channel].enabled;
+
+    simulator_apply_actual_state(
+        handle, channel, enabled, enabled, production_epoch
+    );
+}
+
+static void simulator_reject_actual(
+    MeisoEdgeHandle *handle,
+    MeisoCompositionEdgeDesiredChannel channel,
+    MeisoRuntimeProductionReason reason
+)
+{
+    MeisoCompositionEdgeDesiredView *desired =
+        &handle->simulator_snapshot.desired[channel];
+    MeisoCompositionEdgeActualView *actual =
+        &handle->simulator_snapshot.actual[channel];
+
+    desired->delivery_pending = false;
+    desired->delivery_accepted = true;
+    if (!actual->present) {
+        memset(actual, 0, sizeof(*actual));
+        actual->present = true;
+        actual->availability = MEISO_RUNTIME_AVAILABILITY_PRESENT;
+        actual->production_status = MEISO_RUNTIME_PRODUCTION_STOPPED;
+    }
+    actual->state_owner = desired->owner;
+    actual->state_version = desired->state_version;
+    actual->observed_desired = (MeisoRuntimeDesiredReference){
+        true, desired->owner, desired->state_version
+    };
+    actual->apply_result = MEISO_RUNTIME_APPLY_REJECTED;
+    actual->reason = reason;
+    actual->profile_decoded = true;
 }
 
 static MeisoEdgeStatus finish_command(
@@ -882,6 +1093,203 @@ static MeisoEdgeStatus finish_command(
         return MEISO_EDGE_INTERNAL_FAILURE;
     }
     memmove(out_receipt, &candidate, sizeof(candidate));
+    return MEISO_EDGE_OK;
+}
+
+static MeisoEdgeStatus simulator_put_mesh(
+    MeisoEdgeHandle *handle,
+    MeisoByteView canonical_mesh,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    MeisoContentId content_id;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeStatus status = simulator_command_preflight(handle);
+
+    if (status != MEISO_EDGE_OK) {
+        return status;
+    }
+    if (!handle->simulator_composition_supported) {
+        return MEISO_EDGE_UNSUPPORTED;
+    }
+    if (handle->simulator_mesh_pending) {
+        return MEISO_EDGE_BUSY;
+    }
+    if (canonical_mesh.size == 0U ||
+        canonical_mesh.size > handle->simulator_mesh_buffer_capacity) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (!meiso_composition_scene_mesh_content_id(
+            canonical_mesh, &content_id
+        )) {
+        return MEISO_EDGE_CONFLICT;
+    }
+    memmove(handle->simulator_mesh_buffer, canonical_mesh.data,
+            canonical_mesh.size);
+    handle->simulator_mesh_pending = true;
+    handle->simulator_mesh_size = canonical_mesh.size;
+    handle->simulator_mesh_content_id = content_id;
+    memset(&handle->simulator_snapshot.mesh, 0,
+           sizeof(handle->simulator_snapshot.mesh));
+    handle->simulator_snapshot.mesh.queued = true;
+    handle->simulator_snapshot.mesh.command_id =
+        ++handle->simulator_next_command_id;
+    handle->simulator_snapshot.mesh.content_id = content_id;
+    handle->simulator_snapshot.mesh.total_bytes = canonical_mesh.size;
+    memset(&receipt, 0, sizeof(receipt));
+    receipt.command_id = handle->simulator_snapshot.mesh.command_id;
+    receipt.kind = MEISO_EDGE_COMMAND_PUT_MESH;
+    receipt.local_result = MEISO_EDGE_LOCAL_QUEUED;
+    receipt.mesh_content_id_present = true;
+    receipt.mesh_content_id = content_id;
+    memmove(out_receipt, &receipt, sizeof(receipt));
+    return MEISO_EDGE_OK;
+}
+
+static bool simulator_scene_value_valid(
+    const MeisoCompositionSceneDesired *value
+)
+{
+    uint8_t wire[MEISO_COMPOSITION_SCENE_SCENE_MAX_WIRE_SIZE];
+    size_t wire_size = 0U;
+
+    return value != NULL &&
+        meiso_composition_scene_desired_encode(
+            value, (MeisoMutableBuffer){wire, sizeof(wire)}, &wire_size
+        ) == MEISO_COMPOSITION_SCENE_CODEC_OK && wire_size != 0U;
+}
+
+static MeisoEdgeStatus simulator_set_scene(
+    MeisoEdgeHandle *handle,
+    bool enabled,
+    const MeisoCompositionSceneDesired *value,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    MeisoEdgeStatus status = simulator_command_preflight(handle);
+
+    if (status != MEISO_EDGE_OK) {
+        return status;
+    }
+    if (!handle->simulator_composition_supported) {
+        return MEISO_EDGE_UNSUPPORTED;
+    }
+    if (enabled != (value != NULL)) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (enabled && !simulator_scene_value_valid(value)) {
+        return MEISO_EDGE_CONFLICT;
+    }
+    if (enabled && !handle->simulator_scene_epoch_available) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    status = simulator_queue_desired(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+        MEISO_EDGE_COMMAND_SET_SCENE, enabled, out_receipt
+    );
+    if (status == MEISO_EDGE_OK) {
+        handle->simulator_scene_pending.pending = true;
+        handle->simulator_scene_pending.enabled = enabled;
+        handle->simulator_scene_pending.value = enabled ? *value :
+            (MeisoCompositionSceneDesired){0};
+    }
+    return status;
+}
+
+static bool simulator_presentation_plan(
+    const MeisoEdgeHandle *handle,
+    const MeisoCompositionEdgePresentationSettings *settings,
+    uint64_t generation,
+    MeisoCompositionScenePresentationPlan *out_plan
+)
+{
+    MeisoCompositionScenePresentationPlan plan;
+    uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
+
+    if (handle == NULL || settings == NULL || out_plan == NULL ||
+        generation == 0U) {
+        return false;
+    }
+    memset(&plan, 0, sizeof(plan));
+    plan.flags = settings->flags;
+    plan.plan_generation = generation;
+    plan.capability_generation = handle->catalog_generation;
+    plan.scene_binding = *meiso_composition_scene_scene_endpoint();
+    plan.source = MEISO_COMPOSITION_SCENE_LAYER_SOURCE_EDGE_NATIVE;
+    plan.geometry = MEISO_COMPOSITION_SCENE_GEOMETRY_PROJECTION;
+    plan.target_width = settings->target_width;
+    plan.target_height = settings->target_height;
+    plan.color_format = settings->color_format;
+    plan.depth_format = settings->depth_format;
+    plan.max_result_hz = settings->max_result_hz;
+    plan.offline_lease_ms = settings->offline_lease_ms;
+    if (!meiso_composition_coordinator_plan_digest(&plan, digest)) {
+        return false;
+    }
+    memmove(plan.candidate_digest, digest, sizeof(digest));
+    *out_plan = plan;
+    return true;
+}
+
+static MeisoEdgeStatus simulator_set_presentation(
+    MeisoEdgeHandle *handle,
+    bool enabled,
+    const MeisoCompositionEdgePresentationSettings *settings,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    MeisoCompositionScenePresentationPlan plan;
+    uint64_t generation = 0U;
+    MeisoEdgeStatus status = simulator_command_preflight(handle);
+
+    if (status != MEISO_EDGE_OK) {
+        return status;
+    }
+    if (!handle->simulator_composition_supported) {
+        return MEISO_EDGE_UNSUPPORTED;
+    }
+    if ((enabled && settings == NULL) || (!enabled && settings != NULL)) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    memset(&plan, 0, sizeof(plan));
+    if (enabled) {
+        if (!handle->simulator_presentation_epoch_available ||
+            !handle->simulator_scene_epoch_available ||
+            !handle->simulator_plan_generation_available ||
+            handle->simulator_snapshot.desired[
+                MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION
+            ].state_version >= UINT64_MAX - 1U) {
+            return MEISO_EDGE_COUNTER_EXHAUSTED;
+        }
+        generation = handle->simulator_next_plan_generation;
+        if (!simulator_presentation_plan(
+                handle, settings, generation, &plan
+            )) {
+            return MEISO_EDGE_CONFLICT;
+        }
+    }
+    status = simulator_queue_desired(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
+        MEISO_EDGE_COMMAND_SET_PRESENTATION, enabled, out_receipt
+    );
+    if (status != MEISO_EDGE_OK) {
+        return status;
+    }
+    if (enabled) {
+        out_receipt->plan_generation_present = true;
+        out_receipt->plan_generation = generation;
+        if (generation == UINT64_MAX) {
+            handle->simulator_plan_generation_available = false;
+        } else {
+            ++handle->simulator_next_plan_generation;
+        }
+    }
+    handle->simulator_presentation_pending.pending = true;
+    handle->simulator_presentation_pending.enabled = enabled;
+    handle->simulator_presentation_pending.settings = enabled ? *settings :
+        (MeisoCompositionEdgePresentationSettings){0};
+    handle->simulator_presentation_pending.plan = plan;
+    handle->simulator_presentation_activation_pending = false;
     return MEISO_EDGE_OK;
 }
 
@@ -906,8 +1314,7 @@ MeisoEdgeStatus meiso_composition_edge_put_mesh(
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
     if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
-        preflight = simulator_command_preflight(handle);
-        return preflight == MEISO_EDGE_OK ? MEISO_EDGE_UNSUPPORTED : preflight;
+        return simulator_put_mesh(handle, canonical_mesh, out_receipt);
     }
     preflight = command_preflight(handle, &host);
     if (preflight != MEISO_EDGE_OK) {
@@ -948,8 +1355,7 @@ MeisoEdgeStatus meiso_composition_edge_set_scene(
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
     if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
-        preflight = simulator_command_preflight(handle);
-        return preflight == MEISO_EDGE_OK ? MEISO_EDGE_UNSUPPORTED : preflight;
+        return simulator_set_scene(handle, enabled, value, out_receipt);
     }
     preflight = command_preflight(handle, &host);
     if (preflight != MEISO_EDGE_OK) {
@@ -979,8 +1385,9 @@ MeisoEdgeStatus meiso_composition_edge_set_presentation(
         return MEISO_EDGE_INVALID_ARGUMENT;
     }
     if (handle->backend_kind == EDGE_BACKEND_SIMULATOR) {
-        preflight = simulator_command_preflight(handle);
-        return preflight == MEISO_EDGE_OK ? MEISO_EDGE_UNSUPPORTED : preflight;
+        return simulator_set_presentation(
+            handle, enabled, settings, out_receipt
+        );
     }
     if (settings != NULL) {
         mapped = (MeisoCompositionHostAppPresentationSettings){
@@ -1554,29 +1961,58 @@ static bool simulator_device_sample_within_capability(
               capability->max_temperature_uncertainty_millic));
 }
 
+static bool simulator_composition_config_valid(
+    const MeisoCompositionEdgeSimulatorConfig *config
+)
+{
+    if (config == NULL) {
+        return false;
+    }
+    if (!config->composition_enabled) {
+        return config->composition_blob_slot_count == 0U &&
+            config->composition_clock_epoch == 0U &&
+            config->presentation_production_epoch == 0U &&
+            config->scene_production_epoch == 0U;
+    }
+    return config->composition_blob_slot_count != 0U &&
+        config->composition_blob_slot_count <=
+            MEISO_COMPOSITION_SCENE_MAX_PUBLISHED_BLOBS &&
+        config->composition_clock_epoch != 0U &&
+        config->presentation_production_epoch != 0U &&
+        config->scene_production_epoch != 0U;
+}
+
 size_t meiso_composition_edge_simulator_alignment_required(void)
 {
-    return _Alignof(MeisoEdgeHandle);
+    size_t alignment = _Alignof(MeisoEdgeHandle);
+    const size_t blob_alignment = meiso_blob_alignment_required();
+    const size_t scene_alignment =
+        meiso_composition_scene_store_alignment_required();
+    const size_t coordinator_alignment =
+        meiso_composition_coordinator_alignment_required();
+
+    if (blob_alignment > alignment) {
+        alignment = blob_alignment;
+    }
+    if (scene_alignment > alignment) {
+        alignment = scene_alignment;
+    }
+    if (coordinator_alignment > alignment) {
+        alignment = coordinator_alignment;
+    }
+    return alignment;
 }
 
 size_t meiso_composition_edge_simulator_memory_required(
     const MeisoCompositionEdgeSimulatorConfig *config
 )
 {
-    size_t required;
+    SimulatorLayout layout;
 
-    if (config == NULL ||
-        !checked_add_size(sizeof(MeisoEdgeHandle),
-                          config->catalog.render_media_capability
-                              .max_access_unit_bytes,
-                          &required) ||
-        !checked_add_size(required,
-                          config->catalog.camera_media_capability
-                              .max_access_unit_bytes,
-                          &required)) {
+    if (!simulator_layout(config, &layout)) {
         return 0U;
     }
-    return required;
+    return layout.required;
 }
 
 MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
@@ -1594,15 +2030,20 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     uintptr_t output_begin;
     uintptr_t output_end;
     size_t required;
+    SimulatorLayout layout;
     size_t i;
     size_t wifi_sample_wire_size = 0U;
     size_t device_sample_wire_size = 0U;
     uint8_t wifi_sample_wire[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
     uint8_t device_sample_wire[MEISO_DEVICE_TELEMETRY_SAMPLE_WIRE_SIZE];
-    uint8_t *render_buffer;
-    uint8_t *camera_buffer;
+    uint8_t *arena_bytes;
 
-    required = meiso_composition_edge_simulator_memory_required(config);
+    if (!simulator_layout(config, &layout)) {
+        return config == NULL ?
+            MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_ARGUMENT :
+            MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG;
+    }
+    required = layout.required;
     if (arena == NULL || config == NULL || out_handle == NULL ||
         required == 0U || config->catalog_generation == 0U ||
         config->continuity_serial == 0U ||
@@ -1642,10 +2083,11 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
           !simulator_device_sample_within_capability(
               &config->catalog.device_telemetry_capability,
               &config->device_sample
-          )))) {
+          ))) || !simulator_composition_config_valid(config)) {
         return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG;
     }
-    if ((arena_begin % _Alignof(MeisoEdgeHandle)) != 0U) {
+    if ((arena_begin %
+         meiso_composition_edge_simulator_alignment_required()) != 0U) {
         return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_MISALIGNED_ARENA;
     }
     if (arena_size < required) {
@@ -1695,6 +2137,22 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     candidate.simulator_device_epoch_available =
         config->device_telemetry_enabled;
     candidate.simulator_device_sample = config->device_sample;
+    candidate.simulator_composition_supported =
+        config->composition_enabled;
+    candidate.simulator_blob_slot_count =
+        config->composition_blob_slot_count;
+    candidate.simulator_composition_clock_epoch =
+        config->composition_clock_epoch;
+    candidate.simulator_presentation_epoch =
+        config->presentation_production_epoch;
+    candidate.simulator_presentation_epoch_available =
+        config->composition_enabled;
+    candidate.simulator_scene_epoch = config->scene_production_epoch;
+    candidate.simulator_scene_epoch_available =
+        config->composition_enabled;
+    candidate.simulator_next_plan_generation = 1U;
+    candidate.simulator_plan_generation_available =
+        config->composition_enabled;
     candidate.simulator_snapshot.edge = (MeisoEdgeSnapshot){
         MEISO_VIRTUAL_EDGE_API_VERSION,
         candidate.profile,
@@ -1708,15 +2166,28 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
         0U,
         0U
     };
-    render_buffer = (uint8_t *)arena + sizeof(MeisoEdgeHandle);
-    camera_buffer = render_buffer +
-        config->catalog.render_media_capability.max_access_unit_bytes;
-    candidate.simulator_media[0].buffer = render_buffer;
+    arena_bytes = (uint8_t *)arena;
+    candidate.simulator_media[0].buffer =
+        arena_bytes + layout.render_offset;
     candidate.simulator_media[0].capacity =
         config->catalog.render_media_capability.max_access_unit_bytes;
-    candidate.simulator_media[1].buffer = camera_buffer;
+    candidate.simulator_media[1].buffer =
+        arena_bytes + layout.camera_offset;
     candidate.simulator_media[1].capacity =
         config->catalog.camera_media_capability.max_access_unit_bytes;
+    if (config->composition_enabled) {
+        candidate.simulator_mesh_buffer = arena_bytes + layout.mesh_offset;
+        candidate.simulator_mesh_buffer_capacity =
+            MEISO_COMPOSITION_SCENE_MAX_MESH_BLOB_SIZE;
+        candidate.simulator_blob_arena = arena_bytes + layout.blob_offset;
+        candidate.simulator_blob_arena_size = layout.blob_size;
+        candidate.simulator_scene_arena = arena_bytes + layout.scene_offset;
+        candidate.simulator_scene_arena_size = layout.scene_size;
+        candidate.simulator_coordinator_arena =
+            arena_bytes + layout.coordinator_offset;
+        candidate.simulator_coordinator_arena_size =
+            layout.coordinator_size;
+    }
     for (i = 0U; i < MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT; ++i) {
         const uintptr_t capability_begin =
             (uintptr_t)candidate.endpoints[i].capability.data;
@@ -1743,6 +2214,70 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_OK;
 }
 
+static bool simulator_composition_initialize(MeisoEdgeHandle *handle)
+{
+    const MeisoResourceDescriptor *blob_descriptor;
+    MeisoBlobConfig blob_config;
+    MeisoCompositionCoordinatorConfig coordinator_config;
+    MeisoBlobStore *blob_store = NULL;
+    MeisoCompositionSceneStore *scene_store = NULL;
+    MeisoCompositionCoordinator *coordinator = NULL;
+
+    if (handle == NULL || !handle->simulator_composition_supported) {
+        return handle != NULL;
+    }
+    if (handle->simulator_composition_initialized) {
+        return true;
+    }
+    blob_descriptor = meiso_composition_scene_resource(
+        MEISO_COMPOSITION_SCENE_RESOURCE_MESH_BLOB
+    );
+    blob_config.published_slot_count = handle->simulator_blob_slot_count;
+    if (blob_descriptor == NULL ||
+        meiso_blob_store_init(
+            handle->simulator_blob_arena,
+            handle->simulator_blob_arena_size,
+            blob_descriptor, &blob_config, &blob_store
+        ) != MEISO_BLOB_INIT_OK ||
+        meiso_composition_scene_store_init(
+            handle->simulator_scene_arena,
+            handle->simulator_scene_arena_size,
+            blob_store, &scene_store
+        ) != MEISO_COMPOSITION_SCENE_STORE_INIT_OK) {
+        return false;
+    }
+    memset(&coordinator_config, 0, sizeof(coordinator_config));
+    coordinator_config.scene_store = scene_store;
+    coordinator_config.session_id.host_nonce = (MeisoSessionNonce){
+        handle->continuity_serial,
+        handle->simulator_desired_owner.incarnation
+    };
+    coordinator_config.session_id.edge_nonce = (MeisoSessionNonce){
+        handle->catalog_generation,
+        handle->simulator_catalog.presentation_incarnation
+    };
+    coordinator_config.edge_incarnation =
+        handle->simulator_catalog.presentation_incarnation;
+    coordinator_config.capability_generation = handle->catalog_generation;
+    coordinator_config.edge_clock_epoch =
+        handle->simulator_composition_clock_epoch;
+    if (meiso_composition_coordinator_init(
+            handle->simulator_coordinator_arena,
+            handle->simulator_coordinator_arena_size,
+            &coordinator_config, &coordinator
+        ) != MEISO_COMPOSITION_COORDINATOR_INIT_OK ||
+        meiso_composition_coordinator_begin_owner(
+            coordinator, handle->simulator_desired_owner.incarnation
+        ) != MEISO_COMPOSITION_COORDINATOR_OWNER_STARTED) {
+        return false;
+    }
+    handle->simulator_blob_store = blob_store;
+    handle->simulator_scene_store = scene_store;
+    handle->simulator_coordinator = coordinator;
+    handle->simulator_composition_initialized = true;
+    return true;
+}
+
 MeisoEdgeStatus meiso_composition_edge_simulator_activate(
     MeisoEdgeHandle *handle
 )
@@ -1760,11 +2295,20 @@ MeisoEdgeStatus meiso_composition_edge_simulator_activate(
     if (edge->phase == MEISO_EDGE_PHASE_READY) {
         return MEISO_EDGE_CONFLICT;
     }
+    if (!simulator_composition_initialize(handle)) {
+        (void)meiso_composition_edge_simulator_terminate(
+            handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+        );
+        return MEISO_EDGE_INTERNAL_FAILURE;
+    }
     edge->phase = MEISO_EDGE_PHASE_READY;
     edge->online = true;
     edge->resource_graph_live = true;
     edge->catalog_generation = handle->catalog_generation;
-    edge->operations = SIMULATOR_SUPPORTED_OPERATIONS;
+    edge->operations = SIMULATOR_SUPPORTED_OPERATIONS |
+        (handle->simulator_composition_supported ?
+         (MEISO_EDGE_OPERATION_BLOB_PUT |
+          MEISO_EDGE_OPERATION_COMPOSITION) : 0U);
     edge->endpoint_count = MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT;
     edge->resource_count = MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT;
     return MEISO_EDGE_OK;
@@ -1942,6 +2486,746 @@ static void simulator_apply_media(MeisoEdgeHandle *handle, size_t index)
     }
 }
 
+static bool simulator_take_epoch(
+    uint64_t *next_epoch,
+    bool *available,
+    uint64_t *out_epoch
+)
+{
+    if (next_epoch == NULL || available == NULL || out_epoch == NULL ||
+        !*available || *next_epoch == 0U) {
+        return false;
+    }
+    *out_epoch = *next_epoch;
+    if (*next_epoch == UINT64_MAX) {
+        *available = false;
+    } else {
+        ++*next_epoch;
+    }
+    return true;
+}
+
+static bool simulator_candidate_nonce(
+    const MeisoCompositionCoordinatorPlanRef *ref,
+    uint8_t nonce[MEISO_SHA256_DIGEST_SIZE]
+)
+{
+    size_t index;
+
+    if (ref == NULL || nonce == NULL || ref->plan_generation == 0U) {
+        return false;
+    }
+    for (index = 0U; index < MEISO_SHA256_DIGEST_SIZE; ++index) {
+        nonce[index] = (uint8_t)(
+            ref->candidate_digest[index] ^
+            (uint8_t)(ref->plan_generation >> ((index % 8U) * 8U)) ^
+            (uint8_t)(index + 1U)
+        );
+    }
+    nonce[0] |= 1U;
+    return true;
+}
+
+static bool simulator_refresh_presentation_status(MeisoEdgeHandle *handle)
+{
+    MeisoCompositionScenePresentationStatus status;
+    MeisoCompositionEdgePresentationStatus public_status;
+
+    if (!handle->simulator_composition_initialized ||
+        !meiso_composition_coordinator_status(
+            handle->simulator_coordinator, &status
+        )) {
+        return false;
+    }
+    memset(&public_status, 0, sizeof(public_status));
+    public_status.capability_generation = status.capability_generation;
+    public_status.candidate_state = status.candidate_state;
+    public_status.candidate_plan_generation =
+        status.candidate_plan_generation;
+    memmove(public_status.candidate_digest, status.candidate_digest,
+            sizeof(public_status.candidate_digest));
+    public_status.active_state = status.active_state;
+    public_status.active_plan_generation = status.active_plan_generation;
+    memmove(public_status.active_digest, status.active_digest,
+            sizeof(public_status.active_digest));
+    public_status.reason = status.reason;
+    public_status.target_width = status.target_width;
+    public_status.target_height = status.target_height;
+    public_status.color_format = status.color_format;
+    public_status.depth_format = status.depth_format;
+    handle->simulator_snapshot.presentation_status_present = true;
+    handle->simulator_snapshot.presentation_status = public_status;
+    return true;
+}
+
+static bool simulator_refresh_scene_status(MeisoEdgeHandle *handle)
+{
+    MeisoCompositionSceneResourceUsage usage;
+    MeisoCompositionSceneStatus status;
+    size_t blob_count;
+
+    if (!handle->simulator_composition_initialized) {
+        return false;
+    }
+    blob_count = meiso_blob_store_count(handle->simulator_blob_store);
+    if (blob_count > UINT32_MAX) {
+        return false;
+    }
+    memset(&usage, 0, sizeof(usage));
+    usage.published_blob_count = (uint32_t)blob_count;
+    usage.published_blob_bytes = handle->simulator_published_blob_bytes;
+    usage.result_queue_depth =
+        handle->simulator_snapshot.inline_streams[
+            MEISO_COMPOSITION_EDGE_INLINE_RENDER_RESULT
+        ].present ? 1U : 0U;
+    if (!meiso_composition_scene_store_status(
+            handle->simulator_scene_store, &usage, &status
+        )) {
+        return false;
+    }
+    handle->simulator_snapshot.scene_status_present = true;
+    handle->simulator_snapshot.scene_status = status;
+    return true;
+}
+
+static bool simulator_refresh_composition_status(MeisoEdgeHandle *handle)
+{
+    return simulator_refresh_presentation_status(handle) &&
+        simulator_refresh_scene_status(handle);
+}
+
+static void simulator_clear_render_truth(MeisoEdgeHandle *handle)
+{
+    MeisoCompositionEdgeInlineView *stream =
+        &handle->simulator_snapshot.inline_streams[
+            MEISO_COMPOSITION_EDGE_INLINE_RENDER_RESULT
+        ];
+    const uint64_t received_count = stream->received_count;
+    const uint64_t replaced_count = stream->replaced_count;
+
+    memset(stream, 0, sizeof(*stream));
+    stream->received_count = received_count;
+    stream->replaced_count = replaced_count;
+    handle->simulator_snapshot.render_result_present = false;
+    memset(&handle->simulator_snapshot.render_result, 0,
+           sizeof(handle->simulator_snapshot.render_result));
+    handle->simulator_render_result_sequence = 0U;
+    handle->simulator_render_result_pending = false;
+}
+
+typedef int SimulatorPrepareResult;
+enum {
+    SIMULATOR_PREPARE_INTERNAL = -1,
+    SIMULATOR_PREPARE_WAITING = 0,
+    SIMULATOR_PREPARE_PREPARED = 1,
+    SIMULATOR_PREPARE_REJECTED = 2
+};
+
+static SimulatorPrepareResult simulator_prepare_candidate(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    MeisoCompositionCoordinatorPlanView candidate;
+    MeisoCompositionScenePrepareStatus prepare =
+        MEISO_COMPOSITION_SCENE_PREPARE_MISSING_BLOB;
+    MeisoCompositionCoordinatorReportStatus report;
+    MeisoCompositionCoordinatorBackendOutcome outcome =
+        MEISO_COMPOSITION_COORDINATOR_BACKEND_READY;
+    uint8_t nonce[MEISO_SHA256_DIGEST_SIZE] = {1U};
+    const uint8_t *nonce_pointer = nonce;
+
+    if (!meiso_composition_coordinator_candidate(
+            handle->simulator_coordinator, &candidate
+        ) || candidate.candidate_state !=
+            MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARING) {
+        return SIMULATOR_PREPARE_WAITING;
+    }
+    if (handle->simulator_scene_value_present &&
+        handle->simulator_scene_enabled) {
+        prepare = meiso_composition_scene_store_prepare(
+            handle->simulator_scene_store,
+            handle->simulator_desired_owner.incarnation,
+            handle->simulator_snapshot.desired[
+                MEISO_COMPOSITION_EDGE_DESIRED_SCENE
+            ].state_version,
+            candidate.ref.plan_generation,
+            &handle->simulator_scene_value
+        );
+    }
+    if (prepare == MEISO_COMPOSITION_SCENE_PREPARE_PREPARED ||
+        prepare == MEISO_COMPOSITION_SCENE_PREPARE_UNCHANGED ||
+        prepare == MEISO_COMPOSITION_SCENE_PREPARE_ALREADY_ACTIVE) {
+        if (!simulator_candidate_nonce(&candidate.ref, nonce)) {
+            return SIMULATOR_PREPARE_INTERNAL;
+        }
+    } else if (prepare == MEISO_COMPOSITION_SCENE_PREPARE_MISSING_BLOB) {
+        /* READY without a matching Scene candidate yields WAITING_SCENE. */
+    } else if (prepare == MEISO_COMPOSITION_SCENE_PREPARE_CAPACITY) {
+        outcome = MEISO_COMPOSITION_COORDINATOR_BACKEND_CAPACITY;
+        nonce_pointer = NULL;
+    } else if (prepare == MEISO_COMPOSITION_SCENE_PREPARE_INVALID_DESIRED ||
+               prepare == MEISO_COMPOSITION_SCENE_PREPARE_INVALID_MESH) {
+        outcome = MEISO_COMPOSITION_COORDINATOR_BACKEND_PREPARE_FAILED;
+        nonce_pointer = NULL;
+    } else {
+        return SIMULATOR_PREPARE_INTERNAL;
+    }
+    report = meiso_composition_coordinator_report_prepare_outcome(
+        handle->simulator_coordinator, &candidate.ref, outcome, now,
+        nonce_pointer
+    );
+    if (report == MEISO_COMPOSITION_COORDINATOR_REPORT_PREPARED) {
+        handle->simulator_presentation_activation_pending = true;
+        handle->simulator_scene_retry_pending = false;
+        handle->simulator_scene_retry_ready = false;
+        return SIMULATOR_PREPARE_PREPARED;
+    }
+    if (report == MEISO_COMPOSITION_COORDINATOR_REPORT_WAITING_SCENE) {
+        handle->simulator_scene_retry_pending =
+            handle->simulator_scene_value_present &&
+            handle->simulator_scene_enabled;
+        handle->simulator_scene_retry_ready = false;
+        return SIMULATOR_PREPARE_WAITING;
+    }
+    if (report == MEISO_COMPOSITION_COORDINATOR_REPORT_REJECTED ||
+        report == MEISO_COMPOSITION_COORDINATOR_REPORT_FAILED) {
+        simulator_reject_actual(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
+            outcome == MEISO_COMPOSITION_COORDINATOR_BACKEND_CAPACITY ?
+                MEISO_RUNTIME_PRODUCTION_REASON_ADMISSION_DENIED :
+                MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED
+        );
+        if (handle->simulator_scene_value_present &&
+            handle->simulator_scene_enabled) {
+            simulator_reject_actual(
+                handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+                outcome == MEISO_COMPOSITION_COORDINATOR_BACKEND_CAPACITY ?
+                    MEISO_RUNTIME_PRODUCTION_REASON_ADMISSION_DENIED :
+                    MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED
+            );
+        }
+        handle->simulator_scene_retry_pending = false;
+        handle->simulator_scene_retry_ready = false;
+        return SIMULATOR_PREPARE_REJECTED;
+    }
+    return SIMULATOR_PREPARE_INTERNAL;
+}
+
+static bool simulator_publish_mesh(MeisoEdgeHandle *handle)
+{
+    MeisoMutableBuffer staging;
+    MeisoBlobStageStatus stage;
+    MeisoBlobCommitStatus commit = MEISO_BLOB_COMMIT_INVALID;
+    MeisoRuntimeBlobResult result;
+    bool published = false;
+    bool duplicate = false;
+
+    stage = meiso_blob_store_stage_begin(
+        handle->simulator_blob_store,
+        &handle->simulator_mesh_content_id,
+        handle->simulator_mesh_size
+    );
+    if (stage == MEISO_BLOB_STAGE_STARTED) {
+        if (!meiso_blob_store_staging_buffer(
+                handle->simulator_blob_store, &staging
+            ) || staging.data == NULL ||
+            staging.capacity < handle->simulator_mesh_size) {
+            return false;
+        }
+        memmove(staging.data, handle->simulator_mesh_buffer,
+                handle->simulator_mesh_size);
+        commit = meiso_blob_store_commit_verified(
+            handle->simulator_blob_store,
+            handle->simulator_mesh_size,
+            meiso_composition_scene_mesh_blob_verify, NULL
+        );
+        published = commit == MEISO_BLOB_COMMIT_PUBLISHED;
+        duplicate = commit == MEISO_BLOB_COMMIT_DUPLICATE;
+        if (published) {
+            result = MEISO_RUNTIME_BLOB_RESULT_PUBLISHED;
+        } else if (duplicate) {
+            result = MEISO_RUNTIME_BLOB_RESULT_DUPLICATE;
+        } else if (commit == MEISO_BLOB_COMMIT_CAPACITY) {
+            result = MEISO_RUNTIME_BLOB_RESULT_CAPACITY;
+        } else if (commit == MEISO_BLOB_COMMIT_INTEGRITY_FAILED) {
+            result = MEISO_RUNTIME_BLOB_RESULT_INTEGRITY_FAILED;
+        } else if (commit == MEISO_BLOB_COMMIT_LENGTH_MISMATCH) {
+            result = MEISO_RUNTIME_BLOB_RESULT_LENGTH_MISMATCH;
+        } else {
+            return false;
+        }
+        if (!published && !duplicate &&
+            meiso_blob_store_abort_staging(
+                handle->simulator_blob_store,
+                MEISO_BLOB_ABORT_TRANSFER_DISCONTINUITY
+            ) != MEISO_BLOB_ABORTED) {
+            return false;
+        }
+    } else if (stage == MEISO_BLOB_STAGE_UNCHANGED) {
+        duplicate = true;
+        result = MEISO_RUNTIME_BLOB_RESULT_DUPLICATE;
+    } else if (stage == MEISO_BLOB_STAGE_CAPACITY) {
+        result = MEISO_RUNTIME_BLOB_RESULT_CAPACITY;
+    } else if (stage == MEISO_BLOB_STAGE_CONFLICT) {
+        result = MEISO_RUNTIME_BLOB_RESULT_CONFLICT;
+    } else if (stage == MEISO_BLOB_STAGE_INVALID_CONTENT_ID) {
+        result = MEISO_RUNTIME_BLOB_RESULT_INVALID_CONTENT_ID;
+    } else {
+        return false;
+    }
+    if (published || duplicate) {
+        const MeisoCompositionSceneBlobVisibilityStatus visibility =
+            meiso_composition_scene_store_mark_blob_visible(
+                handle->simulator_scene_store,
+                handle->simulator_desired_owner.incarnation,
+                &handle->simulator_mesh_content_id,
+                handle->simulator_mesh_size
+            );
+        if (visibility != MEISO_COMPOSITION_SCENE_BLOB_VISIBLE &&
+            visibility !=
+                MEISO_COMPOSITION_SCENE_BLOB_VISIBLE_UNCHANGED) {
+            return false;
+        }
+        if (published) {
+            if (handle->simulator_published_blob_bytes >
+                UINT64_MAX - handle->simulator_mesh_size) {
+                return false;
+            }
+            handle->simulator_published_blob_bytes +=
+                handle->simulator_mesh_size;
+        }
+    }
+    handle->simulator_mesh_pending = false;
+    handle->simulator_snapshot.mesh.queued = false;
+    handle->simulator_snapshot.mesh.transfer_active = false;
+    handle->simulator_snapshot.mesh.begin_ready = published || duplicate;
+    handle->simulator_snapshot.mesh.waiting_result = false;
+    handle->simulator_snapshot.mesh.terminal_result_present = true;
+    handle->simulator_snapshot.mesh.terminal_result = result;
+    handle->simulator_snapshot.mesh.edge_core_published =
+        published || duplicate;
+    handle->simulator_snapshot.mesh.next_offset =
+        published || duplicate ? handle->simulator_mesh_size : 0U;
+    if ((published || duplicate) &&
+        handle->simulator_scene_retry_pending) {
+        handle->simulator_scene_retry_ready = true;
+    }
+    return simulator_refresh_scene_status(handle);
+}
+
+static bool simulator_runtime_plan(
+    const MeisoCompositionScenePresentationPlan *plan,
+    uint8_t wire[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE],
+    MeisoRuntimeDesiredState *out_desired
+)
+{
+    size_t wire_size = 0U;
+
+    if (plan == NULL || wire == NULL || out_desired == NULL ||
+        meiso_composition_scene_presentation_plan_encode(
+            plan,
+            (MeisoMutableBuffer){
+                wire, MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE
+            }, &wire_size
+        ) != MEISO_COMPOSITION_SCENE_CODEC_OK ||
+        wire_size != MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE) {
+        return false;
+    }
+    out_desired->enabled = true;
+    out_desired->profile = (MeisoByteView){wire, wire_size};
+    return true;
+}
+
+static bool simulator_apply_scene_command(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    SimulatorScenePending *pending = &handle->simulator_scene_pending;
+    MeisoCompositionCoordinatorPlanView plan;
+    MeisoCompositionScenePrepareStatus prepare;
+    MeisoCompositionCoordinatorSwapStatus swap;
+    MeisoCompositionSceneWorldRef world;
+    MeisoCompositionSceneWorldView active_world;
+    const bool command_pending = pending->pending;
+    const bool requested_enabled = command_pending ? pending->enabled :
+        handle->simulator_scene_enabled;
+    bool plan_active = false;
+    uint64_t epoch;
+    MeisoCompositionSceneDisableStatus disable_status;
+
+    if (command_pending) {
+        pending->pending = false;
+        handle->simulator_scene_retry_pending = false;
+        handle->simulator_scene_retry_ready = false;
+    }
+    if (!requested_enabled) {
+        if (meiso_composition_scene_store_active(
+                handle->simulator_scene_store, &active_world
+            )) {
+            simulator_reject_actual(
+                handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+                MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED
+            );
+            return simulator_refresh_composition_status(handle);
+        }
+        handle->simulator_scene_enabled = false;
+        handle->simulator_scene_value_present = false;
+        memset(&handle->simulator_scene_value, 0,
+               sizeof(handle->simulator_scene_value));
+        disable_status = meiso_composition_scene_store_disable(
+            handle->simulator_scene_store, NULL
+        );
+        if (disable_status != MEISO_COMPOSITION_SCENE_DISABLE_DISABLED &&
+            disable_status !=
+                MEISO_COMPOSITION_SCENE_DISABLE_ALREADY_DISABLED) {
+            return false;
+        }
+        simulator_apply_actual_state(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, false, false, 0U
+        );
+        simulator_clear_render_truth(handle);
+        return simulator_refresh_composition_status(handle);
+    }
+    if (command_pending) {
+        handle->simulator_scene_enabled = true;
+        handle->simulator_scene_value_present = true;
+        handle->simulator_scene_value = pending->value;
+    }
+    if (meiso_composition_coordinator_active(
+            handle->simulator_coordinator, &plan
+        )) {
+        plan_active = true;
+    } else if (!meiso_composition_coordinator_candidate(
+                   handle->simulator_coordinator, &plan
+               )) {
+        simulator_apply_actual_state(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, true, false, 0U
+        );
+        return simulator_refresh_composition_status(handle);
+    }
+    prepare = meiso_composition_scene_store_prepare(
+        handle->simulator_scene_store,
+        handle->simulator_desired_owner.incarnation,
+        handle->simulator_snapshot.desired[
+            MEISO_COMPOSITION_EDGE_DESIRED_SCENE
+        ].state_version,
+        plan.ref.plan_generation,
+        &handle->simulator_scene_value
+    );
+    if (prepare == MEISO_COMPOSITION_SCENE_PREPARE_MISSING_BLOB) {
+        handle->simulator_scene_retry_pending = true;
+        handle->simulator_scene_retry_ready = false;
+        simulator_apply_actual_state(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, true, false, 0U
+        );
+        if (!plan_active &&
+            simulator_prepare_candidate(handle, now) ==
+                SIMULATOR_PREPARE_INTERNAL) {
+            return false;
+        }
+        return simulator_refresh_composition_status(handle);
+    }
+    if (prepare != MEISO_COMPOSITION_SCENE_PREPARE_PREPARED &&
+        prepare != MEISO_COMPOSITION_SCENE_PREPARE_UNCHANGED &&
+        prepare != MEISO_COMPOSITION_SCENE_PREPARE_ALREADY_ACTIVE) {
+        handle->simulator_scene_retry_pending = false;
+        handle->simulator_scene_retry_ready = false;
+        simulator_reject_actual(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+            prepare == MEISO_COMPOSITION_SCENE_PREPARE_CAPACITY ?
+                MEISO_RUNTIME_PRODUCTION_REASON_ADMISSION_DENIED :
+                MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED
+        );
+        return simulator_refresh_composition_status(handle);
+    }
+    if (!plan_active) {
+        const SimulatorPrepareResult result =
+            simulator_prepare_candidate(handle, now);
+        if (result == SIMULATOR_PREPARE_INTERNAL) {
+            return false;
+        }
+        simulator_apply_actual_state(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, true, false, 0U
+        );
+        return simulator_refresh_composition_status(handle);
+    }
+    if (prepare == MEISO_COMPOSITION_SCENE_PREPARE_ALREADY_ACTIVE) {
+        if (!meiso_composition_scene_store_active(
+                handle->simulator_scene_store, &active_world
+            )) {
+            return false;
+        }
+        epoch = handle->simulator_snapshot.actual[
+            MEISO_COMPOSITION_EDGE_ACTUAL_SCENE
+        ].production_epoch;
+        if (epoch == 0U) {
+            return false;
+        }
+    } else {
+        swap = meiso_composition_coordinator_swap_scene_frame_boundary(
+            handle->simulator_coordinator,
+            handle->simulator_desired_owner.incarnation,
+            handle->simulator_snapshot.desired[
+                MEISO_COMPOSITION_EDGE_DESIRED_SCENE
+            ].state_version,
+            now, &world
+        );
+        if (swap != MEISO_COMPOSITION_COORDINATOR_SWAP_ACTIVATED ||
+            !simulator_take_epoch(
+                &handle->simulator_scene_epoch,
+                &handle->simulator_scene_epoch_available, &epoch
+            )) {
+            return false;
+        }
+    }
+    handle->simulator_scene_retry_pending = false;
+    handle->simulator_scene_retry_ready = false;
+    simulator_apply_actual_state(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE, true, true, epoch
+    );
+    simulator_clear_render_truth(handle);
+    handle->simulator_render_result_pending = true;
+    return simulator_refresh_composition_status(handle);
+}
+
+static bool simulator_apply_presentation_command(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    SimulatorPresentationPending *pending =
+        &handle->simulator_presentation_pending;
+    MeisoRuntimeDesiredState desired;
+    MeisoCompositionCoordinatorObserveStatus observe;
+    MeisoCompositionCoordinatorDisableStatus disable;
+    uint8_t wire[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE];
+
+    pending->pending = false;
+    if (!pending->enabled) {
+        desired = (MeisoRuntimeDesiredState){false, {NULL, 0U}};
+        observe = meiso_composition_coordinator_observe_desired(
+            handle->simulator_coordinator,
+            handle->simulator_desired_owner.incarnation,
+            handle->simulator_snapshot.desired[
+                MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION
+            ].state_version,
+            &desired, now
+        );
+        if (observe !=
+                MEISO_COMPOSITION_COORDINATOR_OBSERVE_DISABLE_PENDING &&
+            observe != MEISO_COMPOSITION_COORDINATOR_OBSERVE_DUPLICATE) {
+            return false;
+        }
+        disable = meiso_composition_coordinator_disable_frame_boundary(
+            handle->simulator_coordinator, true, now
+        );
+        if (disable != MEISO_COMPOSITION_COORDINATOR_DISABLE_DISABLED &&
+            disable !=
+                MEISO_COMPOSITION_COORDINATOR_DISABLE_ALREADY_DISABLED) {
+            return false;
+        }
+        handle->simulator_presentation_plan_present = false;
+        handle->simulator_presentation_activation_pending = false;
+        simulator_apply_actual_state(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
+            false, false, 0U
+        );
+        simulator_clear_render_truth(handle);
+        if (handle->simulator_snapshot.desired[
+                MEISO_COMPOSITION_EDGE_DESIRED_SCENE
+            ].requested && !handle->simulator_snapshot.desired[
+                MEISO_COMPOSITION_EDGE_DESIRED_SCENE
+            ].enabled) {
+            handle->simulator_scene_enabled = false;
+            handle->simulator_scene_value_present = false;
+            memset(&handle->simulator_scene_value, 0,
+                   sizeof(handle->simulator_scene_value));
+            simulator_apply_actual_state(
+                handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+                false, false, 0U
+            );
+        } else if (handle->simulator_scene_value_present &&
+                   handle->simulator_scene_enabled) {
+            simulator_apply_actual_state(
+                handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+                true, false, 0U
+            );
+        }
+        return simulator_refresh_composition_status(handle);
+    }
+    handle->simulator_presentation_plan = pending->plan;
+    handle->simulator_presentation_plan_present = true;
+    if (!simulator_runtime_plan(
+            &handle->simulator_presentation_plan, wire, &desired
+        )) {
+        return false;
+    }
+    observe = meiso_composition_coordinator_observe_desired(
+        handle->simulator_coordinator,
+        handle->simulator_desired_owner.incarnation,
+        handle->simulator_snapshot.desired[
+            MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION
+        ].state_version,
+        &desired, now
+    );
+    if (observe != MEISO_COMPOSITION_COORDINATOR_OBSERVE_PREPARING &&
+        observe != MEISO_COMPOSITION_COORDINATOR_OBSERVE_DUPLICATE &&
+        observe != MEISO_COMPOSITION_COORDINATOR_OBSERVE_ALREADY_ACTIVE) {
+        simulator_reject_actual(
+            handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
+            MEISO_RUNTIME_PRODUCTION_REASON_UNSUPPORTED_PARAMETER
+        );
+        return simulator_refresh_composition_status(handle);
+    }
+    simulator_apply_actual_state(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
+        true, false, 0U
+    );
+    if (observe == MEISO_COMPOSITION_COORDINATOR_OBSERVE_PREPARING &&
+        simulator_prepare_candidate(handle, now) ==
+            SIMULATOR_PREPARE_INTERNAL) {
+        return false;
+    }
+    return simulator_refresh_composition_status(handle);
+}
+
+static bool simulator_activate_presentation(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    MeisoCompositionCoordinatorPlanView candidate;
+    MeisoCompositionScenePresentationPlan echoed;
+    MeisoRuntimeDesiredState desired;
+    MeisoCompositionCoordinatorObserveStatus observe;
+    MeisoCompositionCoordinatorActivateStatus activate;
+    MeisoCompositionSceneWorldRef world;
+    MeisoCompositionEdgeDesiredView *presentation_desired;
+    uint8_t wire[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE];
+    uint64_t presentation_epoch;
+    uint64_t scene_epoch;
+    uint64_t echo_version;
+
+    if (!meiso_composition_coordinator_candidate(
+            handle->simulator_coordinator, &candidate
+        ) || candidate.candidate_state !=
+            MEISO_COMPOSITION_SCENE_CANDIDATE_PREPARED ||
+        !candidate.prepared_token_present) {
+        return false;
+    }
+    presentation_desired = &handle->simulator_snapshot.desired[
+        MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION
+    ];
+    if (presentation_desired->state_version == UINT64_MAX ||
+        !handle->simulator_presentation_epoch_available ||
+        !handle->simulator_scene_epoch_available) {
+        return false;
+    }
+    echo_version = presentation_desired->state_version + 1U;
+    echoed = handle->simulator_presentation_plan;
+    echoed.prepared_token_echo_present = true;
+    memmove(echoed.prepared_token_echo, candidate.prepared_token,
+            sizeof(echoed.prepared_token_echo));
+    if (!simulator_runtime_plan(&echoed, wire, &desired)) {
+        return false;
+    }
+    observe = meiso_composition_coordinator_observe_desired(
+        handle->simulator_coordinator,
+        handle->simulator_desired_owner.incarnation,
+        echo_version, &desired, now
+    );
+    if (observe !=
+        MEISO_COMPOSITION_COORDINATOR_OBSERVE_ACTIVATION_PENDING) {
+        return false;
+    }
+    activate = meiso_composition_coordinator_activate_frame_boundary(
+        handle->simulator_coordinator, candidate.prepared_token,
+        now, &world
+    );
+    if (activate != MEISO_COMPOSITION_COORDINATOR_ACTIVATE_ACTIVATED ||
+        !simulator_take_epoch(
+            &handle->simulator_presentation_epoch,
+            &handle->simulator_presentation_epoch_available,
+            &presentation_epoch
+        ) ||
+        !simulator_take_epoch(
+            &handle->simulator_scene_epoch,
+            &handle->simulator_scene_epoch_available, &scene_epoch
+        )) {
+        return false;
+    }
+    presentation_desired->state_version = echo_version;
+    handle->simulator_presentation_plan = echoed;
+    handle->simulator_presentation_activation_pending = false;
+    simulator_apply_actual_state(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION,
+        true, true, presentation_epoch
+    );
+    simulator_apply_actual_state(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_SCENE,
+        true, true, scene_epoch
+    );
+    simulator_clear_render_truth(handle);
+    handle->simulator_render_result_pending = true;
+    return simulator_refresh_composition_status(handle);
+}
+
+static bool simulator_publish_render_result(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    MeisoCompositionSceneWorldView world;
+    MeisoCompositionSceneRenderResult result;
+    MeisoCompositionEdgeInlineView stream;
+    MeisoCompositionEdgeInlineView *current =
+        &handle->simulator_snapshot.inline_streams[
+            MEISO_COMPOSITION_EDGE_INLINE_RENDER_RESULT
+        ];
+    const uint64_t epoch = handle->simulator_snapshot.actual[
+        MEISO_COMPOSITION_EDGE_ACTUAL_SCENE
+    ].production_epoch;
+    uint64_t sequence;
+
+    if (now.monotonic_ns == UINT64_MAX || epoch == 0U ||
+        handle->simulator_render_result_sequence == UINT64_MAX ||
+        current->received_count == UINT64_MAX ||
+        (current->present && current->replaced_count == UINT64_MAX) ||
+        !meiso_composition_scene_store_active(
+            handle->simulator_scene_store, &world
+        )) {
+        return false;
+    }
+    sequence = handle->simulator_render_result_sequence + 1U;
+    if (meiso_composition_scene_store_fake_render(
+            handle->simulator_scene_store,
+            handle->simulator_composition_clock_epoch,
+            now.monotonic_ns, now.monotonic_ns + 1U, &result
+        ) != MEISO_COMPOSITION_SCENE_RENDER_COMPLETE ||
+        !meiso_composition_scene_store_record_result_published(
+            handle->simulator_scene_store, &world.ref, epoch, sequence
+        )) {
+        return false;
+    }
+    stream = (MeisoCompositionEdgeInlineView){
+        true,
+        {handle->simulator_desired_owner, epoch, sequence},
+        now,
+        MEISO_STREAM_RECEIVE_FLAG_NONE,
+        0U,
+        current->received_count + 1U,
+        current->replaced_count + (current->present ? 1U : 0U)
+    };
+    handle->simulator_render_result_sequence = sequence;
+    handle->simulator_snapshot.render_result_present = true;
+    handle->simulator_snapshot.render_result = result;
+    *current = stream;
+    handle->simulator_render_result_pending = false;
+    return simulator_refresh_scene_status(handle);
+}
+
 static bool simulator_media_size_exact(
     const MeisoCompositionEdgeSimulatorFrame *frame
 )
@@ -1970,6 +3254,7 @@ static bool simulator_media_size_exact(
 }
 
 static bool simulator_frame_scene_fields_valid(
+    const MeisoEdgeHandle *handle,
     const MeisoCompositionEdgeSimulatorFrame *frame
 )
 {
@@ -1977,11 +3262,34 @@ static bool simulator_frame_scene_fields_valid(
         return false;
     }
     if (frame->source == MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW) {
-        return meiso_owner_scope_valid(frame->applied_scene_owner) &&
+        const bool fields_valid =
+            meiso_owner_scope_valid(frame->applied_scene_owner) &&
             frame->applied_scene_owner.role == MEISO_OWNER_ROLE_HOST &&
             frame->applied_scene_state_version != 0U &&
             frame->active_plan_generation != 0U &&
             frame->world_generation != 0U;
+        if (!fields_valid || handle == NULL ||
+            !handle->simulator_composition_supported) {
+            return fields_valid;
+        }
+        return handle->simulator_snapshot.actual[
+                   MEISO_COMPOSITION_EDGE_ACTUAL_SCENE
+               ].production_status == MEISO_RUNTIME_PRODUCTION_RUNNING &&
+            meiso_owner_scope_equal(
+                frame->applied_scene_owner,
+                handle->simulator_desired_owner
+            ) &&
+            frame->applied_scene_state_version ==
+                handle->simulator_snapshot.actual[
+                    MEISO_COMPOSITION_EDGE_ACTUAL_SCENE
+                ].applied_desired.version &&
+            handle->simulator_snapshot.presentation_status_present &&
+            frame->active_plan_generation ==
+                handle->simulator_snapshot.presentation_status
+                    .active_plan_generation &&
+            handle->simulator_snapshot.scene_status_present &&
+            frame->world_generation ==
+                handle->simulator_snapshot.scene_status.world_generation;
     }
     return frame->applied_scene_owner.role == 0U &&
         frame->applied_scene_owner.incarnation == 0U &&
@@ -2002,6 +3310,8 @@ MeisoEdgeStatus meiso_composition_edge_simulator_step(
     if (!handle_valid(handle) ||
         handle->backend_kind != EDGE_BACKEND_SIMULATOR ||
         out_transition == NULL || !meiso_time_point_valid(now) ||
+        (handle->simulator_composition_supported &&
+         now.clock_epoch != handle->simulator_composition_clock_epoch) ||
         !disjoint_from_handle_storage(handle, out_transition,
                                       sizeof(*out_transition))) {
         return MEISO_EDGE_INVALID_ARGUMENT;
@@ -2012,7 +3322,15 @@ MeisoEdgeStatus meiso_composition_edge_simulator_step(
     if (!handle->simulator_snapshot.edge.resource_graph_live) {
         return MEISO_EDGE_NOT_READY;
     }
-    if (handle->simulator_wifi_pending) {
+    if (handle->simulator_mesh_pending) {
+        if (!simulator_publish_mesh(handle)) {
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_MESH_PUBLISHED;
+    } else if (handle->simulator_wifi_pending) {
         if (handle->simulator_wifi_enabled &&
             handle->simulator_snapshot.inline_streams[
                 MEISO_COMPOSITION_EDGE_INLINE_WIFI
@@ -2030,6 +3348,53 @@ MeisoEdgeStatus meiso_composition_edge_simulator_step(
         }
         simulator_apply_device(handle, now);
         transition = MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED;
+    } else if (handle->simulator_scene_pending.pending) {
+        if (!simulator_apply_scene_command(handle, now)) {
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_SCENE_APPLIED;
+    } else if (handle->simulator_presentation_pending.pending) {
+        if (!simulator_apply_presentation_command(handle, now)) {
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
+        transition =
+            MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_APPLIED;
+    } else if (handle->simulator_scene_retry_ready) {
+        if (!simulator_apply_scene_command(handle, now)) {
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_SCENE_APPLIED;
+    } else if (handle->simulator_presentation_activation_pending) {
+        if (!simulator_activate_presentation(handle, now)) {
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
+        transition =
+            MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_ACTIVATED;
+    } else if (handle->simulator_render_result_pending) {
+        if (now.monotonic_ns == UINT64_MAX ||
+            handle->simulator_render_result_sequence == UINT64_MAX) {
+            return MEISO_EDGE_COUNTER_EXHAUSTED;
+        }
+        if (!simulator_publish_render_result(handle, now)) {
+            (void)meiso_composition_edge_simulator_terminate(
+                handle, MEISO_EDGE_TERMINAL_INTERNAL_FAILURE
+            );
+            return MEISO_EDGE_INTERNAL_FAILURE;
+        }
+        transition =
+            MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_RESULT_PUBLISHED;
     } else if (handle->simulator_media_pending[0].pending) {
         simulator_apply_media(handle, 0U);
         transition = MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_MEDIA_APPLIED;
@@ -2103,7 +3468,7 @@ MeisoEdgeStatus meiso_composition_edge_simulator_publish_frame(
          (MeisoCompositionMediaFrameFlags)~
              (MEISO_COMPOSITION_MEDIA_FRAME_KEY |
               MEISO_COMPOSITION_MEDIA_FRAME_RECOVERY)) != 0U ||
-        !simulator_frame_scene_fields_valid(frame) ||
+        !simulator_frame_scene_fields_valid(handle, frame) ||
         !simulator_media_size_exact(frame)) {
         return MEISO_EDGE_CONFLICT;
     }
@@ -2187,6 +3552,25 @@ MeisoEdgeStatus meiso_composition_edge_simulator_terminate(
     handle->simulator_snapshot.edge = edge;
     handle->simulator_wifi_pending = false;
     handle->simulator_device_pending = false;
+    handle->simulator_mesh_pending = false;
+    handle->simulator_mesh_size = 0U;
+    memset(&handle->simulator_mesh_content_id, 0,
+           sizeof(handle->simulator_mesh_content_id));
+    memset(&handle->simulator_scene_pending, 0,
+           sizeof(handle->simulator_scene_pending));
+    handle->simulator_scene_retry_pending = false;
+    handle->simulator_scene_retry_ready = false;
+    handle->simulator_scene_value_present = false;
+    handle->simulator_scene_enabled = false;
+    memset(&handle->simulator_scene_value, 0,
+           sizeof(handle->simulator_scene_value));
+    memset(&handle->simulator_presentation_pending, 0,
+           sizeof(handle->simulator_presentation_pending));
+    handle->simulator_presentation_plan_present = false;
+    handle->simulator_presentation_activation_pending = false;
+    memset(&handle->simulator_presentation_plan, 0,
+           sizeof(handle->simulator_presentation_plan));
+    handle->simulator_render_result_pending = false;
     memset(handle->simulator_media_pending, 0,
            sizeof(handle->simulator_media_pending));
     memset(handle->simulator_media, 0, sizeof(handle->simulator_media));
@@ -2335,6 +3719,34 @@ bool meiso_composition_edge_internal_simulator_fresh_matches(
         handle->simulator_device_epoch != config->device_production_epoch ||
         handle->simulator_device_epoch_available !=
             config->device_telemetry_enabled ||
+        handle->simulator_composition_supported !=
+            config->composition_enabled ||
+        handle->simulator_blob_slot_count !=
+            config->composition_blob_slot_count ||
+        handle->simulator_composition_clock_epoch !=
+            config->composition_clock_epoch ||
+        handle->simulator_presentation_epoch !=
+            config->presentation_production_epoch ||
+        handle->simulator_scene_epoch != config->scene_production_epoch ||
+        handle->simulator_presentation_epoch_available !=
+            config->composition_enabled ||
+        handle->simulator_scene_epoch_available !=
+            config->composition_enabled ||
+        handle->simulator_next_plan_generation != 1U ||
+        handle->simulator_plan_generation_available !=
+            config->composition_enabled ||
+        handle->simulator_composition_initialized ||
+        handle->simulator_mesh_pending ||
+        handle->simulator_scene_pending.pending ||
+        handle->simulator_scene_retry_pending ||
+        handle->simulator_scene_retry_ready ||
+        handle->simulator_scene_value_present ||
+        handle->simulator_presentation_pending.pending ||
+        handle->simulator_presentation_plan_present ||
+        handle->simulator_presentation_activation_pending ||
+        handle->simulator_render_result_pending ||
+        handle->simulator_published_blob_bytes != 0U ||
+        handle->simulator_render_result_sequence != 0U ||
         handle->simulator_media_epoch[0] !=
             config->render_media_stream_epoch ||
         handle->simulator_media_epoch[1] !=

@@ -599,6 +599,19 @@ Release、ASan+UBSan全仓CTest均50/50；相关四个C11 TU在conversion/sign/s
 header通过，四份clang analyzer均为367-byte零诊断，28-file Markdown link与敏感信息扫描通过。该切片仍是
 synthetic离线编辑器证据，不证明fresh device sensor、target、network或physical output。
 
+随后又把同一simulator扩展为显式opt-in的离线Composition编辑闭环。启用配置在caller arena内预留固定
+BlobStore slots、SceneStore、C2 coordinator、最大Mesh pending buffer和两路media buffer；activate后
+`put_mesh`完成candidate-copy→verified publish→explicit visibility，Scene与Presentation沿真实codec、
+PlanRef、prepared-token echo和frame-boundary activation推进，并由SceneStore fake renderer发布带
+`OFFSCREEN_COMPLETE|THUMBNAIL_INCLUDED`的deterministic RenderResult。测试覆盖READY前Mesh/Scene/Plan
+queue、active world、same-channel replacement、missing-Blob稳定等待与publish后重试、Blob capacity/duplicate
+清债、empty scene、disable、独立Scene epoch exhaustion、alias/no-partial、terminal，以及Composition-enabled
+render media必须精确匹配active Scene version/Plan/world identity。trace v1保持字节兼容，只新增writer对
+enabled Composition config和关闭状态非零suffix的原子拒绝。fresh Debug、Release与ASan+UBSan全仓CTest均
+51/51；相关四个C11 TU通过conversion/sign/shadow strict门，公开simulator header通过C++17，四份clang
+analyzer均为367-byte零诊断。该结果仅是portable、deterministic、offscreen synthetic编辑器证据，不证明
+CPU raster像素golden、AF_INET、K230、camera、physical display、性能或soak。
+
 ## 已验证的负面结论
 
 - 把每帧 raw camera 当成可靠完整 transfer 会造成高带宽与旧数据阻塞，不适合连续 Stream；

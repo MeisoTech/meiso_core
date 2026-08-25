@@ -24,6 +24,20 @@ typedef struct {
     bool device_telemetry_enabled;
     uint64_t device_production_epoch;
     MeisoDeviceTelemetrySample device_sample;
+    /*
+     * Optional deterministic Composition subset. Disabled requires every
+     * following field to be canonical zero. Enabled reserves an immutable
+     * BlobStore with 1..MEISO_COMPOSITION_SCENE_MAX_PUBLISHED_BLOBS slots,
+     * SceneStore and C2 coordinator inside the caller arena. The two initial
+     * production epochs advance independently for every newly applied
+     * enabled Presentation/Scene desired. RenderResult Stream epochs follow
+     * the applied Scene production epoch.
+     */
+    bool composition_enabled;
+    uint32_t composition_blob_slot_count;
+    uint64_t composition_clock_epoch;
+    uint64_t presentation_production_epoch;
+    uint64_t scene_production_epoch;
 } MeisoCompositionEdgeSimulatorConfig;
 
 typedef uint8_t MeisoCompositionEdgeSimulatorInitStatus;
@@ -42,7 +56,12 @@ enum {
     MEISO_COMPOSITION_EDGE_SIMULATOR_WIFI_APPLIED = 1,
     MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_MEDIA_APPLIED = 2,
     MEISO_COMPOSITION_EDGE_SIMULATOR_CAMERA_MEDIA_APPLIED = 3,
-    MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED = 4
+    MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED = 4,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_MESH_PUBLISHED = 5,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_SCENE_APPLIED = 6,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_APPLIED = 7,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_PRESENTATION_ACTIVATED = 8,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_RESULT_PUBLISHED = 9
 };
 
 typedef struct {
@@ -82,14 +101,23 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     MeisoEdgeHandle **out_handle
 );
 
-/* BOOTSTRAPPING publishes no graph; activate publishes the exact v3 graph. */
+/*
+ * BOOTSTRAPPING publishes no graph. activate initializes any configured
+ * Composition stores and then publishes the exact v3 graph. A defensive
+ * child-initializer failure makes the handle sticky INTERNAL_FAILURE terminal;
+ * it never returns a partially READY graph.
+ */
 MeisoEdgeStatus meiso_composition_edge_simulator_activate(
     MeisoEdgeHandle *handle
 );
 
 /*
- * At most one queued desired is applied. now becomes the source time for an
- * applied Wi-Fi or DeviceTelemetry sample.
+ * At most one queued desired, Mesh publication, Presentation activation or
+ * synthetic RenderResult is advanced. now becomes the source time for an
+ * applied telemetry sample and the logical Composition boundary/render time.
+ * When Composition is enabled, now.clock_epoch must exactly equal the
+ * configured composition_clock_epoch; a mismatch is INVALID_ARGUMENT with
+ * no simulator or output change.
  */
 MeisoEdgeStatus meiso_composition_edge_simulator_step(
     MeisoEdgeHandle *handle,

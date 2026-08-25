@@ -120,6 +120,14 @@ access unit；不读 wall clock、不建线程/socket、不分配 heap。每次 
 新 nonzero continuity serial。Recorded sample/frame 只证明 deterministic replay，不证明 physical Edge、
 fresh sensor 或 transport。
 
+Composition simulation也是config显式opt-in。启用后，caller arena同时容纳固定slot数的BlobStore、
+SceneStore、C2 coordinator、一个最大Mesh pending buffer和两路media buffer；`put_mesh`先candidate-copy，
+step再publish并显式mark-visible。Scene与Presentation沿真实codec/PlanRef/token-echo/C2 frame-boundary推进，
+active world通过SceneStore fake renderer发布带`OFFSCREEN_COMPLETE|THUMBNAIL_INCLUDED`的deterministic
+RenderResult。Scene replacement、missing-Blob等待、capacity、disable、epoch exhaustion与render media
+world/plan identity都fail closed。这个闭环服务离线编辑器状态机验证，不是CPU raster像素golden、网络、
+K230、camera、physical display或性能证据。
+
 DeviceTelemetry simulation是config显式opt-in：调用方提供nonzero production epoch与一份canonical sample；
 SET_DEVICE按Wi-Fi之后、media之前的固定step优先级产生desired/Actual/inline Stream，并对未选字段归零。
 未启用时SET_DEVICE明确`unsupported`。这让离线设备面板可重复测试，但sample仍是synthetic，不是fresh
@@ -129,8 +137,8 @@ sensor truth。
 caller-owned writer/reader arena和最多16 MiB的canonical in-memory bytes；CONFIG、activate、三种
 supported desired、step/time、完整frame与terminal都有closed record kind和CRC32C。reader init先验证
 整份trace，随后每次只推进一个record；失败不推进cursor。codec不打开path或持fd，应用也不能在replay
-lifetime中旁路修改同一simulator handle。v1固定在Wi-Fi与两路media，要求DeviceTelemetry opt-in关闭；
-后续simulator能力不会静默改变既有trace格式。
+lifetime中旁路修改同一simulator handle。v1固定在Wi-Fi与两路media，要求DeviceTelemetry和Composition
+opt-in都关闭且新增config suffix为canonical zero；后续simulator能力不会静默改变既有trace格式。
 
 ## 一个 Edge、多个本地 runtime
 

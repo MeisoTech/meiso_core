@@ -76,9 +76,10 @@ CONFIG 必须是 sequence 1 且只出现一次：
 
 能力与 sample suffix 使用各自已冻结的 Profile codec；selected sample fields 必须是 Wi-Fi capability 的
 subset。reader 从该 record 候选式解码 `MeisoCompositionEdgeSimulatorConfig`，调用方再用它创建 fresh
-simulator arena。v1没有DeviceTelemetry epoch/sample record，因此要求config的
-`device_telemetry_enabled=false`、device epoch/sample为canonical zero；enabled config必须由writer拒绝，
-不能静默丢字段。
+simulator arena。v1没有DeviceTelemetry epoch/sample或Composition Mesh/Scene/Presentation record，因此
+要求config的`device_telemetry_enabled=false`、device epoch/sample为canonical zero，并要求
+`composition_enabled=false`、Blob slot/clock/Presentation epoch/Scene epoch suffix全为canonical zero；
+任一enabled config或关闭标志下的非零suffix都必须由writer拒绝，不能静默丢字段。
 
 ### 2 — ACTIVATE（0 bytes）
 
@@ -156,7 +157,8 @@ offset 0 是 nonzero closed `MeisoEdgeTerminalReason`，1..7 reserved zero。TER
 ## v1 明确不做
 
 - 不记录 Session、Runtime、route key、nonce、fd、socket packet、driver handle 或物理 locator；
-- 不记录DeviceTelemetry desired/sample；该可选simulator子集需要未来显式新trace版本；
+- 不记录DeviceTelemetry desired/sample或Composition Mesh/Scene/Presentation；这些可选simulator子集需要
+  未来显式新trace版本；
 - 不提供自动 reconnect/resume、wall-clock scheduler、后台 recorder 或目录管理；
 - 不支持 arbitrary Profile、generic operation payload、dynamic backend/plugin 或跨版本隐式兼容；
 - 不用 trace 成功替代 real AF_INET、K230D、camera、display、security、performance 或 soak evidence。
