@@ -169,6 +169,20 @@ static bool config_fields_equal(
         lhs->wifi_production_epoch == rhs->wifi_production_epoch &&
         lhs->render_media_stream_epoch == rhs->render_media_stream_epoch &&
         lhs->camera_media_stream_epoch == rhs->camera_media_stream_epoch &&
+        lhs->device_telemetry_enabled == rhs->device_telemetry_enabled &&
+        lhs->device_production_epoch == rhs->device_production_epoch &&
+        lhs->device_sample.selected_fields ==
+            rhs->device_sample.selected_fields &&
+        lhs->device_sample.present_fields == rhs->device_sample.present_fields &&
+        lhs->device_sample.temperature_millic ==
+            rhs->device_sample.temperature_millic &&
+        lhs->device_sample.temperature_uncertainty_millic ==
+            rhs->device_sample.temperature_uncertainty_millic &&
+        lhs->device_sample.cpu_load_ppm == rhs->device_sample.cpu_load_ppm &&
+        lhs->device_sample.memory_total_bytes ==
+            rhs->device_sample.memory_total_bytes &&
+        lhs->device_sample.memory_available_bytes ==
+            rhs->device_sample.memory_available_bytes &&
         lhs->catalog.wifi_incarnation == rhs->catalog.wifi_incarnation &&
         lhs->catalog.presentation_incarnation ==
             rhs->catalog.presentation_incarnation &&
@@ -197,6 +211,7 @@ int main(void)
     MeisoEdgeHandle *wrong_handle = NULL;
     MeisoCompositionEdgeTraceReplayResult result;
     MeisoCompositionEdgeTraceReplayResult unchanged_result;
+    MeisoCompositionEdgeTraceStatus replay_status;
     MeisoCompositionEdgeSnapshot snapshot;
     MeisoEdgeMediaFrameView media_frame;
     MeisoByteView trace = {NULL, 0U};
@@ -282,6 +297,13 @@ int main(void)
     for (i = 0U; i < 320U * 240U * 3U / 2U; ++i) {
         camera_bytes[i] = (uint8_t)(i * 17U + 3U);
     }
+    wrong_config.device_telemetry_enabled = true;
+    wrong_config.device_production_epoch = 88U;
+    wrong_config.device_sample.selected_fields =
+        MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM;
+    wrong_config.device_sample.present_fields =
+        MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM;
+    wrong_config.device_sample.cpu_load_ppm = 250000U;
 
     memset(writer_arena, 0xa5, writer_size + writer_alignment);
     memset(trace_bytes, 0xa5, TRACE_CAPACITY);
@@ -307,6 +329,31 @@ int main(void)
               &config, &writer
           ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_ARGUMENT &&
           bytes_all(trace_bytes, TRACE_CAPACITY, 0xa5));
+    CHECK(meiso_composition_edge_trace_writer_init(
+              writer_arena, writer_size,
+              (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},
+              &wrong_config, &writer
+          ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_CONFIG &&
+          bytes_all(writer_arena, writer_size + writer_alignment, 0xa5) &&
+          bytes_all(trace_bytes, TRACE_CAPACITY, 0xa5) &&
+          writer ==
+              (MeisoCompositionEdgeTraceWriter *)(uintptr_t)UINT64_C(0x1234));
+    wrong_config = config;
+    wrong_config.device_sample.selected_fields =
+        MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM;
+    wrong_config.device_sample.present_fields =
+        MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM;
+    wrong_config.device_sample.cpu_load_ppm = 250000U;
+    CHECK(meiso_composition_edge_trace_writer_init(
+              writer_arena, writer_size,
+              (MeisoMutableBuffer){trace_bytes, TRACE_CAPACITY},
+              &wrong_config, &writer
+          ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_CONFIG &&
+          bytes_all(writer_arena, writer_size + writer_alignment, 0xa5) &&
+          bytes_all(trace_bytes, TRACE_CAPACITY, 0xa5) &&
+          writer ==
+              (MeisoCompositionEdgeTraceWriter *)(uintptr_t)UINT64_C(0x1234));
+    wrong_config = simulator_config(9002U);
 
     memset(writer_arena, 0, writer_size);
     memset(small_trace, 0xa5, TRACE_MINIMUM_BYTES);
@@ -548,15 +595,16 @@ int main(void)
           ) == MEISO_COMPOSITION_EDGE_TRACE_INVALID_ARGUMENT &&
           memcmp(reader_arena, arena_copy, reader_size) == 0);
 
-    CHECK(meiso_composition_edge_trace_reader_replay_next(
-              reader, handle, &result
-          ) == MEISO_COMPOSITION_EDGE_TRACE_OK &&
-          result.record_sequence == 2U &&
+    replay_status = meiso_composition_edge_trace_reader_replay_next(
+        reader, handle, &result
+    );
+    CHECK(replay_status == MEISO_COMPOSITION_EDGE_TRACE_OK);
+    CHECK(result.record_sequence == 2U &&
           result.record_kind ==
               MEISO_COMPOSITION_EDGE_TRACE_RECORD_SET_WIFI &&
           result.receipt_present && result.receipt.command_id == 1U &&
-          !result.transition_present &&
-          meiso_test_virtual_edge_bootstrap(handle));
+          !result.transition_present);
+    CHECK(meiso_test_virtual_edge_bootstrap(handle));
     CHECK(meiso_composition_edge_trace_reader_replay_next(
               reader, handle, &result
           ) == MEISO_COMPOSITION_EDGE_TRACE_OK &&

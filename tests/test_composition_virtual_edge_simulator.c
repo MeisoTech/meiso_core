@@ -89,6 +89,15 @@ static MeisoCompositionEdgeSimulatorConfig simulator_config(
     value.wifi_sample.present_fields = value.wifi_sample.selected_fields;
     value.wifi_sample.link_state = true;
     value.wifi_sample.signal_mbm = -5100;
+    value.device_telemetry_enabled = true;
+    value.device_production_epoch = 88U;
+    value.device_sample.selected_fields = MEISO_DEVICE_TELEMETRY_FIELD_ALL;
+    value.device_sample.present_fields = MEISO_DEVICE_TELEMETRY_FIELD_ALL;
+    value.device_sample.temperature_millic = 54500;
+    value.device_sample.temperature_uncertainty_millic = 500U;
+    value.device_sample.cpu_load_ppm = 250000U;
+    value.device_sample.memory_total_bytes = UINT64_C(67108864);
+    value.device_sample.memory_available_bytes = UINT64_C(33554432);
     return value;
 }
 
@@ -99,12 +108,15 @@ int main(void)
     MeisoCompositionEdgeSimulatorConfig exhausted_config =
         simulator_config(9003U);
     MeisoCompositionEdgeSimulatorConfig invalid_config = config;
+    MeisoCompositionEdgeSimulatorConfig unsupported_config = config;
     MeisoEdgeHandle *handle = NULL;
     MeisoEdgeHandle *fresh_handle = NULL;
     MeisoEdgeHandle *replay_handle = NULL;
     MeisoEdgeHandle *exhausted_handle = NULL;
+    MeisoEdgeHandle *unsupported_handle = NULL;
     MeisoEdgeCommandReceipt wifi_receipt;
     MeisoEdgeCommandReceipt camera_receipt;
+    MeisoEdgeCommandReceipt device_receipt;
     MeisoEdgeCommandReceipt replacement_receipt;
     MeisoEdgeCommandReceipt replay_receipt;
     MeisoEdgeCommandReceipt unchanged_receipt;
@@ -123,12 +135,21 @@ int main(void)
         320U, 240U, 1000U, 0U, 1U,
         MEISO_COMPOSITION_MEDIA_RECOVERY_REQUEST_KEY
     };
+    MeisoDeviceTelemetryParameters device_desired = {
+        MEISO_DEVICE_TELEMETRY_FIELD_ALL, 500U
+    };
+    MeisoDeviceTelemetryParameters device_subset = {
+        MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM |
+            MEISO_DEVICE_TELEMETRY_FIELD_MEMORY_AVAILABLE_BYTES,
+        500U
+    };
     MeisoCompositionSceneDesired scene;
     MeisoCompositionEdgeSimulatorFrame frame;
     uint8_t *arena = NULL;
     uint8_t *fresh_arena = NULL;
     uint8_t *replay_arena = NULL;
     uint8_t *exhausted_arena = NULL;
+    uint8_t *unsupported_arena = NULL;
     uint8_t *short_arena = NULL;
     uint8_t *arena_copy = NULL;
     uint8_t *camera_bytes = NULL;
@@ -199,6 +220,32 @@ int main(void)
     free(short_arena);
     short_arena = NULL;
 
+    invalid_config = config;
+    invalid_config.device_production_epoch = 0U;
+    CHECK(posix_memalign((void **)&short_arena, alignment, required) == 0);
+    memset(short_arena, 0xa5, required);
+    fresh_handle = (MeisoEdgeHandle *)(uintptr_t)UINT64_C(0x1234);
+    CHECK(meiso_composition_edge_simulator_init(
+              short_arena, required, &invalid_config, &fresh_handle
+          ) == MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG &&
+          bytes_all(short_arena, required, UINT8_C(0xa5)) &&
+          fresh_handle == (MeisoEdgeHandle *)(uintptr_t)UINT64_C(0x1234));
+    free(short_arena);
+    short_arena = NULL;
+
+    invalid_config = config;
+    invalid_config.device_sample.temperature_uncertainty_millic = 1001U;
+    CHECK(posix_memalign((void **)&short_arena, alignment, required) == 0);
+    memset(short_arena, 0xa5, required);
+    fresh_handle = (MeisoEdgeHandle *)(uintptr_t)UINT64_C(0x1234);
+    CHECK(meiso_composition_edge_simulator_init(
+              short_arena, required, &invalid_config, &fresh_handle
+          ) == MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG &&
+          bytes_all(short_arena, required, UINT8_C(0xa5)) &&
+          fresh_handle == (MeisoEdgeHandle *)(uintptr_t)UINT64_C(0x1234));
+    free(short_arena);
+    short_arena = NULL;
+
     CHECK(posix_memalign((void **)&arena, alignment, required) == 0);
     memset(arena, 0, required);
     CHECK(meiso_composition_edge_simulator_init(
@@ -217,6 +264,15 @@ int main(void)
               (MeisoEdgeCommandReceipt *)(void *)arena
           ) == MEISO_EDGE_INVALID_ARGUMENT &&
           memcmp(arena, arena_copy, required) == 0);
+    memset(&unchanged_receipt, 0xa5, sizeof(unchanged_receipt));
+    CHECK(meiso_composition_edge_set_device(
+              handle, true,
+              (const MeisoDeviceTelemetryParameters *)(const void *)arena,
+              &unchanged_receipt
+          ) == MEISO_EDGE_INVALID_ARGUMENT &&
+          memcmp(arena, arena_copy, required) == 0 &&
+          bytes_all(&unchanged_receipt, sizeof(unchanged_receipt),
+                    UINT8_C(0xa5)));
     CHECK(meiso_composition_edge_simulator_publish_frame(
               handle,
               (const MeisoCompositionEdgeSimulatorFrame *)(const void *)arena
@@ -362,6 +418,64 @@ int main(void)
           ) == MEISO_EDGE_UNSUPPORTED &&
           bytes_all(&unchanged_receipt, sizeof(unchanged_receipt),
                     UINT8_C(0xa5)));
+    CHECK(meiso_composition_edge_set_device(
+              handle, true, &device_desired, &device_receipt
+          ) == MEISO_EDGE_OK &&
+          device_receipt.kind == MEISO_EDGE_COMMAND_SET_DEVICE &&
+          device_receipt.desired_channel ==
+              MEISO_COMPOSITION_EDGE_DESIRED_DEVICE &&
+          device_receipt.desired_state_version == 1U);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){10U, 1250U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED);
+    CHECK(meiso_composition_edge_snapshot(handle, &snapshot) == MEISO_EDGE_OK &&
+          snapshot.desired[MEISO_COMPOSITION_EDGE_DESIRED_DEVICE]
+              .delivery_accepted &&
+          snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE].present &&
+          snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE]
+                  .production_epoch == config.device_production_epoch &&
+          snapshot.device_effective_present &&
+          snapshot.device_effective.selected_fields ==
+              MEISO_DEVICE_TELEMETRY_FIELD_ALL &&
+          snapshot.device_effective.sample_period_ms == 500U &&
+          snapshot.device_sample_present &&
+          snapshot.device_sample.temperature_millic == 54500 &&
+          snapshot.device_sample.temperature_uncertainty_millic == 500U &&
+          snapshot.device_sample.cpu_load_ppm == 250000U &&
+          snapshot.device_sample.memory_total_bytes == UINT64_C(67108864) &&
+          snapshot.device_sample.memory_available_bytes == UINT64_C(33554432) &&
+          snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+              .present &&
+          snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+                  .key.epoch == config.device_production_epoch &&
+          snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+                  .key.sequence == 1U &&
+          snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+                  .source_time.monotonic_ns == 1250U);
+    CHECK(meiso_composition_edge_set_device(
+              handle, true, &device_subset, &device_receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){10U, 1300U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED);
+    CHECK(meiso_composition_edge_snapshot(handle, &snapshot) == MEISO_EDGE_OK &&
+          snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE]
+                  .production_epoch == config.device_production_epoch + 1U &&
+          snapshot.device_sample.selected_fields ==
+              device_subset.selected_fields &&
+          snapshot.device_sample.present_fields ==
+              device_subset.selected_fields &&
+          snapshot.device_sample.temperature_millic == 0 &&
+          snapshot.device_sample.temperature_uncertainty_millic == 0U &&
+          snapshot.device_sample.cpu_load_ppm == 250000U &&
+          snapshot.device_sample.memory_total_bytes == 0U &&
+          snapshot.device_sample.memory_available_bytes == UINT64_C(33554432) &&
+          snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+                  .key.epoch == config.device_production_epoch + 1U &&
+          snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+                  .received_count == 2U);
     CHECK(meiso_composition_edge_set_camera_media(
               handle, true, &camera_desired, &camera_receipt
           ) == MEISO_EDGE_OK);
@@ -485,6 +599,26 @@ int main(void)
                   MEISO_EDGE_OK);
     }
 
+    CHECK(meiso_composition_edge_set_device(
+              handle, false, NULL, &device_receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              handle, (MeisoTimePoint){10U, 3500U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED);
+    CHECK(meiso_composition_edge_snapshot(handle, &snapshot) == MEISO_EDGE_OK &&
+          snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE].present &&
+          !snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE]
+               .effective_enabled &&
+          snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE]
+                  .production_status == MEISO_RUNTIME_PRODUCTION_STOPPED &&
+          snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE]
+                  .production_epoch == 0U &&
+          !snapshot.device_effective_present &&
+          !snapshot.device_sample_present &&
+          !snapshot.inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE]
+               .present);
+
     CHECK(meiso_composition_edge_simulator_terminate(
               handle, MEISO_EDGE_TERMINAL_LOCAL_ABORT
           ) == MEISO_EDGE_OK);
@@ -499,8 +633,48 @@ int main(void)
               MEISO_EDGE_OK &&
           snapshot.edge.continuity_serial == 9002U &&
           snapshot.edge.phase == MEISO_EDGE_PHASE_BOOTSTRAPPING);
+    CHECK(meiso_composition_edge_set_device(
+              fresh_handle, true, &device_desired, &device_receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_set_wifi(
+              fresh_handle, true,
+              &(MeisoWifiTelemetryDesiredParameters){
+                  MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE, 500U
+              },
+              &wifi_receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_activate(fresh_handle) ==
+          MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              fresh_handle, (MeisoTimePoint){30U, 4000U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_WIFI_APPLIED);
+    CHECK(meiso_composition_edge_simulator_step(
+              fresh_handle, (MeisoTimePoint){30U, 4100U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED);
+
+    unsupported_config.device_telemetry_enabled = false;
+    unsupported_config.device_production_epoch = 0U;
+    memset(&unsupported_config.device_sample, 0,
+           sizeof(unsupported_config.device_sample));
+    CHECK(posix_memalign((void **)&unsupported_arena, alignment, required) == 0);
+    memset(unsupported_arena, 0, required);
+    CHECK(meiso_composition_edge_simulator_init(
+              unsupported_arena, required, &unsupported_config,
+              &unsupported_handle
+          ) == MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_OK);
+    CHECK(meiso_composition_edge_simulator_activate(unsupported_handle) ==
+          MEISO_EDGE_OK);
+    memset(&unchanged_receipt, 0xa5, sizeof(unchanged_receipt));
+    CHECK(meiso_composition_edge_set_device(
+              unsupported_handle, true, &device_desired, &unchanged_receipt
+          ) == MEISO_EDGE_UNSUPPORTED &&
+          bytes_all(&unchanged_receipt, sizeof(unchanged_receipt),
+                    UINT8_C(0xa5)));
 
     exhausted_config.camera_media_stream_epoch = UINT64_MAX;
+    exhausted_config.device_production_epoch = UINT64_MAX;
     CHECK(posix_memalign((void **)&exhausted_arena, alignment, required) == 0);
     memset(exhausted_arena, 0, required);
     CHECK(meiso_composition_edge_simulator_init(
@@ -531,11 +705,32 @@ int main(void)
           ) == MEISO_EDGE_COUNTER_EXHAUSTED &&
           bytes_all(&unchanged_receipt, sizeof(unchanged_receipt),
                     UINT8_C(0xa5)));
+    CHECK(meiso_composition_edge_set_device(
+              exhausted_handle, true, &device_desired, &device_receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              exhausted_handle, (MeisoTimePoint){20U, 3000U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED);
+    CHECK(meiso_composition_edge_set_device(
+              exhausted_handle, false, NULL, &device_receipt
+          ) == MEISO_EDGE_OK);
+    CHECK(meiso_composition_edge_simulator_step(
+              exhausted_handle, (MeisoTimePoint){20U, 4000U}, &transition
+          ) == MEISO_EDGE_OK &&
+          transition == MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED);
+    memset(&unchanged_receipt, 0xa5, sizeof(unchanged_receipt));
+    CHECK(meiso_composition_edge_set_device(
+              exhausted_handle, true, &device_desired, &unchanged_receipt
+          ) == MEISO_EDGE_COUNTER_EXHAUSTED &&
+          bytes_all(&unchanged_receipt, sizeof(unchanged_receipt),
+                    UINT8_C(0xa5)));
 
     free(camera_bytes);
     free(render_bytes);
     free(arena_copy);
     free(exhausted_arena);
+    free(unsupported_arena);
     free(fresh_arena);
     free(replay_arena);
     free(arena);
@@ -547,6 +742,7 @@ fail:
     free(render_bytes);
     free(arena_copy);
     free(exhausted_arena);
+    free(unsupported_arena);
     free(fresh_arena);
     free(replay_arena);
     free(short_arena);

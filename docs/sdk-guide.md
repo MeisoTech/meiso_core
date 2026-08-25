@@ -120,11 +120,17 @@ access unit；不读 wall clock、不建线程/socket、不分配 heap。每次 
 新 nonzero continuity serial。Recorded sample/frame 只证明 deterministic replay，不证明 physical Edge、
 fresh sensor 或 transport。
 
+DeviceTelemetry simulation是config显式opt-in：调用方提供nonzero production epoch与一份canonical sample；
+SET_DEVICE按Wi-Fi之后、media之前的固定step优先级产生desired/Actual/inline Stream，并对未选字段归零。
+未启用时SET_DEVICE明确`unsupported`。这让离线设备面板可重复测试，但sample仍是synthetic，不是fresh
+sensor truth。
+
 固定v1 artifact由[Composition Edge deterministic trace](composition-edge-trace-v1.md)定义。它使用
 caller-owned writer/reader arena和最多16 MiB的canonical in-memory bytes；CONFIG、activate、三种
 supported desired、step/time、完整frame与terminal都有closed record kind和CRC32C。reader init先验证
 整份trace，随后每次只推进一个record；失败不推进cursor。codec不打开path或持fd，应用也不能在replay
-lifetime中旁路修改同一simulator handle。
+lifetime中旁路修改同一simulator handle。v1固定在Wi-Fi与两路media，要求DeviceTelemetry opt-in关闭；
+后续simulator能力不会静默改变既有trace格式。
 
 ## 一个 Edge、多个本地 runtime
 

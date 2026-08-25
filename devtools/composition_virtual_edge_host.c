@@ -138,6 +138,13 @@ struct MeisoEdgeHandle {
     bool simulator_wifi_enabled;
     MeisoWifiTelemetryDesiredParameters simulator_wifi_desired;
     MeisoWifiTelemetrySample simulator_wifi_sample;
+    bool simulator_device_supported;
+    uint64_t simulator_device_epoch;
+    bool simulator_device_epoch_available;
+    bool simulator_device_pending;
+    bool simulator_device_enabled;
+    MeisoDeviceTelemetryParameters simulator_device_desired;
+    MeisoDeviceTelemetrySample simulator_device_sample;
     SimulatorMediaPending
         simulator_media_pending[MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT];
     SimulatorMediaRoute
@@ -1067,6 +1074,46 @@ static MeisoEdgeStatus simulator_set_media(
     return status;
 }
 
+static MeisoEdgeStatus simulator_set_device(
+    MeisoEdgeHandle *handle,
+    bool enabled,
+    const MeisoDeviceTelemetryParameters *value,
+    MeisoEdgeCommandReceipt *out_receipt
+)
+{
+    MeisoEdgeStatus status;
+
+    status = simulator_command_preflight(handle);
+    if (status != MEISO_EDGE_OK) {
+        return status;
+    }
+    if (!handle->simulator_device_supported) {
+        return MEISO_EDGE_UNSUPPORTED;
+    }
+    if ((enabled &&
+         (value == NULL ||
+          !meiso_device_telemetry_parameters_supported(
+              &handle->simulator_catalog.device_telemetry_capability, value
+          ))) ||
+        (!enabled && value != NULL)) {
+        return MEISO_EDGE_INVALID_ARGUMENT;
+    }
+    if (enabled && !handle->simulator_device_epoch_available) {
+        return MEISO_EDGE_COUNTER_EXHAUSTED;
+    }
+    status = simulator_queue_desired(
+        handle, MEISO_COMPOSITION_EDGE_DESIRED_DEVICE,
+        MEISO_EDGE_COMMAND_SET_DEVICE, enabled, out_receipt
+    );
+    if (status == MEISO_EDGE_OK) {
+        handle->simulator_device_pending = true;
+        handle->simulator_device_enabled = enabled;
+        handle->simulator_device_desired = enabled ? *value :
+            (MeisoDeviceTelemetryParameters){0U, 0U};
+    }
+    return status;
+}
+
 #define DEFINE_TYPED_COMMAND(function_name, host_function, value_type, sim_body) \
 MeisoEdgeStatus function_name(                                                  \
     MeisoEdgeHandle *handle, bool enabled, const value_type *value,             \
@@ -1100,9 +1147,8 @@ DEFINE_TYPED_COMMAND(meiso_composition_edge_set_wifi,
 DEFINE_TYPED_COMMAND(meiso_composition_edge_set_device,
                      meiso_composition_host_app_set_device,
                      MeisoDeviceTelemetryParameters,
-                     preflight = simulator_command_preflight(handle);
-                     return preflight == MEISO_EDGE_OK ?
-                         MEISO_EDGE_UNSUPPORTED : preflight)
+                     return simulator_set_device(handle, enabled, value,
+                                                 out_receipt))
 DEFINE_TYPED_COMMAND(meiso_composition_edge_set_render_media,
                      meiso_composition_host_app_set_render_media,
                      MeisoCompositionMediaDesired,
@@ -1479,6 +1525,35 @@ MeisoEdgeStatus meiso_composition_edge_media_release(
     return status_from_host(host_status);
 }
 
+static bool simulator_device_sample_zero(
+    const MeisoDeviceTelemetrySample *sample
+)
+{
+    return sample != NULL && sample->selected_fields == 0U &&
+        sample->present_fields == 0U && sample->temperature_millic == 0 &&
+        sample->temperature_uncertainty_millic == 0U &&
+        sample->cpu_load_ppm == 0U && sample->memory_total_bytes == 0U &&
+        sample->memory_available_bytes == 0U;
+}
+
+static bool simulator_device_sample_within_capability(
+    const MeisoDeviceTelemetryCapability *capability,
+    const MeisoDeviceTelemetrySample *sample
+)
+{
+    const bool temperature_present = sample != NULL &&
+        (sample->present_fields &
+         MEISO_DEVICE_TELEMETRY_FIELD_TEMPERATURE_MILLIC) != 0U;
+
+    return capability != NULL && sample != NULL &&
+        (sample->selected_fields & ~capability->supported_fields) == 0U &&
+        (!temperature_present ||
+         (sample->temperature_millic >= capability->min_temperature_millic &&
+          sample->temperature_millic <= capability->max_temperature_millic &&
+          sample->temperature_uncertainty_millic <=
+              capability->max_temperature_uncertainty_millic));
+}
+
 size_t meiso_composition_edge_simulator_alignment_required(void)
 {
     return _Alignof(MeisoEdgeHandle);
@@ -1521,7 +1596,9 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     size_t required;
     size_t i;
     size_t wifi_sample_wire_size = 0U;
+    size_t device_sample_wire_size = 0U;
     uint8_t wifi_sample_wire[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
+    uint8_t device_sample_wire[MEISO_DEVICE_TELEMETRY_SAMPLE_WIRE_SIZE];
     uint8_t *render_buffer;
     uint8_t *camera_buffer;
 
@@ -1548,6 +1625,24 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
         wifi_sample_wire_size != MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE ||
         (config->wifi_sample.selected_fields &
          ~config->catalog.wifi_capability.supported_fields) != 0U) {
+        return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG;
+    }
+    if ((!config->device_telemetry_enabled &&
+         (config->device_production_epoch != 0U ||
+          !simulator_device_sample_zero(&config->device_sample))) ||
+        (config->device_telemetry_enabled &&
+         (config->device_production_epoch == 0U ||
+          meiso_device_telemetry_sample_encode(
+              &config->device_sample,
+              (MeisoMutableBuffer){device_sample_wire,
+                                   sizeof(device_sample_wire)},
+              &device_sample_wire_size
+          ) != MEISO_DEVICE_TELEMETRY_CODEC_OK ||
+          device_sample_wire_size != MEISO_DEVICE_TELEMETRY_SAMPLE_WIRE_SIZE ||
+          !simulator_device_sample_within_capability(
+              &config->catalog.device_telemetry_capability,
+              &config->device_sample
+          )))) {
         return MEISO_COMPOSITION_EDGE_SIMULATOR_INIT_INVALID_CONFIG;
     }
     if ((arena_begin % _Alignof(MeisoEdgeHandle)) != 0U) {
@@ -1595,6 +1690,11 @@ MeisoCompositionEdgeSimulatorInitStatus meiso_composition_edge_simulator_init(
     candidate.simulator_media_epoch_available[0] = true;
     candidate.simulator_media_epoch_available[1] = true;
     candidate.simulator_wifi_sample = config->wifi_sample;
+    candidate.simulator_device_supported = config->device_telemetry_enabled;
+    candidate.simulator_device_epoch = config->device_production_epoch;
+    candidate.simulator_device_epoch_available =
+        config->device_telemetry_enabled;
+    candidate.simulator_device_sample = config->device_sample;
     candidate.simulator_snapshot.edge = (MeisoEdgeSnapshot){
         MEISO_VIRTUAL_EDGE_API_VERSION,
         candidate.profile,
@@ -1738,6 +1838,66 @@ static void simulator_apply_wifi(
     }
 }
 
+static void simulator_apply_device(
+    MeisoEdgeHandle *handle,
+    MeisoTimePoint now
+)
+{
+    MeisoCompositionEdgeSnapshot *snapshot = &handle->simulator_snapshot;
+    MeisoCompositionEdgeInlineView *stream =
+        &snapshot->inline_streams[MEISO_COMPOSITION_EDGE_INLINE_DEVICE];
+
+    simulator_apply_actual(handle, MEISO_COMPOSITION_EDGE_DESIRED_DEVICE,
+                           handle->simulator_device_epoch);
+    handle->simulator_device_pending = false;
+    snapshot->device_effective_present = handle->simulator_device_enabled;
+    snapshot->device_effective = handle->simulator_device_enabled ?
+        handle->simulator_device_desired :
+        (MeisoDeviceTelemetryParameters){0U, 0U};
+    snapshot->device_sample_present = handle->simulator_device_enabled;
+    if (!handle->simulator_device_enabled) {
+        memset(&snapshot->device_sample, 0, sizeof(snapshot->device_sample));
+        memset(stream, 0, sizeof(*stream));
+        return;
+    }
+    snapshot->device_sample = handle->simulator_device_sample;
+    snapshot->device_sample.selected_fields =
+        handle->simulator_device_desired.selected_fields;
+    snapshot->device_sample.present_fields &=
+        handle->simulator_device_desired.selected_fields;
+    if ((snapshot->device_sample.present_fields &
+         MEISO_DEVICE_TELEMETRY_FIELD_TEMPERATURE_MILLIC) == 0U) {
+        snapshot->device_sample.temperature_millic = 0;
+        snapshot->device_sample.temperature_uncertainty_millic = 0U;
+    }
+    if ((snapshot->device_sample.present_fields &
+         MEISO_DEVICE_TELEMETRY_FIELD_CPU_LOAD_PPM) == 0U) {
+        snapshot->device_sample.cpu_load_ppm = 0U;
+    }
+    if ((snapshot->device_sample.present_fields &
+         MEISO_DEVICE_TELEMETRY_FIELD_MEMORY_TOTAL_BYTES) == 0U) {
+        snapshot->device_sample.memory_total_bytes = 0U;
+    }
+    if ((snapshot->device_sample.present_fields &
+         MEISO_DEVICE_TELEMETRY_FIELD_MEMORY_AVAILABLE_BYTES) == 0U) {
+        snapshot->device_sample.memory_available_bytes = 0U;
+    }
+    *stream = (MeisoCompositionEdgeInlineView){
+        true,
+        {handle->simulator_desired_owner, handle->simulator_device_epoch, 1U},
+        now,
+        MEISO_STREAM_RECEIVE_FLAG_NONE,
+        0U,
+        stream->received_count + 1U,
+        0U
+    };
+    if (handle->simulator_device_epoch == UINT64_MAX) {
+        handle->simulator_device_epoch_available = false;
+    } else {
+        ++handle->simulator_device_epoch;
+    }
+}
+
 static void simulator_apply_media(MeisoEdgeHandle *handle, size_t index)
 {
     SimulatorMediaPending *pending =
@@ -1861,6 +2021,15 @@ MeisoEdgeStatus meiso_composition_edge_simulator_step(
         }
         simulator_apply_wifi(handle, now);
         transition = MEISO_COMPOSITION_EDGE_SIMULATOR_WIFI_APPLIED;
+    } else if (handle->simulator_device_pending) {
+        if (handle->simulator_device_enabled &&
+            handle->simulator_snapshot.inline_streams[
+                MEISO_COMPOSITION_EDGE_INLINE_DEVICE
+            ].received_count == UINT64_MAX) {
+            return MEISO_EDGE_COUNTER_EXHAUSTED;
+        }
+        simulator_apply_device(handle, now);
+        transition = MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED;
     } else if (handle->simulator_media_pending[0].pending) {
         simulator_apply_media(handle, 0U);
         transition = MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_MEDIA_APPLIED;
@@ -2017,6 +2186,7 @@ MeisoEdgeStatus meiso_composition_edge_simulator_terminate(
            sizeof(handle->simulator_snapshot));
     handle->simulator_snapshot.edge = edge;
     handle->simulator_wifi_pending = false;
+    handle->simulator_device_pending = false;
     memset(handle->simulator_media_pending, 0,
            sizeof(handle->simulator_media_pending));
     memset(handle->simulator_media, 0, sizeof(handle->simulator_media));
@@ -2115,6 +2285,26 @@ static bool simulator_wifi_sample_equal(
         memcmp(lhs_wire, rhs_wire, lhs_size) == 0;
 }
 
+static bool simulator_device_sample_equal(
+    const MeisoDeviceTelemetrySample *lhs,
+    const MeisoDeviceTelemetrySample *rhs
+)
+{
+    uint8_t lhs_wire[MEISO_DEVICE_TELEMETRY_SAMPLE_WIRE_SIZE];
+    uint8_t rhs_wire[MEISO_DEVICE_TELEMETRY_SAMPLE_WIRE_SIZE];
+    size_t lhs_size = 0U;
+    size_t rhs_size = 0U;
+
+    return lhs != NULL && rhs != NULL &&
+        meiso_device_telemetry_sample_encode(
+            lhs, (MeisoMutableBuffer){lhs_wire, sizeof(lhs_wire)}, &lhs_size
+        ) == MEISO_DEVICE_TELEMETRY_CODEC_OK &&
+        meiso_device_telemetry_sample_encode(
+            rhs, (MeisoMutableBuffer){rhs_wire, sizeof(rhs_wire)}, &rhs_size
+        ) == MEISO_DEVICE_TELEMETRY_CODEC_OK && lhs_size == rhs_size &&
+        memcmp(lhs_wire, rhs_wire, lhs_size) == 0;
+}
+
 bool meiso_composition_edge_internal_simulator_storage_disjoint(
     const MeisoEdgeHandle *handle,
     const void *pointer,
@@ -2140,6 +2330,11 @@ bool meiso_composition_edge_internal_simulator_fresh_matches(
         !meiso_owner_scope_equal(handle->simulator_desired_owner,
                                  config->desired_owner) ||
         handle->simulator_wifi_epoch != config->wifi_production_epoch ||
+        handle->simulator_device_supported !=
+            config->device_telemetry_enabled ||
+        handle->simulator_device_epoch != config->device_production_epoch ||
+        handle->simulator_device_epoch_available !=
+            config->device_telemetry_enabled ||
         handle->simulator_media_epoch[0] !=
             config->render_media_stream_epoch ||
         handle->simulator_media_epoch[1] !=
@@ -2149,18 +2344,24 @@ bool meiso_composition_edge_internal_simulator_fresh_matches(
         !handle->simulator_media_epoch_available[1] ||
         handle->simulator_next_command_id != 0U ||
         handle->simulator_wifi_pending ||
+        handle->simulator_device_pending ||
         handle->simulator_snapshot.edge.phase !=
             MEISO_EDGE_PHASE_BOOTSTRAPPING ||
         handle->simulator_snapshot.edge.online ||
         handle->simulator_snapshot.edge.resource_graph_live ||
         handle->simulator_snapshot.wifi_effective_present ||
         handle->simulator_snapshot.wifi_sample_present ||
+        handle->simulator_snapshot.device_effective_present ||
+        handle->simulator_snapshot.device_sample_present ||
         handle->simulator_snapshot.render_media_actual_present ||
         handle->simulator_snapshot.camera_media_actual_present ||
         !simulator_catalog_equal(&handle->simulator_catalog,
                                  &config->catalog) ||
         !simulator_wifi_sample_equal(&handle->simulator_wifi_sample,
-                                     &config->wifi_sample)) {
+                                     &config->wifi_sample) ||
+        (config->device_telemetry_enabled &&
+         !simulator_device_sample_equal(&handle->simulator_device_sample,
+                                        &config->device_sample))) {
         return false;
     }
     for (i = 0U; i < MEISO_COMPOSITION_EDGE_DESIRED_COUNT; ++i) {

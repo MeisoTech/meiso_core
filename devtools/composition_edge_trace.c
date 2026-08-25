@@ -242,6 +242,17 @@ static uint32_t trace_crc32c_pair(
     return crc ^ UINT32_MAX;
 }
 
+static bool trace_device_sample_zero(
+    const MeisoDeviceTelemetrySample *sample
+)
+{
+    return sample != NULL && sample->selected_fields == 0U &&
+        sample->present_fields == 0U && sample->temperature_millic == 0 &&
+        sample->temperature_uncertainty_millic == 0U &&
+        sample->cpu_load_ppm == 0U && sample->memory_total_bytes == 0U &&
+        sample->memory_available_bytes == 0U;
+}
+
 static bool trace_config_valid(
     const MeisoCompositionEdgeSimulatorConfig *config
 )
@@ -262,6 +273,9 @@ static bool trace_config_valid(
         config->wifi_production_epoch != 0U &&
         config->render_media_stream_epoch != 0U &&
         config->camera_media_stream_epoch != 0U &&
+        !config->device_telemetry_enabled &&
+        config->device_production_epoch == 0U &&
+        trace_device_sample_zero(&config->device_sample) &&
         config->catalog.render_media_capability.max_access_unit_bytes != 0U &&
         config->catalog.render_media_capability.max_access_unit_bytes <=
             MEISO_COMPOSITION_RENDER_MEDIA_MAX_ACCESS_UNIT_BYTES &&

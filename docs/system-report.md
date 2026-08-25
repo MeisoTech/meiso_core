@@ -568,12 +568,13 @@ service regression 保持 NDJSON/CMFB schema 与媒体连接行为不变。这�
 Host 应用路径消费，但不把 debug service、Dashboard 或固定 HostApp adapter 冒充通用 SDK backend。
 
 随后新增caller-owned deterministic simulator作为第二种`MeisoEdgeHandle` backend。它以显式activate/
-step、调用方source time和完整access unit实现Wi-Fi desired→accepted Actual/Stream，以及render/camera
-media desired、fresh epoch、latest/exact release；Blob、Composition、device与Action明确unsupported。
-同一application-only TU在HostApp和simulator两条路径运行，field-exact replay、camera desired replacement、
-115200-byte NV12与307200-byte RGBA复制、terminal borrow清理和fresh continuity均有vector。fresh Debug、
-Release与ASan+UBSan全仓CTest均49/49；公开C/C++ header strict，product/application/test analyzer均为0。
-该证据只说明确定性本地replay，不说明network、driver、sensor freshness或physical output。
+step、调用方source time和完整access unit实现Wi-Fi desired→accepted Actual/Stream、config显式启用的
+DeviceTelemetry desired→Actual/Stream，以及render/camera media desired、fresh epoch、latest/exact
+release；Blob、Composition与Action明确unsupported，DeviceTelemetry未启用时也明确unsupported。
+同一application-only TU在HostApp和simulator两条路径运行，field-exact replay、DeviceTelemetry完整/
+subset字段归零、disable与epoch exhaustion、camera desired replacement、115200-byte NV12与307200-byte
+RGBA复制、terminal borrow清理和fresh continuity均有vector。该证据只说明确定性本地replay，不说明
+network、driver、sensor freshness或physical output。
 
 随后冻结Composition Edge deterministic trace v1。writer把simulator config、pre-READY command、activate、
 step、完整render/camera frame与terminal记录为caller-owned、big-endian、CRC32C保护的bounded canonical
@@ -587,6 +588,16 @@ fresh Debug、Release与ASan+UBSan全仓CTest均50/50；trace/Host product与tra
 `-Wconversion -Wsign-conversion -Wshadow`下strict C11通过，公开header strict C++17通过，三TU
 clang analyzer均为0，28-file Markdown link与public symbol门通过。这些是portable source/codec/
 simulator evidence，不扩大上述synthetic边界。
+
+同日又为simulator增加显式opt-in的deterministic DeviceTelemetry子集。config必须给出nonzero
+production epoch与capability范围内的canonical sample；SET_DEVICE按固定Wi-Fi→Device→render→camera
+step优先级生成accepted desired、exact observed/applied Actual和inline Stream，字段subset会把所有未选
+sample truth归零，disable不消费下一个epoch，counter exhaustion与未启用状态均fail closed。trace v1格式
+没有变化：writer同时拒绝enabled device config和关闭标志下的非零device suffix，避免静默丢失新能力。
+新增alias/no-partial、完整与subset sample、disable、优先级、unsupported和UINT64_MAX向量后，fresh Debug、
+Release、ASan+UBSan全仓CTest均50/50；相关四个C11 TU在conversion/sign/shadow strict门通过，公开C++17
+header通过，四份clang analyzer均为367-byte零诊断，28-file Markdown link与敏感信息扫描通过。该切片仍是
+synthetic离线编辑器证据，不证明fresh device sensor、target、network或physical output。
 
 ## 已验证的负面结论
 

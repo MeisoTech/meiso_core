@@ -27,7 +27,7 @@ portable C11 参考实现和可重复实验。
 | K1a reference renderer | bounded 320×240 synthetic offscreen renderer 与 offline runner | `HOST_OFFSCREEN_REFERENCE_VERIFIED`、`TARGET_BUILD_VERIFIED`、`TARGET_NOT_RUN`；不证明几何正确、driver、scanout 或物理显示 |
 | K230D camera capture | bounded Linux V4L2 four-buffer NV12 adapter 与一次三帧 target receipt | `BOARD_VERIFIED` 仅指单适配器物理采集；不证明 CameraMedia transport、combined service、性能或 E2E |
 | K230D Composition debug chain | 同一Session内Blob、Scene/C2、CPU render、Render/Camera Media、Wi-Fi/DeviceTelemetry与local Web bridge | [一次受控四门实机证据](docs/k230d-composition-debug-e2e-v0.md)；不证明physical display、安全transport、自动恢复、性能或长稳 |
-| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release、caller-owned deterministic simulator与canonical trace v1 | HostApp/AF_INET与simulator两种backend；trace只重放synthetic Wi-Fi和两路media，不等于通用plugin ABI、reconnect、watch/Action、target或physical evidence |
+| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release、caller-owned deterministic simulator与canonical trace v1 | HostApp/AF_INET与simulator两种backend；simulator支持Wi-Fi、可选DeviceTelemetry和两路media，trace v1只重放Wi-Fi/media，不等于通用plugin ABI、reconnect、watch/Action、target或physical evidence |
 
 逐版本提交、CI、资源账本和 target receipt 统一记录在
 [系统进展](docs/system-report.md)，不在首页重复维护。

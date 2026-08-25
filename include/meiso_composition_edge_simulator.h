@@ -20,6 +20,10 @@ typedef struct {
     uint64_t render_media_stream_epoch;
     uint64_t camera_media_stream_epoch;
     MeisoWifiTelemetrySample wifi_sample;
+    /* Optional deterministic device desired/Actual/Stream support. */
+    bool device_telemetry_enabled;
+    uint64_t device_production_epoch;
+    MeisoDeviceTelemetrySample device_sample;
 } MeisoCompositionEdgeSimulatorConfig;
 
 typedef uint8_t MeisoCompositionEdgeSimulatorInitStatus;
@@ -37,7 +41,8 @@ enum {
     MEISO_COMPOSITION_EDGE_SIMULATOR_IDLE = 0,
     MEISO_COMPOSITION_EDGE_SIMULATOR_WIFI_APPLIED = 1,
     MEISO_COMPOSITION_EDGE_SIMULATOR_RENDER_MEDIA_APPLIED = 2,
-    MEISO_COMPOSITION_EDGE_SIMULATOR_CAMERA_MEDIA_APPLIED = 3
+    MEISO_COMPOSITION_EDGE_SIMULATOR_CAMERA_MEDIA_APPLIED = 3,
+    MEISO_COMPOSITION_EDGE_SIMULATOR_DEVICE_APPLIED = 4
 };
 
 typedef struct {
@@ -82,7 +87,10 @@ MeisoEdgeStatus meiso_composition_edge_simulator_activate(
     MeisoEdgeHandle *handle
 );
 
-/* At most one queued desired is applied. now becomes Wi-Fi sample source time. */
+/*
+ * At most one queued desired is applied. now becomes the source time for an
+ * applied Wi-Fi or DeviceTelemetry sample.
+ */
 MeisoEdgeStatus meiso_composition_edge_simulator_step(
     MeisoEdgeHandle *handle,
     MeisoTimePoint now,

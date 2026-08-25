@@ -64,16 +64,17 @@ Virtual Edge 不是透明远程内存：
   但各自证据范围不同。
 
 当前Composition Profile v3有两个可执行backend：remote/loopback HostApp adapter投影完整已实现子集；
-caller-owned deterministic simulator以显式activate/step实现Wi-Fi State/Stream与render/camera media
-State/read。两者返回同一种opaque handle，application-only TU不读取backend tag。Simulator不读wall
-clock、不建thread/socket，也不把recorded sample/frame冒充physical truth；未实现的Blob/Composition/
-device操作明确`unsupported`。
+caller-owned deterministic simulator以显式activate/step实现Wi-Fi、可选DeviceTelemetry State/Stream与
+render/camera media State/read。两者返回同一种opaque handle，application-only TU不读取backend tag。
+Simulator不读wall clock、不建thread/socket，也不把recorded sample/frame冒充physical truth；未实现的
+Blob/Composition操作明确`unsupported`，DeviceTelemetry未在config启用时同样明确`unsupported`。
 
 Recorded backend artifact使用固定版本、closed-kind、bounded的canonical in-memory trace；它只记录
-simulator config、typed desired、显式step/time、完整media unit与terminal，不记录或发明Session/Runtime
+simulator config、Wi-Fi/media typed desired、显式step/time、完整media unit与terminal，不记录或发明Session/Runtime
 wire。reader在暴露config前完整验证header、每record integrity、容量、事件顺序和payload，再以单record
 原子cursor驱动fresh simulator。文件或transport I/O继续由caller拥有，trace失败不能吞掉后续record，
-recorded truth始终保持synthetic evidence标签。
+recorded truth始终保持synthetic evidence标签。v1要求DeviceTelemetry simulation关闭，新增simulator能力
+不会被旧trace静默忽略。
 
 `EdgeHandle` 的公开生命周期绑定一段连续的 Session/catalog truth。Host integration 拥有
 连接、event loop、Runtime pump 和 backend replacement；应用只能读取 handle 的
@@ -178,7 +179,7 @@ probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 P
 不是portable Runtime的通用能力。Composition Profile v3 已有首个 Host-facing `EdgeHandle` facade，
 把 accepted 6/18 graph、typed State/Stream/Blob/Composition 与 external media read 投影给应用；它
 已有固定HostApp adapter与caller-owned deterministic simulator两种backend evidence；后者只覆盖Wi-Fi与
-两路media子集。通用hotplug、Action、Edge→Host/并行/resumable Blob route、通用plugin backend、
+可选DeviceTelemetry及两路media子集。通用hotplug、Action、Edge→Host/并行/resumable Blob route、通用plugin backend、
 discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
 专用的caller-owned fair scheduler；它是Runtime--SDK对象，不是Core/wire或通用产品QoS。
 `composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
