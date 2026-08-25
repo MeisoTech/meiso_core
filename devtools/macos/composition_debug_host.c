@@ -1120,6 +1120,30 @@ static const char *edge_terminal_reason_name(MeisoEdgeTerminalReason value)
     }
 }
 
+static const char *host_terminal_code(const Service *service)
+{
+    MeisoCompositionHostAppSnapshot snapshot;
+
+    if (service == NULL || service->app == NULL ||
+        !meiso_composition_host_app_snapshot(service->app, &snapshot)) {
+        return "HOST_APP_INTERNAL_TERMINAL";
+    }
+    switch (snapshot.terminal_reason) {
+        case MEISO_COMPOSITION_HOST_APP_TERMINAL_CONTROL_TRANSPORT:
+            return "HOST_APP_TRANSPORT_TERMINAL";
+        case MEISO_COMPOSITION_HOST_APP_TERMINAL_CONTROL_SESSION:
+            return "HOST_APP_SESSION_TERMINAL";
+        case MEISO_COMPOSITION_HOST_APP_TERMINAL_CATALOG_CHANGED:
+            return "HOST_APP_CATALOG_TERMINAL";
+        case MEISO_COMPOSITION_HOST_APP_TERMINAL_LOCAL_ABORT:
+            return "HOST_APP_LOCAL_TERMINAL";
+        case MEISO_COMPOSITION_HOST_APP_TERMINAL_INTERNAL_FAILURE:
+        case MEISO_COMPOSITION_HOST_APP_TERMINAL_NONE:
+        default:
+            return "HOST_APP_INTERNAL_TERMINAL";
+    }
+}
+
 static const char *apply_result_name(MeisoRuntimeApplyResult value)
 {
     switch (value) {
@@ -2610,10 +2634,17 @@ static bool pump_host(
         return true;
     }
     if (status == MEISO_COMPOSITION_HOST_APP_PUMP_TERMINAL) {
+        char line[96];
+        int written;
+
         service->close_requested = true;
-        return emit_line(
-            "{\"type\":\"terminal\",\"code\":\"HOST_APP_TERMINAL\"}"
+        written = snprintf(
+            line, sizeof(line),
+            "{\"type\":\"terminal\",\"code\":\"%s\"}",
+            host_terminal_code(service)
         );
+        return written > 0 && (size_t)written < sizeof(line) &&
+            emit_line(line);
     }
     if (status != MEISO_COMPOSITION_HOST_APP_PUMP_PROGRESS) {
         return false;

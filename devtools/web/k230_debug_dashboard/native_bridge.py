@@ -388,7 +388,12 @@ _EVENT_ENUMS: dict[tuple[str, str], set[str]] = {
     },
     ("pump.event", "media_source"): {"none", "render", "camera"},
     ("media.connected", "transport"): {"tcp"},
-    ("terminal", "code"): {"HOST_APP_TERMINAL", "SIMULATOR_TERMINAL"},
+    ("terminal", "code"): {
+        "HOST_APP_TRANSPORT_TERMINAL", "HOST_APP_SESSION_TERMINAL",
+        "HOST_APP_CATALOG_TERMINAL", "HOST_APP_LOCAL_TERMINAL",
+        "HOST_APP_INTERNAL_TERMINAL", "HOST_APP_TERMINAL",
+        "SIMULATOR_TERMINAL",
+    },
     ("actual", "channel"): {
         "wifi", "presentation", "scene", "device", "render_media",
         "camera_media",

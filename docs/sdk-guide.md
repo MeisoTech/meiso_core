@@ -99,6 +99,14 @@ borrow/release 只调用公开 `MeisoEdgeHandle` API；进程内 HostApp 仅负�
 control/media fd、one-use media slot 与 abort。NDJSON/CMFB 仍是 machine-local bridge，不成为第二套
 SDK 或 wire owner。
 
+remote Dashboard在这条固定集成上另有一个process-supervisor边界：只有native Host明确报告
+control-transport、Session或catalog terminal时，Dashboard才废弃整个child及其native truth/frame，按
+100 ms起、5 s封顶的退避创建fresh child，并从浏览器拥有的最新完整scene/intent重新bootstrap。重连期间
+的新编辑只更新local snapshot并标记pending；retired generation的迟到event/frame全部丢弃。新的child必须
+重新证明`service.ready`、catalog和Actual，旧`EdgeHandle`、Session、binding、epoch或frame均不恢复。
+internal/local failure与simulator terminal保持sticky。这是当前编辑器supervisor的closed integration，
+不是开放backend plugin、通用SDK reconnect/resume、discovery或Edge restart协议。
+
 同一个 Debug Host 还必须提供显式 `--simulator` 启动模式，作为本地编辑器的真实离线入口，而不是只在
 单元测试中直接调用 simulator。该模式不读取远端 config、不创建 control/media socket，也不伪造
 Session、TCP binding 或 physical frame；它以固定 Composition Profile v3 catalog、caller-owned arena 和
@@ -115,8 +123,9 @@ payload SHA-256必须等于同一RenderResult的full-target hash。它不生成c
 operation 的 capability 为 false；media borrow 只能以 facade key exact release；control terminal
 后 snapshot 不再暴露旧 capability/data，所有 mutation fail closed。另有一个 application-only
 translation unit 只 include public SDK/Profile header，保证业务代码无法依赖 fd、Session/Runtime
-pump 或 devtools type。该 evidence 是 Host facade/loopback evidence，不证明 physical Edge、自动
-reconnect、Action、任意 Profile 或跨 backend ABI。
+pump 或 devtools type。该 evidence 是 Host facade/loopback evidence；其中Dashboard的fresh-child
+supervisor也只证明host-local process boundary，不证明 physical Edge/network recovery、通用SDK
+reconnect/resume、Action、任意 Profile 或跨 backend ABI。
 
 ### Deterministic simulator / replay backend
 

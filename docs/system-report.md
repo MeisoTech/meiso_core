@@ -629,6 +629,26 @@ JavaScript 5/5，28-file Markdown link与diff/sensitive门通过。新增vector�
 以及trace v1对nonzero raster config的原子拒绝。这证明本地编辑器已有真实native离线backend和source-host CPU-raster preview，
 不证明Session/TCP、cross-target像素、K230、camera capture、physical display、性能或soak。
 
+## Dashboard remote fresh-child supervisor
+
+固定remote Dashboard随后补上当前编辑器真正需要、但严格窄于SDK resume的恢复边界。native Debug Host把
+HostApp terminal拆成closed的control-transport、Session、catalog、local与internal code；Dashboard只对
+前三种continuity terminal关闭old child，清除全部native truth/CMFB cache，并以100 ms起、5 s封顶的退避
+创建fresh child。新的child从browser-owned最新完整scene与render/camera/Wi-Fi/device intent重新bootstrap，
+必须自己重新证明`service.ready`、catalog、Actual与media。重连空窗中的编辑仍candidate-first写入local
+snapshot并标记pending；generation guard拒绝retired child的迟到Actual与frame。internal/local failure与
+simulator terminal保持sticky，server close会中断正在sleep/retry的worker并回收每个失败candidate。
+
+Python向量锁定一次失败后成功、持续失败时close停止、latest snapshot replay、stale event/frame隔离、
+仅三种terminal可重连及默认RECORDED_LOCAL字节不变；真实`127.0.0.1`C向量在Host发送首个control byte后
+由peer关闭连接，验证stdout恰有一次`HOST_APP_TRANSPORT_TERMINAL`、closed NDJSON、stderr为空且进程
+clean退出。该结果证明host-local Dashboard process supervision，不是Session resume、old handle/binding/
+epoch复活、通用`EdgeHandle`backend reconnect、Edge进程重启、discovery、K230D断网恢复或安全transport。
+fresh Debug、Release与ASan+UBSan全仓CTest均52/52；native bridge含真实simulator child为18/18且
+reconnect整组重复10轮，server 9/9、JavaScript 5/5。修改的Host/test C TU通过
+conversion/sign/shadow strict C11与clang analyzer零诊断；Python warnings-as-errors、28-file Markdown
+link、diff与public sensitive scan均通过。
+
 ## 已验证的负面结论
 
 - 把每帧 raw camera 当成可靠完整 transfer 会造成高带宽与旧数据阻塞，不适合连续 Stream；
@@ -643,8 +663,8 @@ JavaScript 5/5，28-file Markdown link与diff/sensitive门通过。新增vector�
 
 ## 未实现与未知
 
-- 超出当前固定HostApp/simulator dispatch的开放`EdgeHandle` plugin ABI、通用文件/目录管理、State watch、
-  Stream publish、Action、Blob lookup与自动reconnect；
+- 超出当前固定HostApp/simulator dispatch与Dashboard fresh-child supervisor的开放`EdgeHandle` plugin ABI、
+  通用文件/目录管理、State watch、Stream publish、Action、Blob lookup与通用backend自动reconnect；
 - product Runtime 的 endpoint facet/direction/QoS/permission schema、通用 hotplug、Host
   orchestration 与 typed dispatcher；
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；

@@ -35,6 +35,13 @@ MAX_SSE_BATCH = 64
 MAX_OBJECTS = 32
 CSRF_PLACEHOLDER = "__MEISO_CSRF_TOKEN__"
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
+NATIVE_RECONNECT_INITIAL_SECONDS = 0.1
+NATIVE_RECONNECT_MAX_SECONDS = 5.0
+_RECONNECTABLE_NATIVE_TERMINALS = frozenset({
+    "HOST_APP_TRANSPORT_TERMINAL",
+    "HOST_APP_SESSION_TERMINAL",
+    "HOST_APP_CATALOG_TERMINAL",
+})
 
 
 class CommandError(ValueError):
@@ -180,9 +187,134 @@ class DashboardState:
         self._next_draft_object = 2
         self._snapshot = _default_snapshot()
         self._native_bridge: NativeBridge | None = None
+        self._native_spec: tuple[str, str | None, bool] | None = None
+        self._native_generation = 0
+        self._native_reconnect_thread: threading.Thread | None = None
+        self._native_reconnect_stop = threading.Event()
         self._native_refresh_pending = False
         with self._condition:
             self._append_event_locked("bootstrap", "READY")
+
+    def _make_native_bridge_locked(
+        self,
+        spec: tuple[str, str | None, bool],
+        generation: int,
+    ) -> NativeBridge:
+        executable, config, simulator = spec
+        on_event = lambda event: self._native_event(event, generation)
+        on_frame = lambda source, value: self._native_frame(
+            source, value, generation
+        )
+        return (
+            NativeBridge(
+                executable, config, on_event, on_frame, simulator=True
+            ) if simulator else
+            NativeBridge(executable, config, on_event, on_frame)
+        )
+
+    def _clear_native_truth_locked(self) -> None:
+        self._snapshot["native_truth"] = copy.deepcopy(
+            _default_snapshot()["native_truth"]
+        )
+        for key in self._snapshot["protocol_evidence"]:
+            self._snapshot["protocol_evidence"][key] = None
+        self._snapshot["frames"] = {
+            "render": {"available": False},
+            "camera": {"available": False},
+        }
+        self._snapshot["bindings"].update({
+            "render_result_stream": "UNBOUND",
+            "camera_media_stream": "UNBOUND",
+            "wifi_telemetry": "UNBOUND",
+        })
+
+    def _schedule_native_reconnect_locked(
+        self, stale_bridge: NativeBridge
+    ) -> None:
+        if (self._native_spec is None or self._native_spec[2] or
+                self._native_reconnect_stop.is_set() or
+                (self._native_reconnect_thread is not None and
+                 self._native_reconnect_thread.is_alive())):
+            return
+        thread = threading.Thread(
+            target=self._native_reconnect_loop,
+            args=(stale_bridge,),
+            daemon=True,
+            name="native_reconnect",
+        )
+        self._native_reconnect_thread = thread
+        thread.start()
+
+    def _native_reconnect_loop(self, stale_bridge: NativeBridge) -> None:
+        stale_bridge.close()
+        attempt = 0
+        delay = NATIVE_RECONNECT_INITIAL_SECONDS
+        while not self._native_reconnect_stop.wait(delay):
+            attempt += 1
+            with self._condition:
+                spec = self._native_spec
+                if spec is None or spec[2] or self._native_bridge is not None:
+                    self._native_reconnect_thread = None
+                    return
+                self._native_generation += 1
+                generation = self._native_generation
+                bridge = self._make_native_bridge_locked(spec, generation)
+                self._native_bridge = bridge
+                candidate = copy.deepcopy(self._snapshot)
+                self._snapshot["backend"].update({
+                    "native_host_bound": True,
+                    "device_connected": False,
+                    "session_status": "STARTING",
+                    "catalog_status": "PENDING",
+                })
+                self._append_event_locked(
+                    "native.reconnect", "NATIVE_RECONNECT_ATTEMPT",
+                    {"type": "native.reconnect", "status": "attempt",
+                     "attempt": attempt},
+                )
+                try:
+                    bridge.start()
+                    bridge.submit_batch(
+                        bootstrap_commands(candidate),
+                        origin="native.reconnect",
+                        revision=candidate["revision"],
+                    )
+                except Exception:
+                    if self._native_bridge is bridge:
+                        self._native_bridge = None
+                        self._native_generation += 1
+                        self._clear_native_truth_locked()
+                        self._snapshot["backend"].update({
+                            "native_host_bound": False,
+                            "device_connected": False,
+                            "session_status": "RECONNECTING",
+                            "catalog_status": "PENDING",
+                        })
+                        self._append_event_locked(
+                            "native.reconnect", "NATIVE_RECONNECT_RETRY",
+                            {"type": "native.reconnect", "status": "retry",
+                             "attempt": attempt},
+                        )
+                    failed = True
+                else:
+                    failed = self._native_bridge is not bridge
+                    if not failed:
+                        self._native_reconnect_thread = None
+                        self._append_event_locked(
+                            "native.reconnect", "NATIVE_RECONNECT_STARTED",
+                            {"type": "native.reconnect", "status": "started",
+                             "attempt": attempt},
+                        )
+                        return
+            bridge.close()
+            if self._native_reconnect_stop.is_set():
+                break
+            if not failed:
+                break
+            delay = min(delay * 2.0, NATIVE_RECONNECT_MAX_SECONDS)
+        with self._condition:
+            if self._native_reconnect_thread is threading.current_thread():
+                self._native_reconnect_thread = None
 
     def snapshot(self) -> dict[str, Any]:
         with self._condition:
@@ -396,7 +528,9 @@ class DashboardState:
                 name,
                 ("NATIVE_QUEUED" if native_commands else
                  "LOCAL_SELECTION_UPDATED") if self._native_bridge is not None
-                else "LOCAL_DRAFT_UPDATED",
+                else ("NATIVE_RECONNECT_PENDING" if
+                      self._native_spec is not None else
+                      "LOCAL_DRAFT_UPDATED"),
             )
             return event_id, copy.deepcopy(self._snapshot)
 
@@ -404,21 +538,17 @@ class DashboardState:
         self, executable: str, config: str | None, *, simulator: bool = False
     ) -> None:
         with self._condition:
-            if self._native_bridge is not None:
+            if self._native_bridge is not None or self._native_spec is not None:
                 raise NativeBridgeError("NATIVE_ALREADY_BOUND")
-            bridge = (
-                NativeBridge(
-                    executable, config, self._native_event,
-                    self._native_frame, simulator=True,
-                ) if simulator else
-                NativeBridge(
-                    executable, config, self._native_event,
-                    self._native_frame,
-                )
-            )
+            spec = (executable, config, simulator)
+            self._native_reconnect_stop.clear()
+            self._native_generation += 1
+            generation = self._native_generation
+            bridge = self._make_native_bridge_locked(spec, generation)
             snapshot_before = copy.deepcopy(self._snapshot)
             events_before = copy.deepcopy(list(self._events))
             next_event_before = self._next_event_id
+            self._native_spec = spec
             self._native_bridge = bridge
             self._native_refresh_pending = False
             self._snapshot["backend"].update({
@@ -443,7 +573,9 @@ class DashboardState:
         except Exception:
             bridge.close()
             with self._condition:
+                self._native_spec = None
                 self._native_bridge = None
+                self._native_generation += 1
                 self._native_refresh_pending = False
                 self._snapshot = snapshot_before
                 self._events.clear()
@@ -456,10 +588,17 @@ class DashboardState:
     def close(self) -> None:
         with self._condition:
             bridge = self._native_bridge
+            reconnect_thread = self._native_reconnect_thread
+            self._native_spec = None
             self._native_bridge = None
+            self._native_generation += 1
             self._native_refresh_pending = False
+            self._native_reconnect_stop.set()
         if bridge is not None:
             bridge.close()
+        if (reconnect_thread is not None and
+                reconnect_thread is not threading.current_thread()):
+            reconnect_thread.join(4.0)
 
     def latest_frame(
         self, source: str
@@ -468,13 +607,18 @@ class DashboardState:
             bridge = self._native_bridge
         return None if bridge is None else bridge.latest_frame(source)
 
-    def _native_event(self, event: dict[str, Any]) -> None:
+    def _native_event(
+        self, event: dict[str, Any], generation: int | None = None
+    ) -> None:
         event_type = event.get("type")
         if event_type == "pump.event":
             return
         refresh_bridge: NativeBridge | None = None
         refresh_revision = 0
         with self._condition:
+            if (generation is not None and
+                    generation != self._native_generation):
+                return
             backend = self._snapshot["backend"]
             truth = self._snapshot["native_truth"]
             truth["last_event"] = copy.deepcopy(event)
@@ -538,12 +682,29 @@ class DashboardState:
                 self._native_refresh_pending = False
                 backend["native_host_bound"] = False
                 backend["device_connected"] = False
-                backend["session_status"] = "FAILED"
-                truth["control_snapshot"] = None
-                self._snapshot["frames"] = {
-                    "render": {"available": False},
-                    "camera": {"available": False},
-                }
+                reconnectable = bool(
+                    event_type == "terminal" and
+                    event.get("code") in _RECONNECTABLE_NATIVE_TERMINALS and
+                    self._native_spec is not None and
+                    not self._native_spec[2] and
+                    self._native_bridge is not None
+                )
+                if reconnectable:
+                    stale_bridge = self._native_bridge
+                    self._native_bridge = None
+                    self._native_generation += 1
+                    self._clear_native_truth_locked()
+                    backend = self._snapshot["backend"]
+                    backend["session_status"] = "RECONNECTING"
+                    backend["catalog_status"] = "PENDING"
+                    self._schedule_native_reconnect_locked(stale_bridge)
+                else:
+                    backend["session_status"] = "FAILED"
+                    truth["control_snapshot"] = None
+                    self._snapshot["frames"] = {
+                        "render": {"available": False},
+                        "camera": {"available": False},
+                    }
             if (event_type in {"actual", "media.connected"} and
                     not self._native_refresh_pending and
                     self._native_bridge is not None):
@@ -604,9 +765,17 @@ class DashboardState:
             "BOUND" if wifi_bound else "UNBOUND"
         )
 
-    def _native_frame(self, source: str, metadata: dict[str, Any]) -> None:
+    def _native_frame(
+        self,
+        source: str,
+        metadata: dict[str, Any],
+        generation: int | None = None,
+    ) -> None:
         event = {"type": "native.frame", **metadata}
         with self._condition:
+            if (generation is not None and
+                    generation != self._native_generation):
+                return
             self._snapshot["frames"][source] = {
                 "available": True, **copy.deepcopy(metadata)
             }

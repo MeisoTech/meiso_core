@@ -193,7 +193,10 @@ probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 P
 已有固定HostApp adapter与caller-owned deterministic simulator两种backend evidence；后者覆盖Wi-Fi、
 可选DeviceTelemetry、两路media与离线Mesh/Scene/Presentation/RenderResult子集。通用hotplug、Action、
 Edge→Host/并行/resumable Blob route、通用plugin backend、
-discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
+discovery、通用SDK/backend reconnect/resume与security adapter仍未完成。固定remote Dashboard已有更窄的
+host-local supervisor：typed control transport/Session/catalog terminal会废弃old child/truth/frame，
+退避启动fresh Host child并回放最新browser-owned完整intent；它不恢复旧Session/handle，也不证明Edge或
+target network recovery。R2a另有Composition Profile v2
 专用的caller-owned fair scheduler；它是Runtime--SDK对象，不是Core/wire或通用产品QoS。
 `composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
 Blob carriage。Profile v1 保留 MRT0 v2，明确拒绝 Blob/IMMUTABLE route；Profile v2 显式选择

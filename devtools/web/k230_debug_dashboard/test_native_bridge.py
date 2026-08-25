@@ -330,6 +330,24 @@ class NativeBridgeTests(unittest.TestCase):
             "frame_projection": "CMFB/v1",
         }
         self.assertNotIn("wire_owner", sanitize_native_event(ready))
+        for code in (
+            "HOST_APP_TRANSPORT_TERMINAL", "HOST_APP_SESSION_TERMINAL",
+            "HOST_APP_CATALOG_TERMINAL", "HOST_APP_LOCAL_TERMINAL",
+            "HOST_APP_INTERNAL_TERMINAL", "HOST_APP_TERMINAL",
+            "SIMULATOR_TERMINAL",
+        ):
+            self.assertEqual(
+                sanitize_native_event({"type": "terminal", "code": code}),
+                {"type": "terminal", "code": code},
+            )
+        self.assertEqual(
+            server_module._RECONNECTABLE_NATIVE_TERMINALS,
+            frozenset({
+                "HOST_APP_TRANSPORT_TERMINAL",
+                "HOST_APP_SESSION_TERMINAL",
+                "HOST_APP_CATALOG_TERMINAL",
+            }),
+        )
         for invalid in (
             {**ready, "extra": 1},
             {**ready, "profile": "composition-v4"},
@@ -442,6 +460,241 @@ class NativeBridgeTests(unittest.TestCase):
             state.snapshot(), list(state._events), state._next_event_id
         ))
         self.assertIsNone(state._native_bridge)
+
+    def test_remote_transport_terminal_restarts_fresh_child_and_replays_latest(
+        self,
+    ) -> None:
+        class RecordingBridge:
+            instances: list["RecordingBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, on_frame):
+                self.on_event = on_event
+                self.on_frame = on_frame
+                self.calls: list[tuple[list[dict[str, object]], str, int]] = []
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            def start(self) -> None:
+                return None
+
+            def submit_batch(self, commands, *, origin, revision):
+                self.calls.append((copy.deepcopy(commands), origin, revision))
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = DashboardState()
+        with (
+            mock.patch.object(server_module, "NativeBridge", RecordingBridge),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_INITIAL_SECONDS", 0.05
+            ),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_MAX_SECONDS", 0.05
+            ),
+        ):
+            state.enable_native("unused", "unused")
+            first = RecordingBridge.instances[0]
+            first.on_event({
+                "type": "terminal",
+                "code": "HOST_APP_TRANSPORT_TERMINAL",
+            })
+            event_id, snapshot = state.apply({
+                "command": "scene.object.transform",
+                "draft_object": 1,
+                "position": [9.0, 8.0, 7.0],
+                "rotation_deg": [1.0, 2.0, 3.0],
+                "scale": [2.0, 2.0, 2.0],
+            })
+            self.assertGreater(event_id, 0)
+            self.assertEqual(snapshot["backend"]["session_status"],
+                             "RECONNECTING")
+            self.assertEqual(list(state._events)[-1][1]["status"],
+                             "NATIVE_RECONNECT_PENDING")
+            _wait_for(lambda: len(RecordingBridge.instances) == 2)
+            second = RecordingBridge.instances[1]
+            _wait_for(lambda: bool(second.calls))
+            self.assertTrue(first.closed)
+            self.assertEqual(second.calls[0][1], "native.reconnect")
+            self.assertEqual(second.calls[0][2], 1)
+            scene = next(
+                command for command in second.calls[0][0]
+                if command["command"] == "set_scene"
+            )
+            self.assertEqual(scene["objects"][0]["position"], [9.0, 8.0, 7.0])
+            first.on_event({
+                "type": "actual", "channel": "wifi", "state_version": 99,
+                "apply_result": "applied", "availability": "present",
+                "profile_decoded": True, "enabled": True,
+                "production_status": "running", "reason": "none",
+                "production_epoch": 99,
+            })
+            first.on_frame("render", {"frame_sequence": 99})
+            self.assertNotIn("wifi", state.snapshot()["native_truth"]["actual"])
+            self.assertEqual(
+                state.snapshot()["frames"]["render"], {"available": False}
+            )
+        state.close()
+
+    def test_internal_terminal_is_sticky_and_never_auto_restarts(self) -> None:
+        class RecordingBridge:
+            instances: list["RecordingBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, _on_frame):
+                self.on_event = on_event
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            @staticmethod
+            def start() -> None:
+                return None
+
+            @staticmethod
+            def submit_batch(commands, *, origin, revision):
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = DashboardState()
+        with (
+            mock.patch.object(server_module, "NativeBridge", RecordingBridge),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_INITIAL_SECONDS", 0.01
+            ),
+        ):
+            state.enable_native("unused", "unused")
+            RecordingBridge.instances[0].on_event({
+                "type": "terminal",
+                "code": "HOST_APP_INTERNAL_TERMINAL",
+            })
+            time.sleep(0.05)
+            self.assertEqual(len(RecordingBridge.instances), 1)
+            self.assertEqual(
+                state.snapshot()["backend"]["session_status"], "FAILED"
+            )
+        state.close()
+
+    def test_remote_reconnect_retries_failed_fresh_child_and_close_stops(self) -> None:
+        class FlakyBridge:
+            instances: list["FlakyBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, _on_frame):
+                self.on_event = on_event
+                self.closed = False
+                self.calls = 0
+                self.__class__.instances.append(self)
+
+            def start(self) -> None:
+                if len(self.__class__.instances) == 2:
+                    raise OSError("injected fresh-child start failure")
+
+            def submit_batch(self, commands, *, origin, revision):
+                self.calls += 1
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = DashboardState()
+        with (
+            mock.patch.object(server_module, "NativeBridge", FlakyBridge),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_INITIAL_SECONDS", 0.01
+            ),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_MAX_SECONDS", 0.01
+            ),
+        ):
+            state.enable_native("unused", "unused")
+            FlakyBridge.instances[0].on_event({
+                "type": "terminal",
+                "code": "HOST_APP_SESSION_TERMINAL",
+            })
+            _wait_for(lambda: len(FlakyBridge.instances) == 3)
+            _wait_for(lambda: FlakyBridge.instances[2].calls == 1)
+            self.assertTrue(FlakyBridge.instances[0].closed)
+            self.assertTrue(FlakyBridge.instances[1].closed)
+            self.assertFalse(FlakyBridge.instances[2].closed)
+            self.assertTrue(any(
+                event[1]["status"] == "NATIVE_RECONNECT_RETRY"
+                for event in state._events
+            ))
+        state.close()
+        self.assertTrue(FlakyBridge.instances[2].closed)
+        self.assertTrue(
+            state._native_reconnect_thread is None or
+            not state._native_reconnect_thread.is_alive()
+        )
+
+    def test_close_interrupts_an_active_reconnect_retry_loop(self) -> None:
+        class AlwaysFailFreshBridge:
+            instances: list["AlwaysFailFreshBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, _on_frame):
+                self.on_event = on_event
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            def start(self) -> None:
+                if len(self.__class__.instances) > 1:
+                    raise OSError("injected persistent reconnect failure")
+
+            @staticmethod
+            def submit_batch(commands, *, origin, revision):
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = DashboardState()
+        with (
+            mock.patch.object(
+                server_module, "NativeBridge", AlwaysFailFreshBridge
+            ),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_INITIAL_SECONDS", 0.01
+            ),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_MAX_SECONDS", 0.01
+            ),
+        ):
+            state.enable_native("unused", "unused")
+            AlwaysFailFreshBridge.instances[0].on_event({
+                "type": "terminal",
+                "code": "HOST_APP_CATALOG_TERMINAL",
+            })
+            _wait_for(lambda: len(AlwaysFailFreshBridge.instances) >= 3)
+            state.close()
+            instance_count = len(AlwaysFailFreshBridge.instances)
+            time.sleep(0.05)
+            self.assertEqual(
+                len(AlwaysFailFreshBridge.instances), instance_count
+            )
+            self.assertTrue(all(
+                bridge.closed for bridge in AlwaysFailFreshBridge.instances
+            ))
+            self.assertTrue(
+                state._native_reconnect_thread is None or
+                not state._native_reconnect_thread.is_alive()
+            )
 
     def test_native_truth_refresh_is_deduplicated_and_pump_is_not_projected(
         self,

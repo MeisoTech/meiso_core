@@ -94,7 +94,15 @@ typedef struct {
     size_t size;
     int fd;
     int error_number;
+    uint32_t hold_after_write_ms;
 } Writer;
+
+typedef struct {
+    int listener;
+    bool accepted;
+    bool saw_client_byte;
+    int error_number;
+} TransportCloseServer;
 
 typedef struct {
     MediaScenario *scenario;
@@ -169,6 +177,14 @@ static void *writer_main(void *context)
 
     if (!write_all(writer->fd, writer->bytes, writer->size)) {
         writer->error_number = errno == 0 ? EIO : errno;
+    } else if (writer->hold_after_write_ms > 0U) {
+        struct timespec remaining = {
+            (time_t)(writer->hold_after_write_ms / 1000U),
+            (long)(writer->hold_after_write_ms % 1000U) * 1000000L
+        };
+
+        while (nanosleep(&remaining, &remaining) != 0 && errno == EINTR) {
+        }
     }
     close_fd(&writer->fd);
     return NULL;
@@ -377,6 +393,35 @@ static int accept_nonblocking(int listener)
         item.revents = 0;
     }
     return -1;
+}
+
+static void *transport_close_server_main(void *context)
+{
+    TransportCloseServer *server = context;
+    struct pollfd item;
+    int fd = accept_nonblocking(server->listener);
+    char byte;
+    int poll_status;
+
+    if (fd < 0) {
+        server->error_number = errno == 0 ? EIO : errno;
+        return NULL;
+    }
+    server->accepted = true;
+    item = (struct pollfd){fd, POLLIN, 0};
+    do {
+        poll_status = poll(&item, (nfds_t)1U, 5000);
+    } while (poll_status < 0 && errno == EINTR);
+    if (poll_status <= 0 ||
+        (item.revents & (POLLIN | POLLERR | POLLHUP)) == 0 ||
+        recv(fd, &byte, 1U, 0) != 1) {
+        server->error_number = errno == 0 ? EIO : errno;
+    } else {
+        server->saw_client_byte = true;
+    }
+    (void)shutdown(fd, SHUT_RDWR);
+    close_fd(&fd);
+    return NULL;
 }
 
 static bool fd_ready_now(int fd, short events)
@@ -1318,6 +1363,7 @@ static bool run_service_mode(
     bool simulator,
     const char *input,
     size_t input_size,
+    uint32_t input_hold_ms,
     RunResult *out_result
 )
 {
@@ -1359,6 +1405,7 @@ static bool run_service_mode(
     writer.bytes = input;
     writer.size = input_size;
     writer.fd = -1;
+    writer.hold_after_write_ms = input_hold_ms;
     if (pipe(input_pipe) != 0 || pipe(output_pipe) != 0 ||
         pipe(error_pipe) != 0) {
         goto done;
@@ -1448,7 +1495,20 @@ static bool run_service(
 )
 {
     return run_service_mode(
-        config_contents, false, input, input_size, out_result
+        config_contents, false, input, input_size, 0U, out_result
+    );
+}
+
+static bool run_service_with_input_hold(
+    const char *config_contents,
+    const char *input,
+    size_t input_size,
+    uint32_t input_hold_ms,
+    RunResult *out_result
+)
+{
+    return run_service_mode(
+        config_contents, false, input, input_size, input_hold_ms, out_result
     );
 }
 
@@ -1458,7 +1518,7 @@ static bool run_simulator_service(
     RunResult *out_result
 )
 {
-    return run_service_mode(NULL, true, input, input_size, out_result);
+    return run_service_mode(NULL, true, input, input_size, 0U, out_result);
 }
 
 static bool run_media_service(
@@ -1681,6 +1741,56 @@ static bool test_numeric_connect_failure(void)
     CHECK(strcmp(result.error, "E_INIT\n") == 0);
     close_fd(&bound_socket);
     return true;
+}
+
+static bool test_control_transport_terminal_code(void)
+{
+    char config[CONFIG_BYTES];
+    RunResult result;
+    TransportCloseServer server;
+    pthread_t server_thread;
+    int listener = -1;
+    uint16_t port;
+    bool server_started = false;
+    bool ok = false;
+
+    memset(&server, 0, sizeof(server));
+    server.listener = -1;
+    CHECK_GOTO(make_control_socket(true, &listener, &port) &&
+               set_nonblocking(listener) &&
+               build_config(config, sizeof(config), port, 9U, NULL, NULL),
+               cleanup);
+    server.listener = listener;
+    CHECK_GOTO(pthread_create(
+                   &server_thread, NULL, transport_close_server_main, &server
+               ) == 0, cleanup);
+    server_started = true;
+    CHECK_GOTO(run_service_with_input_hold(
+                   config, "", 0U, 2000U, &result
+               ), cleanup);
+    CHECK_GOTO(pthread_join(server_thread, NULL) == 0, cleanup);
+    server_started = false;
+    CHECK_GOTO(server.accepted && server.saw_client_byte &&
+               server.error_number == 0 && result.exit_code == 0 &&
+               result.writer_error == 0 && result.error_size == 0U,
+               cleanup);
+    CHECK_GOTO(strstr(result.output, "\"type\":\"service.ready\"") !=
+                   NULL &&
+               occurrence_count(
+                   result.output,
+                   "{\"type\":\"terminal\","
+                   "\"code\":\"HOST_APP_TRANSPORT_TERMINAL\"}\n"
+               ) == 1U &&
+               strstr(result.output, "HOST_APP_INTERNAL_TERMINAL") == NULL &&
+               output_is_closed_ndjson(result.output), cleanup);
+    ok = true;
+
+cleanup:
+    close_fd(&listener);
+    if (server_started) {
+        (void)pthread_join(server_thread, NULL);
+    }
+    return ok;
 }
 
 static bool append_scene(
@@ -2071,6 +2181,7 @@ cleanup:
 int main(void)
 {
     if (!test_config_rejections() || !test_numeric_connect_failure() ||
+        !test_control_transport_terminal_code() ||
         !test_pre_ready_commands_and_redaction() ||
         !test_large_hup_drain() || !test_partial_line_eof() ||
         !test_sigpipe_restore() || !test_offline_simulator_editor_flow() ||

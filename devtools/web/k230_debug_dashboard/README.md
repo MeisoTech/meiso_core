@@ -42,6 +42,21 @@ bounded local queue candidate-first. A later child failure is projected as a
 terminal event; the bridge does not promise transaction rollback across
 multiple already-enqueued native commands.
 
+Remote native mode has one deliberately narrow process supervisor. A typed
+control-transport, Session, or catalog terminal closes the old child, clears
+all old native truth and cached frames, and retries a fresh child with
+exponential backoff from 100 ms to 5 s. The fresh child gets a fresh arena and
+Session; after it starts, the bridge queues a complete bootstrap derived from
+the newest browser-owned scene and intent snapshot. Local edits remain
+candidate-first and are accepted as `NATIVE_RECONNECT_PENDING` while no child
+is live. Generation guards reject late events and frames from every retired
+child. Internal/local failures and simulator terminals remain sticky instead
+of entering a restart loop; the legacy generic `HOST_APP_TERMINAL` is accepted
+but also remains sticky because it carries no trustworthy recovery class. This
+is not Session resume, old-handle revival,
+generic SDK/backend reconnect, Edge process restart, discovery, or target
+network-recovery evidence.
+
 Only an exact allowlist of typed native output is copied into snapshots/SSE.
 Read-only evidence can include State/plan/world generations, production epoch,
 frame sequence/drop counters, effective media parameters, Wi-Fi/device samples,
@@ -72,6 +87,12 @@ python3 devtools/web/k230_debug_dashboard/server.py \
 Open `http://127.0.0.1:50001/`. The listener is fixed to `127.0.0.1`;
 `--port` only selects another loopback port. Omitting either native option is an
 error, while omitting both preserves `RECORDED_LOCAL` behavior.
+
+If the remote child reports one of the three continuity terminals above, the
+same Dashboard process owns the bounded retry loop. `native.reconnect` events
+distinguish attempt, retry, and fresh-child-started from an authoritative
+`service.ready`/snapshot; a started replacement is not displayed as Session
+READY until its own native truth proves that state.
 
 The same native service can instead run the fixed offline simulator without a
 remote config or any socket:
