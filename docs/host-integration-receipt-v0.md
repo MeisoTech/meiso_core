@@ -73,8 +73,11 @@ Host 可以保留自己的 opaque API handle，但至少把下列作用域纳入
 | Blob transfer | SessionId、catalog/route、Runtime transfer ID、ContentId/total/offset | terminal RESULT、abort、catalog/Session discontinuity |
 | Blob visibility | Core publication + current Profile/owner scope | cache 命中不恢复新 Session/world/desired/visibility |
 
-建议 Host SDK 对应用暴露 `EdgeHandle / endpoint / typed State / typed Stream`，内部再映射到上述
-tuple。应用不应看到 socket、PeerId、catalog wire、driver path 或 K230D 细节。
+当前首个Composition Profile v3 Host SDK切片已经用opaque `MeisoEdgeHandle`把accepted endpoint/
+resource view、typed desired/actual/Stream/Blob/Composition snapshot与external-media latest/release
+映射到上述tuple。它的integration adapter仍借用并驱动既有HostApp；应用不看到socket、Session/
+Runtime pump、route key、nonce、catalog wire、driver path或K230D细节。该实现不是通用backend ABI；
+State watch、Stream publish、Action invoke与Blob lookup仍以capability false明确缺失。
 
 ## 对 Host 项目对象的映射
 
@@ -85,7 +88,7 @@ tuple。应用不应看到 socket、PeerId、catalog wire、driver path 或 K230
 | control object | Host desired State；有副作用且需要结果时才使用 Action，不创建通用 RPC |
 | sensor/telemetry queue | Stream；producer/epoch/sequence/source time 不可省略 |
 | peripheral resource mirror | 由 Edge catalog、capability 与 actual 驱动；Host 可以缓存镜像但不是第二 truth |
-| logical layer / presentation batch | Host SDK 的 Composition plan producer；当前scene lab映射`PresentationPlan` State与Mesh Blob，MediaStream仍后置 |
+| logical layer / presentation batch | Host SDK 的 Composition plan producer；scene lab映射`PresentationPlan` State与Mesh Blob，Profile v3 facade另投影两路external media read；physical present仍后置 |
 | presentation receipt | Edge-owned `PresentationStatus`；Link ACK 不能冒充 prepared/active/presented |
 | reset epoch | 分别映射 peer/Session、endpoint incarnation、production/stream/plan generation；不得合并 |
 
@@ -102,11 +105,12 @@ truncation、reserved/length、stale Session/catalog/epoch 与 failure vectors�
 | Runtime | [Runtime 产品契约](runtime.md)与[Runtime Core v0](runtime-core-v0.md)：strict `MRT0` v2/v3 |
 | 首个 Profile | [Wi-Fi telemetry v0](../profiles/wifi-telemetry-v0/README.md) |
 | direct-IP 实装 | [Direct-IP Wi-Fi Runtime v0](wifi-runtime-direct-ip-v0.md) |
-| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob、R2a portable 3/9/920 builder/fair scheduler、R2b0真实AF_INET loopback happy path、R2b1 same-Session lifecycle、R2b2 atomic catalog replacement、R2b3 explicit same-process RST/new-Session recovery、R2b4 max-Blob/resource-boundary与R2b5 adversarial TCP evidence；没有Host editor、target interoperability、自动resume或fresh Edge evidence |
+| Composition | [Composition 契约](composition.md)；[scene lab](../profiles/composition-scene-lab-v0/README.md) 已提供 C0--C2、R1 exact Blob、R2a portable scheduler、R2b0--R2b5 loopback lifecycle/failure evidence，Profile v3另有local Host editor与一次受控target combined evidence；没有physical presentation、自动resume、通用fresh Edge或长期target evidence |
 
 当前 Runtime source v0 承载 Host-owned desired State、Edge-owned actual State、Edge-owned data
-Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Action、MediaStream、
-Edge→Host/并行/resumable Blob、typed dispatcher与稳定Host SDK/Virtual Edge尚未实现；R2a scheduler
+Stream，以及MRT0 v3的Host-owned `IMMUTABLE/Blob` Host→Edge carriage。Composition Profile v3
+已有固定HostApp backend的typed SDK/Virtual Edge facade及两路external MediaStream read；Action、
+通用typed dispatcher、Edge→Host/并行/resumable Blob与backend-independent Virtual Edge仍未实现；R2a scheduler
 是Composition Profile v2的独立Runtime--SDK对象，不是通用Host SDK。缺失能力必须明确`unsupported`，
 不能用私有消息旁路。
 
@@ -165,8 +169,10 @@ arena、source与output原字节零推进，排空后已排队frame各到达一�
 执行，不表示同时socket saturation或时延/性能界。Actions run `32324328746`四个job全部success。
 
 R2b0--R2b5结论严格为`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED / TRANSPORT_VERIFIED`
-（loopback same-Session lifecycle/catalog replacement及explicit same-process reconnect）。这不证明稳定SDK、
-自动resume、fresh Edge、SCAP 16-slot aggregate、未覆盖的fair-contention/negative matrix、长稳/性能、MediaStream、Composition
+（loopback same-Session lifecycle/catalog replacement及explicit same-process reconnect）。后续首个
+Composition Profile v3 `EdgeHandle`切片另以真实AF_INET HostApp/Edge fixture验证exact 6/18 discovery、
+typed Wi-Fi State/Stream、camera media borrow/release与terminal清理，但这仍不证明通用SDK backend、
+自动resume、fresh Edge、SCAP 16-slot aggregate、未覆盖的fair-contention/negative matrix、长稳/性能、通用或physical MediaStream、Composition
 target、discovery或安全transport。R1只证明portable Blob
 semantic/wire与Core publish bridge；R2a只证明portable/in-process scheduler与builder；R2b0--R2b5也不证明
 K230D或renderer/physical output。

@@ -63,6 +63,20 @@ Virtual Edge 不是透明远程内存：
 - simulator、in-process loopback、recorded replay 和 physical Edge 可以实现同一 facade，
   但各自证据范围不同。
 
+`EdgeHandle` 的公开生命周期绑定一段连续的 Session/catalog truth。Host integration 拥有
+连接、event loop、Runtime pump 和 backend replacement；应用只能读取 handle 的
+`online / resource-graph-live / terminal`、本地 continuity 与 capability/resource view，
+不能取得或驱动 fd、packet、Session、Runtime、catalog wire 或 platform handle。Session
+terminal、catalog discontinuity 或 backend replacement 会永久使旧 handle stale；新连接必须
+产生新 handle，旧 desired、delivery、actual、Stream cursor、Blob transfer 和 media borrow
+均不得复活。
+
+每个 application operation 都由当前 capability 显式声明。第一版 facade 可以不实现某种
+State watch、Stream publish、Action 或 Blob direction，但对应 capability 必须缺失，调用面不得
+保留静默成功的空操作。成功的本地 command receipt 只证明 SDK 已有界复制/排队；delivery
+accepted、Edge actual/effective、Stream sample、Blob publication/visibility 与 Composition
+activation仍是彼此独立的可观察阶段。
+
 ## 系统不变量
 
 - 每个同步事实只有一个 truth owner；replica 不与 owner 竞争写入。
@@ -149,8 +163,10 @@ catalog、bounded endpoint-incarnation history、Core State desired/actual exact
 Core Stream data route；source v0 / wire v2 的三套 Host test 支持
 `HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。所选 `wifi-telemetry-v0` slice 另有 K230D Linux
 probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 Profile/platform evidence，
-不是portable Runtime的通用能力。通用hotplug、Action/MediaStream、Edge→Host/并行/resumable Blob
-route、SDK/Virtual Edge、discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
+不是portable Runtime的通用能力。Composition Profile v3 已有首个 Host-facing `EdgeHandle` facade，
+把 accepted 6/18 graph、typed State/Stream/Blob/Composition 与 external media read 投影给应用；它
+仍是固定 HostApp backend 的 Host evidence。通用hotplug、Action、Edge→Host/并行/resumable Blob
+route、通用 Virtual Edge backend、discovery/reconnect与security adapter仍未完成。R2a另有Composition Profile v2
 专用的caller-owned fair scheduler；它是Runtime--SDK对象，不是Core/wire或通用产品QoS。
 `composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
 Blob carriage。Profile v1 保留 MRT0 v2，明确拒绝 Blob/IMMUTABLE route；Profile v2 显式选择

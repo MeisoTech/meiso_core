@@ -76,6 +76,32 @@ API 不承诺 transport 数量。backend 看到一个 transport-independent Sess
 Profile/adapter 自己选择 transport arrangement。本规范不定义 Host switching、跨 Session
 authority handoff 或 topology migration，也不对这些能力作支持或兼容承诺。
 
+### Composition Profile v3 首个 `EdgeHandle` 切片
+
+当前可执行需求是本地编辑器和 Host 应用在不接触 debug/transport 对象的前提下使用
+Composition Profile v3。首个公开 facade 因此只选择该 Profile 已经实装的操作，不建设通用
+backend plugin 或任意 schema dispatcher：
+
+- application header 只暴露 opaque `EdgeHandle`、Session/freshness snapshot、accepted catalog 的
+  endpoint/resource value view、typed desired command、typed actual/Stream/Composition snapshot、
+  mesh put 与 external-media latest/release；
+- Host integration 以独立 adapter 把一个 live Composition HostApp 投影为 handle，并继续独占
+  socket、readiness、pump、media connection 与 backend lifetime；
+- 当前 capability 包含 State read/submit、Stream read、Host→Edge Blob put、Composition 与
+  external-media read；State watch、Stream publish、Action invoke、Blob lookup 均明确 absent；
+- handle 在 handshake/catalog 阶段不发布 resource graph；Profile v3 READY 后才一次性发布 exact
+  6 endpoint/18 resource view。terminal/catalog discontinuity 清除 live view，旧 handle 永久失效；
+- command receipt、desired delivery、Actual observed/applied、inline sample、Core Blob result、Scene
+  visibility、render result 与 media frame 分字段表达，任何前一阶段都不冒充后一阶段。
+
+该切片的 conformance vector 必须使用真实 `AF_INET` HostApp/Edge fixture，并同时证明：pre-READY
+本地排队不制造在线 resource；READY 后 exact discovery 与 typed Wi-Fi State/Stream 闭环；未支持
+operation 的 capability 为 false；media borrow 只能以 facade key exact release；control terminal
+后 snapshot 不再暴露旧 capability/data，所有 mutation fail closed。另有一个 application-only
+translation unit 只 include public SDK/Profile header，保证业务代码无法依赖 fd、Session/Runtime
+pump 或 devtools type。该 evidence 是 Host facade/loopback evidence，不证明 physical Edge、自动
+reconnect、Action、任意 Profile 或跨 backend ABI。
+
 ## 一个 Edge、多个本地 runtime
 
 一个 Edge implementation 可以横跨多个 core、OS 或进程。对外 Core 管理公开

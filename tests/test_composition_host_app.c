@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "composition_host_app.h"
+#include "composition_virtual_edge_application.h"
+#include "composition_virtual_edge_host.h"
 #include "scene_store.h"
 
 #include <arpa/inet.h>
@@ -56,6 +58,22 @@
             goto label;                                                        \
         }                                                                      \
     } while (0)
+
+static bool buffer_is_byte(const void *buffer, size_t size, uint8_t value)
+{
+    const uint8_t *bytes = (const uint8_t *)buffer;
+    size_t i;
+
+    if (buffer == NULL) {
+        return false;
+    }
+    for (i = 0U; i < size; ++i) {
+        if (bytes[i] != value) {
+            return false;
+        }
+    }
+    return true;
+}
 
 enum {
     ROUTE_WIFI_DESIRED = 0,
@@ -476,6 +494,59 @@ static bool initialize_fixture(HostAppFixture *fixture, uint64_t nonce_salt)
 fail:
     destroy_fixture(fixture);
     return false;
+}
+
+static MeisoCompositionVirtualEdgeHostConfig virtual_edge_config(
+    HostAppFixture *fixture,
+    uint64_t continuity_serial
+)
+{
+    MeisoCompositionVirtualEdgeHostConfig config;
+
+    memset(&config, 0, sizeof(config));
+    config.host_app = fixture->app;
+    config.host_app_arena = fixture->app_arena;
+    config.host_app_arena_size = fixture->app_bytes;
+    config.catalog_generation = fixture->app_config.catalog_generation;
+    config.catalog = fixture->app_config.catalog;
+    config.continuity_serial = continuity_serial;
+    return config;
+}
+
+static bool initialize_virtual_edge(
+    HostAppFixture *fixture,
+    uint64_t continuity_serial,
+    void **out_arena,
+    MeisoEdgeHandle **out_handle
+)
+{
+    MeisoCompositionVirtualEdgeHostConfig config;
+    const size_t required =
+        meiso_composition_virtual_edge_host_memory_required();
+    void *arena;
+
+    CHECK(fixture != NULL && out_arena != NULL && out_handle != NULL &&
+          required != 0U);
+    *out_arena = NULL;
+    *out_handle = NULL;
+    arena = calloc(1U, required);
+    if (arena == NULL) {
+        return false;
+    }
+    if (((uintptr_t)arena %
+         meiso_composition_virtual_edge_host_alignment_required()) != 0U) {
+        free(arena);
+        return false;
+    }
+    config = virtual_edge_config(fixture, continuity_serial);
+    if (meiso_composition_virtual_edge_host_init(
+            arena, required, &config, out_handle
+        ) != MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_OK) {
+        free(arena);
+        return false;
+    }
+    *out_arena = arena;
+    return true;
 }
 
 static bool content_id_equal(MeisoContentId lhs, MeisoContentId rhs)
@@ -2629,7 +2700,9 @@ cleanup:
 
 static bool drive_camera_frame(
     HostAppFixture *fixture,
-    EdgeMediaFixture *media
+    EdgeMediaFixture *media,
+    MeisoEdgeHandle *edge_handle,
+    uint64_t continuity_serial
 )
 {
     const size_t payload_size = 320U * 240U * 3U / 2U;
@@ -2691,25 +2764,12 @@ static bool drive_camera_frame(
                        fixture->app, &snapshot
                    ), cleanup);
         if (snapshot.media[1].latest_present) {
-            MeisoCompositionMediaLatestView latest;
             CHECK_GOTO(snapshot.media[1].latest_frame_sequence == 1U &&
                        snapshot.media[1].latest_access_unit_bytes ==
                            payload_size &&
-                       meiso_composition_host_app_media_latest(
-                           fixture->app,
-                           MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,
-                           &latest
-                       ) == MEISO_COMPOSITION_HOST_APP_OK &&
-                       latest.unit.access_unit.size == payload_size &&
-                       latest.unit.applied_scene_state_version == 0U &&
-                       latest.unit.active_plan_generation == 0U &&
-                       latest.unit.world_generation == 0U &&
-                       memcmp(
-                           latest.unit.access_unit.data, payload, payload_size
-                       ) == 0 &&
-                       meiso_composition_host_app_media_release(
-                           fixture->app, &latest.ref
-                       ) == MEISO_COMPOSITION_HOST_APP_OK,
+                       meiso_test_virtual_edge_camera_frame(
+                           edge_handle, continuity_serial, payload, payload_size
+                       ),
                        cleanup);
             ok = true;
             break;
@@ -2795,6 +2855,10 @@ static bool test_camera_and_both_media_masks(void)
         HostAppFixture fixture;
         EdgeMediaFixture media;
         MeisoCompositionHostAppSnapshot snapshot;
+        MeisoEdgeHandle *edge_handle = NULL;
+        void *edge_handle_arena = NULL;
+        const uint64_t continuity_serial =
+            UINT64_C(9100) + (uint64_t)case_index;
         uint64_t command_id = 1U;
         bool fixture_initialized = false;
         bool media_initialized = false;
@@ -2807,6 +2871,10 @@ static bool test_camera_and_both_media_masks(void)
             &fixture, UINT64_C(0x5000) + (uint64_t)case_index
         ));
         fixture_initialized = true;
+        CHECK_GOTO(initialize_virtual_edge(
+                       &fixture, continuity_serial, &edge_handle_arena,
+                       &edge_handle
+                   ), case_cleanup);
         CHECK_GOTO(drive_control_ready(&fixture), case_cleanup);
         if ((mask & MEISO_COMPOSITION_HOST_APP_MEDIA_RENDER) != 0U) {
             CHECK_GOTO(queue_media_desired(
@@ -2865,7 +2933,9 @@ static bool test_camera_and_both_media_masks(void)
                        ((mask &
                          MEISO_COMPOSITION_HOST_APP_MEDIA_CAMERA) != 0U) &&
                    (mask != MEISO_COMPOSITION_HOST_APP_MEDIA_CAMERA ||
-                    drive_camera_frame(&fixture, &media)) &&
+                    drive_camera_frame(
+                        &fixture, &media, edge_handle, continuity_serial
+                    )) &&
                    meiso_composition_host_app_unbind_media_fd(
                        fixture.app, 0
                    ) == MEISO_COMPOSITION_HOST_APP_OK,
@@ -2876,6 +2946,7 @@ case_cleanup:
         if (media_initialized) {
             destroy_edge_media(&media);
         }
+        free(edge_handle_arena);
         if (fixture_initialized) {
             destroy_fixture(&fixture);
         }
@@ -3882,6 +3953,210 @@ cleanup:
     return ok;
 }
 
+static bool test_virtual_edge_init_atomic(void)
+{
+    HostAppFixture fixture;
+    MeisoCompositionVirtualEdgeHostConfig config;
+    MeisoCompositionVirtualEdgeHostConfig invalid_config;
+    const size_t required =
+        meiso_composition_virtual_edge_host_memory_required();
+    const size_t alignment =
+        meiso_composition_virtual_edge_host_alignment_required();
+    uint8_t *storage = NULL;
+    uint8_t *before = NULL;
+    uint8_t *host_before = NULL;
+    MeisoEdgeHandle *out_handle;
+    bool ok = false;
+
+    CHECK(initialize_fixture(&fixture, UINT64_C(0x0700)));
+    storage = malloc(required + alignment);
+    before = malloc(required);
+    host_before = malloc(fixture.app_bytes);
+    CHECK_GOTO(required != 0U && alignment > 1U && storage != NULL &&
+                   before != NULL && host_before != NULL &&
+                   ((uintptr_t)storage % alignment) == 0U,
+               cleanup);
+    config = virtual_edge_config(&fixture, UINT64_C(8999));
+    out_handle = (MeisoEdgeHandle *)fixture.app;
+    memset(storage, 0xa5, required + alignment);
+    memcpy(before, storage, required);
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   storage, required - 1U, &config, &out_handle
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_ARENA_TOO_SMALL &&
+                   out_handle == (MeisoEdgeHandle *)fixture.app &&
+                   memcmp(storage, before, required) == 0,
+               cleanup);
+    invalid_config = config;
+    invalid_config.catalog.wifi_incarnation = 0U;
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   storage, required, &invalid_config, &out_handle
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_INVALID_CONFIG &&
+                   out_handle == (MeisoEdgeHandle *)fixture.app &&
+                   memcmp(storage, before, required) == 0,
+               cleanup);
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   storage + 1U, required, &config, &out_handle
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_MISALIGNED_ARENA &&
+                   out_handle == (MeisoEdgeHandle *)fixture.app &&
+                   memcmp(storage, before, required) == 0,
+               cleanup);
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   storage, required, &config,
+                   (MeisoEdgeHandle **)storage
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_INVALID_ARGUMENT &&
+                   memcmp(storage, before, required) == 0,
+               cleanup);
+    memcpy(host_before, fixture.app_arena, fixture.app_bytes);
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   fixture.app_arena, required, &config, &out_handle
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_INVALID_ARGUMENT &&
+                   out_handle == (MeisoEdgeHandle *)fixture.app &&
+                   memcmp(
+                       fixture.app_arena, host_before, fixture.app_bytes
+                   ) == 0,
+               cleanup);
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   storage, required + alignment, &config, &out_handle
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_OK &&
+                   out_handle == (MeisoEdgeHandle *)storage &&
+                   buffer_is_byte(
+                       storage + required, alignment, UINT8_C(0xa5)
+                   ),
+               cleanup);
+    CHECK_GOTO(meiso_composition_host_app_abort(
+                   fixture.app,
+                   MEISO_COMPOSITION_HOST_APP_TERMINAL_LOCAL_ABORT, 0
+               ) == MEISO_COMPOSITION_HOST_APP_OK,
+               cleanup);
+    memset(storage, 0xa5, required + alignment);
+    memcpy(before, storage, required);
+    memcpy(host_before, fixture.app_arena, fixture.app_bytes);
+    out_handle = (MeisoEdgeHandle *)fixture.app;
+    CHECK_GOTO(meiso_composition_virtual_edge_host_init(
+                   storage, required + alignment, &config, &out_handle
+               ) == MEISO_COMPOSITION_VIRTUAL_EDGE_HOST_INIT_BACKEND_TERMINAL &&
+                   out_handle == (MeisoEdgeHandle *)fixture.app &&
+                   memcmp(storage, before, required) == 0 &&
+                   buffer_is_byte(
+                       storage + required, alignment, UINT8_C(0xa5)
+                   ) &&
+                   memcmp(
+                       fixture.app_arena, host_before, fixture.app_bytes
+                   ) == 0,
+               cleanup);
+    ok = true;
+
+cleanup:
+    free(host_before);
+    free(before);
+    free(storage);
+    destroy_fixture(&fixture);
+    return ok;
+}
+
+static bool test_virtual_edge_facade(void)
+{
+    const MeisoOwnerScope edge_owner = {MEISO_OWNER_ROLE_EDGE, 41U};
+    HostAppFixture fixture;
+    MeisoEdgeHandle *edge_handle = NULL;
+    void *handle_arena = NULL;
+    uint8_t *handle_before = NULL;
+    MeisoEdgeCommandReceipt receipt;
+    MeisoEdgeCommandReceipt receipt_before;
+    MeisoStatePublisher *publisher = NULL;
+    void *publisher_arena = NULL;
+    uint8_t sample_wire[MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE];
+    MeisoWifiTelemetrySample sample;
+    MeisoRuntimeSchedulerWork work;
+    MeisoRuntimeRouteKey route;
+    MeisoCompositionHostAppPumpResult inline_result;
+    size_t sample_size = 0U;
+    bool ok = false;
+
+    CHECK(initialize_fixture(&fixture, UINT64_C(0x0800)));
+    CHECK_GOTO(initialize_virtual_edge(
+                   &fixture, UINT64_C(9001), &handle_arena, &edge_handle
+               ) && edge_handle != NULL,
+               cleanup);
+    handle_before = malloc(
+        meiso_composition_virtual_edge_host_memory_required()
+    );
+    CHECK_GOTO(handle_before != NULL, cleanup);
+    memcpy(handle_before, handle_arena,
+           meiso_composition_virtual_edge_host_memory_required());
+    memset(&receipt, 0xa5, sizeof(receipt));
+    memcpy(&receipt_before, &receipt, sizeof(receipt));
+    CHECK_GOTO(meiso_edge_snapshot(
+                   edge_handle, (MeisoEdgeSnapshot *)edge_handle
+               ) == MEISO_EDGE_INVALID_ARGUMENT &&
+                   meiso_composition_edge_set_wifi(
+                       edge_handle, true,
+                       (const MeisoWifiTelemetryDesiredParameters *)edge_handle,
+                       &receipt
+                   ) == MEISO_EDGE_INVALID_ARGUMENT &&
+                   memcmp(&receipt, &receipt_before, sizeof(receipt)) == 0 &&
+                   memcmp(
+                       handle_before, handle_arena,
+                       meiso_composition_virtual_edge_host_memory_required()
+                   ) == 0 &&
+                   meiso_test_virtual_edge_bootstrap(edge_handle) &&
+                   meiso_test_virtual_edge_submit_wifi(edge_handle, &receipt) &&
+                   drive_control_ready(&fixture) &&
+                   drive_single_wifi_desired(&fixture) &&
+                   queue_wifi_actual(
+                       &fixture, &publisher, &publisher_arena
+                   ) &&
+                   drive_wifi_actual(&fixture, publisher) &&
+                   meiso_test_virtual_edge_ready(
+                       edge_handle, UINT64_C(9001), false
+                   ),
+               cleanup);
+
+    memset(&sample, 0, sizeof(sample));
+    sample.selected_fields = MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE |
+        MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM;
+    sample.present_fields = sample.selected_fields;
+    sample.link_state = true;
+    sample.signal_mbm = -5100;
+    CHECK_GOTO(meiso_wifi_telemetry_sample_encode(
+                   &sample,
+                   (MeisoMutableBuffer){sample_wire, sizeof(sample_wire)},
+                   &sample_size
+               ) == MEISO_WIFI_TELEMETRY_CODEC_OK &&
+                   meiso_composition_debug_peer_route_key(
+                       fixture.edge, ROUTE_WIFI_DATA, &route
+                   ),
+               cleanup);
+    memset(&work, 0, sizeof(work));
+    work.kind = MEISO_RUNTIME_SCHEDULER_WORK_STREAM_SAMPLE;
+    work.value.stream_sample.route = route;
+    work.value.stream_sample.production_epoch = 77U;
+    work.value.stream_sample.sample.key =
+        (MeisoStreamKey){edge_owner, 77U, 1U};
+    work.value.stream_sample.sample.source_time =
+        (MeisoTimePoint){77U, 1000U};
+    work.value.stream_sample.sample.payload =
+        (MeisoByteView){sample_wire, sample_size};
+    CHECK_GOTO(drive_inline_sample_once(
+                   &fixture, &work, &inline_result
+               ) && meiso_test_virtual_edge_ready(
+                   edge_handle, UINT64_C(9001), true
+               ) && meiso_composition_host_app_abort(
+                   fixture.app, MEISO_COMPOSITION_HOST_APP_TERMINAL_LOCAL_ABORT,
+                   0
+               ) == MEISO_COMPOSITION_HOST_APP_OK &&
+                   meiso_test_virtual_edge_terminal(edge_handle),
+               cleanup);
+    ok = true;
+
+cleanup:
+    free(publisher_arena);
+    free(handle_before);
+    free(handle_arena);
+    destroy_fixture(&fixture);
+    return ok;
+}
+
 static bool test_fixture_checkpoint(void)
 {
     HostAppFixture fixture;
@@ -3950,7 +4225,8 @@ cleanup:
 
 int main(void)
 {
-    if (!test_fixture_checkpoint() ||
+    if (!test_virtual_edge_init_atomic() || !test_virtual_edge_facade() ||
+        !test_fixture_checkpoint() ||
         !test_wifi_inflight_barrier_and_coalesce() ||
         !test_presentation_echo_inflight_barrier() ||
         !test_blob_full_interleave() ||

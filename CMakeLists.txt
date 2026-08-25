@@ -243,6 +243,22 @@ if(UNIX)
     )
     meiso_enable_warnings(meiso_composition_host_app)
 
+    add_library(
+        meiso_composition_virtual_edge
+        devtools/composition_virtual_edge_host.c
+    )
+    target_include_directories(
+        meiso_composition_virtual_edge
+        PUBLIC include
+        PRIVATE devtools
+    )
+    target_link_libraries(
+        meiso_composition_virtual_edge
+        PUBLIC meiso_composition_session_v3_profile
+        PRIVATE meiso_composition_host_app
+    )
+    meiso_enable_warnings(meiso_composition_virtual_edge)
+
     add_executable(
         meiso_composition_debug_host
         devtools/macos/composition_debug_host.c
@@ -576,14 +592,35 @@ if(TARGET meiso_composition_debug_peer)
     meiso_enable_warnings(meiso_composition_debug_peer_test)
 endif()
 
-if(TARGET meiso_composition_host_app)
+if(TARGET meiso_composition_virtual_edge)
+    add_library(
+        meiso_composition_virtual_edge_application_test_object OBJECT
+        tests/composition_virtual_edge_application.c
+    )
+    target_include_directories(
+        meiso_composition_virtual_edge_application_test_object
+        PRIVATE tests
+    )
+    target_link_libraries(
+        meiso_composition_virtual_edge_application_test_object
+        PRIVATE meiso_composition_virtual_edge
+    )
+    meiso_enable_warnings(
+        meiso_composition_virtual_edge_application_test_object
+    )
+
     add_executable(
         meiso_composition_host_app_test
         tests/test_composition_host_app.c
+        $<TARGET_OBJECTS:meiso_composition_virtual_edge_application_test_object>
+    )
+    target_include_directories(
+        meiso_composition_host_app_test
+        PRIVATE adapters/posix devtools tests
     )
     target_link_libraries(
         meiso_composition_host_app_test
-        PRIVATE meiso_composition_host_app
+        PRIVATE meiso_composition_virtual_edge
     )
     meiso_enable_warnings(meiso_composition_host_app_test)
 

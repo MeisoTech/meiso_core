@@ -18,6 +18,10 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 ## 实现与证据
 
 - [SDK 设计与开发指南](sdk-guide.md)：实现边界、adapter pattern、conformance 与工作单元；
+- Composition Profile v3 Host facade：公开 `include/meiso_virtual_edge.h` 与
+  `include/meiso_composition_edge.h` 只给应用 opaque handle、typed command/snapshot 和
+  media borrow；`devtools/composition_virtual_edge_host.*` 是当前 HostApp integration，仍由
+  integration 独占 socket/event loop；
 - [Resource semantic core v0](resource-core-v0.md)：当前 portable primitives、内存模型与
   conformance 矩阵；这是实现基线，不是产品规范；
 - [Session Core v0](session-core-v0.md)：当前 portable handshake、wire、limits、lifecycle

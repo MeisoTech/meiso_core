@@ -549,6 +549,18 @@ single-adapter receipt扩大成通用camera能力，也不证明physical display
 建立 Core 特例。CanMV、native runtime、SDK sample 或其他镜像都可以用于后续实验；结果
 必须按具体版本和条件记录。
 
+2026-08-26又完成首个application-facing Composition Profile v3 Virtual Edge切片。公开
+`MeisoEdgeHandle`不暴露fd、Session/Runtime pump、route key、nonce或platform handle；READY前只允许
+bounded本地command queue，accepted catalog后发布exact 6 endpoint/18 resource discovery，并把六路
+desired、六路actual、三路inline Stream、mesh/Core publication、Scene/Render truth及两路external
+media latest/release分层投影。当前capability明确支持State read/submit、Stream read、Blob put、
+Composition与media read，State watch、Stream publish、Action和Blob lookup保持unsupported。
+独立application translation unit只使用公开SDK/Profile include；真实`127.0.0.1` HostApp/Edge fixture
+锁定Wi-Fi State/Stream、camera 115200B NV12 exact borrow/release及terminal清理。fresh Debug、Release与
+ASan+UBSan全仓CTest均48/48，公开C/C++ header strict，相关product/application/test analyzer为0。
+这些只构成固定HostApp backend的`HOST_SEMANTIC_VERIFIED / TRANSPORT_VERIFIED` facade evidence；不
+证明通用backend ABI、simulator/replay、watch/Action、自动reconnect、physical Edge或新target结果。
+
 ## 已验证的负面结论
 
 - 把每帧 raw camera 当成可靠完整 transfer 会造成高带宽与旧数据阻塞，不适合连续 Stream；
@@ -563,14 +575,15 @@ single-adapter receipt扩大成通用camera能力，也不证明physical display
 
 ## 未实现与未知
 
-- 稳定的 Host-facing `EdgeHandle`/Virtual Edge API；
+- 超出首个Composition Profile v3固定HostApp切片的通用`EdgeHandle` backend ABI、simulator/replay、
+  State watch、Stream publish、Action、Blob lookup与自动reconnect；
 - product Runtime 的 endpoint facet/direction/QoS/permission schema、通用 hotplug、Host
   orchestration 与 typed dispatcher；
 - discovery、安全 transport、time estimator 与 reconnect/resume 参数；
 - Wi-Fi slice 的 network-loss、source-continuity-loss、reconnect、catalog update 与长期板端 evidence；
-- MediaStream 与 Resource lifecycle/telemetry 的公共集成；
+- 超出Profile v3 render/camera两路read的通用MediaStream与Resource lifecycle/telemetry集成；
 - Composition的自动resume、fresh Edge、SCAP 16-slot aggregate与未覆盖的wrong-Profile/backpressure/
-  fair-contention fault/recovery，Host editor、target renderer/present backend与真实presentation endpoint；R2b0已有loopback
+  fair-contention fault/recovery，product-grade Host editor、target present backend与真实presentation endpoint；R2b0已有loopback
   happy-path semantic/wire/transport evidence，R2b1已有same-Session lifecycle evidence，R2b2已有
   same-Session catalog replacement evidence，R2b3已有explicit same-process RST/new-Session evidence，R2b4已有
   max-single-Blob/resource-boundary evidence，R2b5已有真实TCP wrong-Profile fail-closed、双向分段
