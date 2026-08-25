@@ -17,6 +17,7 @@
 #define SIMULATOR_SUPPORTED_OPERATIONS                                        \
     (MEISO_EDGE_OPERATION_STATE_READ | MEISO_EDGE_OPERATION_STATE_SUBMIT |   \
      MEISO_EDGE_OPERATION_STREAM_READ | MEISO_EDGE_OPERATION_MEDIA_READ)
+#define ENUM_VALUE(value) ((uint32_t)(value))
 
 enum {
     EDGE_BACKEND_HOST = 1,
@@ -35,58 +36,80 @@ _Static_assert(MEISO_COMPOSITION_EDGE_INLINE_STREAM_COUNT ==
 _Static_assert(MEISO_COMPOSITION_EDGE_MEDIA_ROUTE_COUNT ==
                    MEISO_COMPOSITION_HOST_APP_MEDIA_ROUTE_COUNT,
                "media route count drift");
-_Static_assert(MEISO_EDGE_COMMAND_PUT_MESH ==
-                   MEISO_COMPOSITION_HOST_APP_COMMAND_PUT_MESH &&
-                   MEISO_EDGE_COMMAND_SET_SCENE ==
-                       MEISO_COMPOSITION_HOST_APP_COMMAND_SET_SCENE &&
-                   MEISO_EDGE_COMMAND_SET_PRESENTATION ==
-                       MEISO_COMPOSITION_HOST_APP_COMMAND_SET_PRESENTATION &&
-                   MEISO_EDGE_COMMAND_SET_WIFI ==
-                       MEISO_COMPOSITION_HOST_APP_COMMAND_SET_WIFI &&
-                   MEISO_EDGE_COMMAND_SET_DEVICE ==
-                       MEISO_COMPOSITION_HOST_APP_COMMAND_SET_DEVICE &&
-                   MEISO_EDGE_COMMAND_SET_RENDER_MEDIA ==
-                       MEISO_COMPOSITION_HOST_APP_COMMAND_SET_RENDER_MEDIA &&
-                   MEISO_EDGE_COMMAND_SET_CAMERA_MEDIA ==
-                       MEISO_COMPOSITION_HOST_APP_COMMAND_SET_CAMERA_MEDIA,
+_Static_assert(ENUM_VALUE(MEISO_EDGE_COMMAND_PUT_MESH) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_COMMAND_PUT_MESH) &&
+                   ENUM_VALUE(MEISO_EDGE_COMMAND_SET_SCENE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_COMMAND_SET_SCENE) &&
+                   ENUM_VALUE(MEISO_EDGE_COMMAND_SET_PRESENTATION) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_COMMAND_SET_PRESENTATION
+                       ) &&
+                   ENUM_VALUE(MEISO_EDGE_COMMAND_SET_WIFI) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_COMMAND_SET_WIFI) &&
+                   ENUM_VALUE(MEISO_EDGE_COMMAND_SET_DEVICE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_COMMAND_SET_DEVICE) &&
+                   ENUM_VALUE(MEISO_EDGE_COMMAND_SET_RENDER_MEDIA) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_COMMAND_SET_RENDER_MEDIA
+                       ) &&
+                   ENUM_VALUE(MEISO_EDGE_COMMAND_SET_CAMERA_MEDIA) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_COMMAND_SET_CAMERA_MEDIA
+                       ),
                "command mapping drift");
-_Static_assert(MEISO_EDGE_LOCAL_QUEUED ==
-                   MEISO_COMPOSITION_HOST_APP_LOCAL_QUEUED &&
-                   MEISO_EDGE_LOCAL_REPLACED_PENDING ==
-                       MEISO_COMPOSITION_HOST_APP_LOCAL_REPLACED_PENDING,
+_Static_assert(ENUM_VALUE(MEISO_EDGE_LOCAL_QUEUED) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_LOCAL_QUEUED) &&
+                   ENUM_VALUE(MEISO_EDGE_LOCAL_REPLACED_PENDING) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_LOCAL_REPLACED_PENDING
+                       ),
                "local receipt mapping drift");
-_Static_assert(MEISO_COMPOSITION_EDGE_DESIRED_WIFI ==
-                   MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI &&
-                   MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION ==
-                       MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION &&
-                   MEISO_COMPOSITION_EDGE_DESIRED_SCENE ==
-                       MEISO_COMPOSITION_HOST_APP_DESIRED_SCENE &&
-                   MEISO_COMPOSITION_EDGE_DESIRED_DEVICE ==
-                       MEISO_COMPOSITION_HOST_APP_DESIRED_DEVICE &&
-                   MEISO_COMPOSITION_EDGE_DESIRED_RENDER_MEDIA ==
-                       MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA &&
-                   MEISO_COMPOSITION_EDGE_DESIRED_CAMERA_MEDIA ==
-                       MEISO_COMPOSITION_HOST_APP_DESIRED_CAMERA_MEDIA,
+_Static_assert(ENUM_VALUE(MEISO_COMPOSITION_EDGE_DESIRED_WIFI) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_DESIRED_WIFI) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_DESIRED_PRESENTATION) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_PRESENTATION
+                       ) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_DESIRED_SCENE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_DESIRED_SCENE) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_DESIRED_DEVICE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_DESIRED_DEVICE) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_DESIRED_RENDER_MEDIA) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_RENDER_MEDIA
+                       ) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_DESIRED_CAMERA_MEDIA) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_DESIRED_CAMERA_MEDIA
+                       ),
                "desired channel mapping drift");
-_Static_assert(MEISO_COMPOSITION_EDGE_ACTUAL_WIFI ==
-                   MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI &&
-                   MEISO_COMPOSITION_EDGE_ACTUAL_PRESENTATION ==
-                       MEISO_COMPOSITION_HOST_APP_ACTUAL_PRESENTATION &&
-                   MEISO_COMPOSITION_EDGE_ACTUAL_SCENE ==
-                       MEISO_COMPOSITION_HOST_APP_ACTUAL_SCENE &&
-                   MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE ==
-                       MEISO_COMPOSITION_HOST_APP_ACTUAL_DEVICE &&
-                   MEISO_COMPOSITION_EDGE_ACTUAL_RENDER_MEDIA ==
-                       MEISO_COMPOSITION_HOST_APP_ACTUAL_RENDER_MEDIA &&
-                   MEISO_COMPOSITION_EDGE_ACTUAL_CAMERA_MEDIA ==
-                       MEISO_COMPOSITION_HOST_APP_ACTUAL_CAMERA_MEDIA,
+_Static_assert(ENUM_VALUE(MEISO_COMPOSITION_EDGE_ACTUAL_WIFI) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_ACTUAL_WIFI) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_ACTUAL_PRESENTATION) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_ACTUAL_PRESENTATION
+                       ) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_ACTUAL_SCENE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_ACTUAL_SCENE) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_ACTUAL_DEVICE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_ACTUAL_DEVICE) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_ACTUAL_RENDER_MEDIA) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_ACTUAL_RENDER_MEDIA
+                       ) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_ACTUAL_CAMERA_MEDIA) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_ACTUAL_CAMERA_MEDIA
+                       ),
                "actual channel mapping drift");
-_Static_assert(MEISO_COMPOSITION_EDGE_INLINE_WIFI ==
-                   MEISO_COMPOSITION_HOST_APP_INLINE_WIFI &&
-                   MEISO_COMPOSITION_EDGE_INLINE_RENDER_RESULT ==
-                       MEISO_COMPOSITION_HOST_APP_INLINE_RENDER_RESULT &&
-                   MEISO_COMPOSITION_EDGE_INLINE_DEVICE ==
-                       MEISO_COMPOSITION_HOST_APP_INLINE_DEVICE,
+_Static_assert(ENUM_VALUE(MEISO_COMPOSITION_EDGE_INLINE_WIFI) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_INLINE_WIFI) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_INLINE_RENDER_RESULT) ==
+                       ENUM_VALUE(
+                           MEISO_COMPOSITION_HOST_APP_INLINE_RENDER_RESULT
+                       ) &&
+                   ENUM_VALUE(MEISO_COMPOSITION_EDGE_INLINE_DEVICE) ==
+                       ENUM_VALUE(MEISO_COMPOSITION_HOST_APP_INLINE_DEVICE),
                "inline channel mapping drift");
 
 typedef struct {
