@@ -1,7 +1,8 @@
 # Composition scene lab v0
 
 > 状态：`C0 CODEC IMPLEMENTED / C1 RESOURCE SEMANTIC VERIFIED / C2 PORTABLE COORDINATOR SEMANTIC VERIFIED / R1 PORTABLE BLOB CARRIAGE VERIFIED / K1a HOST OFFSCREEN REFERENCE VERIFIED / TARGET BUILD VERIFIED / TARGET NOT RUN`。
-> Profile v3 camera source：`THREE_FRAME_CAPTURE_RECEIPT / BOARD_VERIFIED`；CameraMedia transport与E2E仍未验证。
+> Profile v3 camera source：`THREE_FRAME_CAPTURE_RECEIPT / BOARD_VERIFIED`；另有一次准确K230D上的
+> combined Render/CameraMedia与local Web bridge受限证据，但不证明physical presentation或产品E2E。
 > 本页固定首个 Edge-native scene 实验的 composite Profile、Resource Graph、字节布局、容量和验收；不重定义
 > [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)或
 > [Composition](../../docs/composition.md)语义，也不是产品 Profile。
@@ -752,6 +753,8 @@ cross ELF与receipt stdout SHA-256分别为
 `eda3eb1d8eeb94832e8867197a7c5e1a54241e29c0d87a6b1901723d8b90d4df`、
 `86de6baf0b2797713217113035e5bd28cc963504b38c8f17e4867cb0a18eef33`。
 
-该结果验证的是Profile v3所需camera source的单适配器物理采集前提，不是CameraMedia endpoint的
-desired/actual、external media binding、frame transport、Host display或combined E2E evidence；它也不
-改变K1a offscreen runner的`TARGET_NOT_RUN`。
+该结果验证的是Profile v3所需camera source的单适配器物理采集前提，不能单独证明CameraMedia
+endpoint。后续当前source的fresh复验与同一boot combined run已经另外覆盖CameraMedia desired/actual、
+external media binding、完整NV12 transport、Host local bridge与zero-ledger shutdown；两层证据不互相
+替代，见[K230D Composition debug 联调证据](../../docs/k230d-composition-debug-e2e-v0.md)。它们仍不
+改变历史K1a offline runner artifact的`TARGET_NOT_RUN`，也不证明Host display或physical presentation。

@@ -1,6 +1,10 @@
 export const clamp = (value, minimum, maximum) =>
   Math.min(maximum, Math.max(minimum, Number(value)));
 
+export function shouldSyncForms(current, next) {
+  return current === null || current.revision !== next.revision;
+}
+
 export function selectedObject(snapshot) {
   const selected = snapshot?.scene?.selected_draft_object;
   return snapshot?.scene?.objects?.find((item) => item.draft_object === selected) ?? null;

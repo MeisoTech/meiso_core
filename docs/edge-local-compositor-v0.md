@@ -511,9 +511,12 @@ K230D Linux V4L2 adapter已在准确板上产生`THREE_FRAME_CAPTURE_RECEIPT`：
 `eda3eb1d8eeb94832e8867197a7c5e1a54241e29c0d87a6b1901723d8b90d4df`与
 `86de6baf0b2797713217113035e5bd28cc963504b38c8f17e4867cb0a18eef33`。
 
-该slice只证明camera source的bounded physical capture，不经过MediaTransport、Runtime desired/actual、
-combined Session或Host UI；也不证明encoder、render media、吞吐、长稳或E2E。它不能提升上述K1a
-offscreen candidate的`TARGET_NOT_RUN`，也不是physical presentation evidence。
+该slice只证明camera source的bounded physical capture。后续独立combined run已经在当前source上
+覆盖MediaTransport、Runtime desired/actual、同一Session的render+camera、Host local Web bridge和
+zero-ledger shutdown，见
+[K230D Composition debug 联调证据](k230d-composition-debug-e2e-v0.md)。两层证据必须分别保留；
+combined run仍不证明encoder、吞吐、长稳或physical presentation，也不能提升上述历史K1a offline
+candidate artifact的`TARGET_NOT_RUN`。
 
 ### K2 — Physical present 与完整 media（后置）
 

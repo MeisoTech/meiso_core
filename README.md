@@ -26,6 +26,7 @@ portable C11 参考实现和可重复实验。
 | Composition scene lab | codec、SceneStore、coordinator、fair scheduler，以及真实 TCP lifecycle、explicit same-process reconnect、分方向 backpressure 与 max-Blob 实验 | Host/loopback semantic、wire 与 transport evidence |
 | K1a reference renderer | bounded 320×240 synthetic offscreen renderer 与 offline runner | `HOST_OFFSCREEN_REFERENCE_VERIFIED`、`TARGET_BUILD_VERIFIED`、`TARGET_NOT_RUN`；不证明几何正确、driver、scanout 或物理显示 |
 | K230D camera capture | bounded Linux V4L2 four-buffer NV12 adapter 与一次三帧 target receipt | `BOARD_VERIFIED` 仅指单适配器物理采集；不证明 CameraMedia transport、combined service、性能或 E2E |
+| K230D Composition debug chain | 同一Session内Blob、Scene/C2、CPU render、Render/Camera Media、Wi-Fi/DeviceTelemetry与local Web bridge | [一次受控四门实机证据](docs/k230d-composition-debug-e2e-v0.md)；不证明physical display、安全transport、自动恢复、性能或长稳 |
 
 逐版本提交、CI、资源账本和 target receipt 统一记录在
 [系统进展](docs/system-report.md)，不在首页重复维护。
@@ -71,10 +72,11 @@ ctest --preset windows-msvc-debug
 - [Composition scene lab](profiles/composition-scene-lab-v0/README.md) 与
   [Edge local compositor 方案](docs/edge-local-compositor-v0.md)
 - [K230D Linux Edge](targets/k230d-linux/README.md)
+- [K230D Composition debug 联调证据](docs/k230d-composition-debug-e2e-v0.md)
 
 ## 尚未完成
 
-当前仓库不是 application-facing 完整产品：Virtual Edge/SDK、通用 probe/hotplug、
-camera/render 的端到端 MediaStream data path、认证与安全 transport 尚未完成。Composition 的 K230D candidate
-只完成交叉构建；自动 reconnect/resume、fresh Edge、板端运行、真实 renderer backend、性能和
-physical presentation evidence 均未完成。
+当前仓库不是 application-facing 完整产品：Virtual Edge/SDK、通用 probe/hotplug、认证与安全
+transport尚未完成。Composition debug candidate已有一次准确K230D上的combined offscreen render/camera
+MediaStream与local Web bridge证据，但自动reconnect/resume、通用fresh Edge、性能、长稳和physical
+presentation evidence仍未完成。

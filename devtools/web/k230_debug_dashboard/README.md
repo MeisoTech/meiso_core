@@ -117,3 +117,12 @@ python3 -m py_compile \
 
 Recorded/local UI preview is not RenderResult evidence. Native CMFB caching and
 typed service projection do not make the browser a source of protocol truth.
+
+The bounded K230D run recorded in
+[`k230d-composition-debug-e2e-v0.md`](../../../docs/k230d-composition-debug-e2e-v0.md)
+used this fixed Web API and the sole native Host child to carry camera,
+telemetry and scene-transform intents. The page projection is deliberately
+refreshed from a deduplicated native snapshot after Actual/media transitions;
+native SSE updates do not overwrite an in-progress form unless the browser
+revision changed. That receipt is local bridge evidence, not a remote Web
+control plane or a claim that browser state is protocol truth.

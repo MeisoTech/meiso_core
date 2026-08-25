@@ -296,6 +296,66 @@ class NativeBridgeTests(unittest.TestCase):
         ))
         self.assertIsNone(state._native_bridge)
 
+    def test_native_truth_refresh_is_deduplicated_and_pump_is_not_projected(
+        self,
+    ) -> None:
+        class RecordingBridge:
+            def __init__(self):
+                self.calls: list[tuple[list[dict[str, object]], str, int]] = []
+
+            def submit_batch(self, commands, *, origin, revision):
+                self.calls.append((commands, origin, revision))
+                return [len(self.calls)]
+
+        state = DashboardState()
+        bridge = RecordingBridge()
+        state._native_bridge = bridge
+        state._snapshot["backend"].update({
+            "mode": "NATIVE_HOST", "native_host_bound": True,
+        })
+        before_events = state.event_count()
+        state._native_event({
+            "type": "pump.event", "event": "control_progress",
+            "command_id": 0, "desired_channel": "none",
+            "actual_channel": "none", "inline_channel": "none",
+            "media_source": "none",
+        })
+        self.assertEqual(state.event_count(), before_events)
+        actual = {
+            "type": "actual", "channel": "render_media",
+            "state_version": 1, "apply_result": "applied",
+            "availability": "present", "profile_decoded": True,
+            "enabled": True, "production_status": "running",
+            "reason": "none", "production_epoch": 1,
+        }
+        state._native_event(actual)
+        state._native_event({**actual, "channel": "camera_media"})
+        self.assertEqual(bridge.calls, [
+            ([{"command": "snapshot"}], "native.refresh", 0),
+        ])
+        state._native_event({
+            "type": "snapshot", "request_id": 1, "phase": "ready",
+            "terminal_reason": "none", "control_ready": True,
+            "catalog_generation": 1, "media_bound": True,
+            "media_mask": "both", "media_slots_consumed": 2,
+            "mesh_active": False, "mesh_next_offset": 304,
+            "wifi_actual": True, "presentation_actual": True,
+            "scene_actual": True, "device_actual": True,
+            "render_actual": True, "camera_actual": True,
+            "wifi_sample": True, "render_result": True,
+            "device_sample": True, "render_frame": True,
+            "camera_frame": True,
+        })
+        snapshot = state.snapshot()
+        self.assertTrue(snapshot["backend"]["device_connected"])
+        self.assertEqual(snapshot["backend"]["session_status"], "READY")
+        self.assertEqual(snapshot["bindings"]["render_result_stream"], "BOUND")
+        self.assertEqual(snapshot["bindings"]["camera_media_stream"], "BOUND")
+        state._native_event({"type": "media.connected", "transport": "tcp"})
+        self.assertEqual(bridge.calls[-1], (
+            [{"command": "snapshot"}], "native.refresh", 0,
+        ))
+
     def test_euler_complete_scene_and_intent_mapping(self) -> None:
         snapshot = _default_snapshot()
         snapshot["scene"]["objects"].append({

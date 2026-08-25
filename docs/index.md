@@ -35,7 +35,9 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
 - [Direct-IP MediaStream v0 实装规则书](media-stream-direct-ip-v0.md)：Composition scene Profile v3
   选定的DeviceTelemetry、RenderPreviewMedia、CameraMedia endpoint、独立numeric direct-IP media
   transport、Session-bound lifecycle与验收门；MRT0 v4与bounded MediaTransport已有portable实现，
-  K230D camera source另有单适配器三帧物理采集证据，但combined target与E2E仍未实现；
+  K230D camera source另有单适配器三帧物理采集证据；
+- [K230D Composition debug 联调证据 v0](k230d-composition-debug-e2e-v0.md)：准确source/板实例上的
+  fresh camera、combined render+camera、local Web bridge/editor与零资源债清理四个独立门；
 - [系统进展](system-report.md)：当前代码成熟度、已脱敏实验事实、K230D lab evidence 与
   未验证能力。
 - [Host/Edge 并行开发模型](development-model.md)：双方如何依据同一契约、simulator
@@ -75,7 +77,8 @@ Git 历史与上述规范冲突时，必须显式修正规范或把其降级为 
   `TARGET_BUILD_VERIFIED`，但ELF未执行，target runtime仍为`TARGET_NOT_RUN`。
   后续Profile v3已冻结DeviceTelemetry、RenderPreviewMedia、CameraMedia与direct-IP MediaStream
   contract，并已有codec、Runtime v4、bounded media transport及K230D camera source的三帧target
-  receipt；它仍没有Host editor、combined target或E2E evidence。自动resume、fresh Edge与
+  receipt；当前debug target又有一次Host editor/local bridge与combined render+camera board run。
+  该受限run不提升历史offline artifact的标签；自动resume、通用fresh Edge、physical presentation与
   SCAP 16-slot aggregate仍未验证；
 - [Four-kind lab v0](../profiles/four-kind-lab-v0/README.md)：固定的 State / Stream / Action /
   Blob 纵向 integration CI Profile；不是产品 Runtime/Profile；

@@ -180,6 +180,7 @@ class DashboardState:
         self._next_draft_object = 2
         self._snapshot = _default_snapshot()
         self._native_bridge: NativeBridge | None = None
+        self._native_refresh_pending = False
         with self._condition:
             self._append_event_locked("bootstrap", "READY")
 
@@ -410,6 +411,7 @@ class DashboardState:
             events_before = copy.deepcopy(list(self._events))
             next_event_before = self._next_event_id
             self._native_bridge = bridge
+            self._native_refresh_pending = False
             self._snapshot["backend"].update({
                 "mode": "NATIVE_HOST",
                 "native_host_bound": True,
@@ -430,6 +432,7 @@ class DashboardState:
             bridge.close()
             with self._condition:
                 self._native_bridge = None
+                self._native_refresh_pending = False
                 self._snapshot = snapshot_before
                 self._events.clear()
                 self._events.extend(events_before)
@@ -442,6 +445,7 @@ class DashboardState:
         with self._condition:
             bridge = self._native_bridge
             self._native_bridge = None
+            self._native_refresh_pending = False
         if bridge is not None:
             bridge.close()
 
@@ -454,6 +458,10 @@ class DashboardState:
 
     def _native_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
+        if event_type == "pump.event":
+            return
+        refresh_bridge: NativeBridge | None = None
+        refresh_revision = 0
         with self._condition:
             backend = self._snapshot["backend"]
             truth = self._snapshot["native_truth"]
@@ -462,6 +470,7 @@ class DashboardState:
                 backend["native_host_bound"] = True
                 backend["session_status"] = "CONNECTING"
             elif event_type == "snapshot":
+                self._native_refresh_pending = False
                 truth["control_snapshot"] = copy.deepcopy(event)
                 backend["device_connected"] = bool(event["control_ready"])
                 backend["session_status"] = (
@@ -510,6 +519,7 @@ class DashboardState:
             elif event_type in {
                 "terminal", "native.bridge_terminal", "native.process_error"
             }:
+                self._native_refresh_pending = False
                 backend["native_host_bound"] = False
                 backend["device_connected"] = False
                 backend["session_status"] = "FAILED"
@@ -518,10 +528,26 @@ class DashboardState:
                     "render": {"available": False},
                     "camera": {"available": False},
                 }
+            if (event_type in {"actual", "media.connected"} and
+                    not self._native_refresh_pending and
+                    self._native_bridge is not None):
+                self._native_refresh_pending = True
+                refresh_bridge = self._native_bridge
+                refresh_revision = self._snapshot["revision"]
             self._refresh_bindings_locked()
             self._append_event_locked(
                 f"native:{event_type}", "NATIVE_EVENT", event
             )
+        if refresh_bridge is not None:
+            try:
+                refresh_bridge.submit_batch(
+                    [{"command": "snapshot"}], origin="native.refresh",
+                    revision=refresh_revision,
+                )
+            except NativeBridgeError:
+                with self._condition:
+                    if self._native_bridge is refresh_bridge:
+                        self._native_refresh_pending = False
 
     def _refresh_bindings_locked(self) -> None:
         truth = self._snapshot["native_truth"]

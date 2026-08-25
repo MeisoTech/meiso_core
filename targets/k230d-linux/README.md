@@ -26,6 +26,26 @@ public commits `c301f73`与`1cdb584`分别完成native metadata/probe与portable
 Host/Edge service或浏览器，也不证明desired/actual闭环、encoder、性能、长稳、自动恢复或E2E；更不
 改变下节Composition offscreen candidate的`TARGET_NOT_RUN`。
 
+2026-08-25的fresh复验使用当前source probe（SHA-256
+`4248d76b6ac993b4f0aa271b89665a952b1a188763945ee0723807af0fbb5ee8`），新receipt SHA-256为
+`baba7181efd4df60f9e0fe09142b7609293259bc3b92865e951cae8e25ea78bb`。三帧仍为
+NV12 320x240/115200B、effective sequence 1/2/3、drop 0，退出ledger为0。该fresh camera门随后被
+一个独立combined run实际消费；完整证据与边界见
+[K230D Composition debug 联调证据](../../docs/k230d-composition-debug-e2e-v0.md)。历史receipt仍保留，
+不会被新run重写成同一个artifact。
+
+## Composition debug combined target（bounded board evidence）
+
+当前`CompositionDebugEdge`、`CompositionDebugHost`与loopback-only K230 debug Dashboard已经在准确
+K230D/GC2093实例上完成一次受控run：Blob 304B publish、Scene/C2 ACTIVE、CPU offscreen RenderResult、
+render-only到render+camera的fresh media slot切换、完整RGBA8888/NV12 CMFB、Wi-Fi/DeviceTelemetry、
+Web scene transform与clean shutdown。Edge cross ELF为254824 bytes，SHA-256
+`b991df0b74407211ede162bdfb9ee7255ce8308ce0478c9ee00792dd15eed82c`。
+
+该run结束时camera driver buffer/mmap/queue/borrow/stream账本全部为0，media unbound，唯一ISP进程
+保持存活。它不提升下面历史offline runner artifact的标签；两者是不同source graph和不同证据。
+combined run也不是physical presentation、codec、安全transport、reconnect、performance或soak证明。
+
 ## Composition offscreen candidate（TARGET_BUILD_VERIFIED / TARGET_NOT_RUN）
 
 public commit `c3b4770` 的portable synthetic reference renderer已在Host得到

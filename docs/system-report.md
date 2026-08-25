@@ -532,6 +532,19 @@ transport、codec/encoder、combined Host/Edge service、desired/actual控制闭
 clock quality、usable memory budget、持续温度或功耗。上面的Wi-Fi lab只证明一个固定plain-TCP数据
 路径，不证明产品network stack；firmware中包含driver/API也不等于相应物理endpoint已验证。
 
+2026-08-25又在fresh boot上用当前source复验同一GC2093 source，并在随后同一boot中完成一次
+Composition debug combined run。fresh probe的新三帧SHA-256为
+`3a20f25f033bc6f86d991076705c79f8f3d2ab1e3850f9a9edc5a2e45d62f500`、
+`137a2e38c005338dd6062e607890f51333a688f61347d922d9ecb3b09d3d297a`、
+`086995eca70610a9127dae47e7891bf0ec41fc848bacafb154fd556f286eb74d`；combined run在同一
+Session内建立render+camera media mask，Host取得完整307200B RGBA8888与115200B NV12 CMFB，
+Wi-Fi/DeviceTelemetry与Scene/C2继续推进。一次SIGTERM后的Edge close receipt显示camera所有
+buffer/mmap/queue/borrow/stream ledger为0且media unbound，原ISP进程仍存活。完整脱敏hash、Web
+bridge/editor证据和限制见
+[K230D Composition debug 联调证据 v0](k230d-composition-debug-e2e-v0.md)。这次bounded run不把
+single-adapter receipt扩大成通用camera能力，也不证明physical display、safe transport、自动恢复、
+性能或长稳。
+
 系统通过通用 capability/endpoint discovery 表达这些组件，不为 K230D Zero 或某种 sensor
 建立 Core 特例。CanMV、native runtime、SDK sample 或其他镜像都可以用于后续实验；结果
 必须按具体版本和条件记录。
@@ -566,7 +579,7 @@ clock quality、usable memory budget、持续温度或功耗。上面的Wi-Fi la
   evidence；K1a已有Host synthetic reference renderer/offline baseline，但没有target interoperability、
   connected Composition/Wi-Fi Stream、offline lease执行或physical output；
 - Wi-Fi Profile 的 perf、fault、recovery、memory、thermal 与安全验收，以及其他产品 Profile；
-- K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、板端资源预算和长期
+- K230D 自动化 cold-boot/restart evidence、target-in-loop CI、fuzz、并发、通用板端资源预算和长期
   fault/soak/thermal evidence。
 
 这些 gap 是无序能力集合。实际下一项由当前产品问题、可用硬件、风险和可执行验收选择，

@@ -7,6 +7,7 @@ import {
   objectTransformCommand,
   renderIntentCommand,
   selectedObject,
+  shouldSyncForms,
   telemetryIntentCommand,
 } from "./static/model.mjs";
 
@@ -21,6 +22,12 @@ test("selected object uses only the server-owned draft handle", () => {
   };
   assert.deepEqual(selectedObject(snapshot), {draft_object: 7});
   assert.equal(selectedObject({scene: {selected_draft_object: null, objects: []}}), null);
+});
+
+test("native truth updates do not overwrite an in-progress editor form", () => {
+  assert.equal(shouldSyncForms(null, {revision: 0}), true);
+  assert.equal(shouldSyncForms({revision: 4}, {revision: 4}), false);
+  assert.equal(shouldSyncForms({revision: 4}, {revision: 5}), true);
 });
 
 test("object and camera commands contain no protocol identity", () => {

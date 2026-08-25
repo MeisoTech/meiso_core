@@ -6,6 +6,7 @@ import {
   objectTransformCommand,
   renderIntentCommand,
   selectedObject,
+  shouldSyncForms,
   telemetryIntentCommand,
 } from "./model.mjs";
 
@@ -145,6 +146,7 @@ function renderEvidence() {
 }
 
 function renderSnapshot(next) {
+  const syncEditableForms = shouldSyncForms(snapshot, next);
   snapshot = next;
   node("revision-badge").textContent = `REV ${snapshot.revision}`;
   node("backend-badge").textContent = snapshot.backend.mode.replace("_", " / ");
@@ -168,7 +170,7 @@ function renderSnapshot(next) {
   node("evidence-badge").textContent = native ? "READ ONLY" : "NO SESSION";
   renderObjectList();
   renderEvidence();
-  syncForms();
+  if (syncEditableForms) syncForms();
   renderer.draw(snapshot);
 }
 
