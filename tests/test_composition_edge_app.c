@@ -2334,7 +2334,23 @@ static bool drive_media_active(
         MeisoCompositionEdgeAppSnapshot edge_snapshot;
         MeisoCompositionMediaTransportSnapshot host_snapshot;
 
-        CHECK(host_media_step(host_media, media_host_fd));
+        CHECK(host_media_step(host_media, media_host_fd) &&
+              meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
+              meiso_composition_media_transport_snapshot(
+                  host_media->transport, &host_snapshot
+              ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
+        /* Do not advance an unrelated local domain after both peers are active. */
+        if (edge_snapshot.media.bound &&
+            edge_snapshot.media.transport_phase ==
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE &&
+            host_snapshot.phase ==
+                MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE) {
+            CHECK(edge_snapshot.media.active_route_mask == expected_mask &&
+                  edge_snapshot.media_slots_consumed ==
+                      (uint8_t)(expected_slot + 1U));
+            *out_receipt = receipt;
+            return true;
+        }
         ready = (MeisoCompositionEdgeAppIoReady){
             true, true,
             fd_ready_now(media_edge_fd, POLLIN),

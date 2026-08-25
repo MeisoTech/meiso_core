@@ -1016,20 +1016,7 @@ static bool drive_first_wifi_desired(HostAppFixture *fixture)
             MeisoStateReceiveStatus receive_status;
             MeisoRuntimeSchedulerWork accept;
 
-            if (offer_received || edge_result.event.type !=
-                    MEISO_RUNTIME_EVENT_STATE_OFFER ||
-                !route_equal(edge_result.event.route, expected_route)) {
-                (void)fprintf(
-                    stderr,
-                    "Unexpected first Edge event: type=%u wifi_route=%u "
-                    "already_received=%u\n",
-                    (unsigned)edge_result.event.type,
-                    route_equal(edge_result.event.route, expected_route) ?
-                        1U : 0U,
-                    offer_received ? 1U : 0U
-                );
-            }
-            CHECK_GOTO(!offer_received && edge_result.event.type ==
+            CHECK_GOTO(edge_result.event.type ==
                            MEISO_RUNTIME_EVENT_STATE_OFFER &&
                        route_equal(edge_result.event.route, expected_route) &&
                        owner_equal(
@@ -1055,27 +1042,32 @@ static bool drive_first_wifi_desired(HostAppFixture *fixture)
                 edge_result.event.state_offer.state.version,
                 edge_result.event.state_offer.state.payload
             );
-            CHECK_GOTO(receive_status == MEISO_STATE_RECEIVE_NEW &&
+            /* The exact offer may replay before the queued accept arrives. */
+            CHECK_GOTO(receive_status == (offer_received ?
+                           MEISO_STATE_RECEIVE_DUPLICATE :
+                           MEISO_STATE_RECEIVE_NEW) &&
                        meiso_composition_debug_peer_commit_state_receive(
                            fixture->edge, edge_result.event.route,
                            &edge_result.event.state_offer, receive_status
                        ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
                        cleanup);
-            memset(&accept, 0, sizeof(accept));
-            accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
-            accept.value.state_accept.route = edge_result.event.route;
-            accept.value.state_accept.generation =
-                edge_result.event.state_offer.generation;
-            accept.value.state_accept.owner =
-                edge_result.event.state_offer.state.owner;
-            accept.value.state_accept.version =
-                edge_result.event.state_offer.state.version;
-            CHECK_GOTO(meiso_composition_debug_peer_queue_work(
-                           fixture->edge, 1U, &accept
-                       ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
-                       cleanup);
-            offer_received = true;
-            accept_queued = true;
+            if (!offer_received) {
+                memset(&accept, 0, sizeof(accept));
+                accept.kind = MEISO_RUNTIME_SCHEDULER_WORK_STATE_ACCEPT;
+                accept.value.state_accept.route = edge_result.event.route;
+                accept.value.state_accept.generation =
+                    edge_result.event.state_offer.generation;
+                accept.value.state_accept.owner =
+                    edge_result.event.state_offer.state.owner;
+                accept.value.state_accept.version =
+                    edge_result.event.state_offer.state.version;
+                CHECK_GOTO(meiso_composition_debug_peer_queue_work(
+                               fixture->edge, 1U, &accept
+                           ) == MEISO_COMPOSITION_DEBUG_PEER_OK,
+                           cleanup);
+                offer_received = true;
+                accept_queued = true;
+            }
         }
 
 edge_event_handled:
