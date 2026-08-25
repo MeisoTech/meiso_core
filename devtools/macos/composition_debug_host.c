@@ -2533,7 +2533,7 @@ static bool read_control_input(Service *service, bool readable)
     if (!readable) {
         return true;
     }
-    if (service->input_size == sizeof(service->input)) {
+    if (service->input_size >= sizeof(service->input)) {
         return false;
     }
     result = read(STDIN_FILENO, service->input + service->input_size,
