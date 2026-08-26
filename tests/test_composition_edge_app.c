@@ -3939,30 +3939,44 @@ cleanup:
 
 static bool drive_control_ready(
     MeisoCompositionEdgeApp *edge,
+    int edge_fd,
     MeisoCompositionDebugPeer *host,
+    int host_fd,
     MeisoCompositionEdgeAppSnapshot *out_edge_snapshot,
     MeisoCompositionDebugPeerSnapshot *out_host_snapshot
 )
 {
+    MeisoCompositionDebugPeerPumpStatus host_status =
+        MEISO_COMPOSITION_DEBUG_PEER_PUMP_IDLE;
+    MeisoCompositionEdgeAppPumpStatus edge_status =
+        MEISO_COMPOSITION_EDGE_APP_PUMP_IDLE;
+    struct timespec deadline;
     size_t step;
 
-    CHECK(edge != NULL && host != NULL && out_edge_snapshot != NULL &&
-          out_host_snapshot != NULL);
+    CHECK(edge != NULL && edge_fd >= 0 && host != NULL && host_fd >= 0 &&
+          edge_fd != host_fd && out_edge_snapshot != NULL &&
+          out_host_snapshot != NULL && make_deadline(&deadline));
     for (step = 0U; step < 20000U; ++step) {
         MeisoCompositionDebugPeerPumpResult host_result;
         MeisoCompositionEdgeAppPumpResult edge_result;
+        const bool host_readable = fd_ready_now(host_fd, POLLIN);
+        const bool host_writable = fd_ready_now(host_fd, POLLOUT);
         const MeisoCompositionEdgeAppIoReady ready = {
-            true, true, false, false, false, {77U, step + 1U}
+            fd_ready_now(edge_fd, POLLIN),
+            fd_ready_now(edge_fd, POLLOUT),
+            false, false, false, {77U, step + 1U}
         };
 
         memset(&host_result, 0, sizeof(host_result));
-        CHECK(benign_host_status(meiso_composition_debug_peer_pump(
-            host, true, true, &host_result
-        )));
+        host_status = meiso_composition_debug_peer_pump(
+            host, host_readable, host_writable, &host_result
+        );
+        CHECK(benign_host_status(host_status));
         memset(&edge_result, 0, sizeof(edge_result));
-        CHECK(benign_edge_status(meiso_composition_edge_app_pump(
-                  edge, &ready, &edge_result
-              )) &&
+        edge_status = meiso_composition_edge_app_pump(
+            edge, &ready, &edge_result
+        );
+        CHECK(benign_edge_status(edge_status) &&
               meiso_composition_edge_app_snapshot(edge, out_edge_snapshot) &&
               meiso_composition_debug_peer_snapshot(host, out_host_snapshot));
         if (out_edge_snapshot->phase ==
@@ -3980,7 +3994,70 @@ static bool drive_control_ready(
                   out_host_snapshot->runtime.active_route_count == 18U);
             return true;
         }
+        if ((host_status == MEISO_COMPOSITION_DEBUG_PEER_PUMP_IDLE ||
+             host_status == MEISO_COMPOSITION_DEBUG_PEER_PUMP_WOULD_BLOCK) &&
+            (edge_status == MEISO_COMPOSITION_EDGE_APP_PUMP_IDLE ||
+             edge_status == MEISO_COMPOSITION_EDGE_APP_PUMP_WOULD_BLOCK)) {
+            MeisoCompositionEdgeAppIoInterest edge_interest;
+            struct pollfd items[2];
+            int poll_result;
+            int timeout;
+
+            CHECK(meiso_composition_edge_app_readiness(edge, &edge_interest));
+            items[0] = (struct pollfd){
+                host_fd,
+                (short)((meiso_composition_debug_peer_wants_read(host) ?
+                              POLLIN : 0) |
+                         (meiso_composition_debug_peer_wants_write(host) ?
+                              POLLOUT : 0)),
+                0
+            };
+            items[1] = (struct pollfd){
+                edge_fd,
+                (short)((edge_interest.control_read ? POLLIN : 0) |
+                         (edge_interest.control_write ? POLLOUT : 0)),
+                0
+            };
+            timeout = remaining_ms(&deadline);
+            if (timeout == 0 ||
+                (items[0].events == 0 && items[1].events == 0)) {
+                break;
+            }
+            do {
+                poll_result = poll(items, (nfds_t)2U, timeout);
+            } while (poll_result < 0 && errno == EINTR &&
+                     (timeout = remaining_ms(&deadline)) > 0);
+            if (poll_result <= 0 ||
+                (items[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
+                (items[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                break;
+            }
+        }
     }
+    (void)fprintf(
+        stderr,
+        "control READY timeout: host_status=%u host_phase=%u "
+        "host_session=%u host_failure=%u host_terminal=%u "
+        "host_catalog=%llu host_endpoints=%u host_routes=%u "
+        "edge_status=%u edge_phase=%u edge_session=%u edge_terminal=%u "
+        "edge_reason=%u edge_catalog=%llu edge_ready=%u\n",
+        (unsigned int)host_status,
+        (unsigned int)out_host_snapshot->phase,
+        (unsigned int)out_host_snapshot->session.state,
+        (unsigned int)out_host_snapshot->session.failure,
+        out_host_snapshot->terminal ? 1U : 0U,
+        (unsigned long long)out_host_snapshot->runtime.active_catalog_generation,
+        (unsigned int)out_host_snapshot->runtime.active_endpoint_count,
+        (unsigned int)out_host_snapshot->runtime.active_route_count,
+        (unsigned int)edge_status,
+        (unsigned int)out_edge_snapshot->phase,
+        (unsigned int)out_edge_snapshot->control_session_state,
+        out_edge_snapshot->phase == MEISO_COMPOSITION_EDGE_APP_PHASE_TERMINAL ?
+            1U : 0U,
+        (unsigned int)out_edge_snapshot->terminal_reason,
+        (unsigned long long)out_edge_snapshot->active_catalog_generation,
+        out_edge_snapshot->control_ready ? 1U : 0U
+    );
     return false;
 }
 
@@ -4008,36 +4085,45 @@ static bool test_camera_start_failure_recovery(void)
     CHECK(fixture_shape_create(&fixture, UINT64_C(0x4000)));
     edge_arena = calloc(1U, fixture.edge_bytes);
     host_arena = calloc(1U, fixture.host_bytes);
-    CHECK_GOTO(edge_arena != NULL && host_arena != NULL &&
-          meiso_composition_debug_peer_init(
-              host_arena, fixture.host_bytes, &fixture.host_config, &host
-          ) == MEISO_COMPOSITION_DEBUG_PEER_INIT_OK &&
-          meiso_composition_edge_app_init(
-              edge_arena, fixture.edge_bytes, &fixture.edge_config, &edge
-          ) == MEISO_COMPOSITION_EDGE_APP_INIT_OK &&
-          drive_control_ready(
-              edge, host, &edge_snapshot, &host_snapshot
-          ) && drive_wifi_desired_actual(edge, host, &fixture.catalog) &&
-          drive_media_desired_actual(
-              edge, host, &fixture.catalog, true, 1U, 10000U,
-              NULL, &render_media
-          ) && drive_media_desired_actual(
-              edge, host, &fixture.catalog, false, 1U, 10000U,
-              NULL, &camera_media
-          ) && make_tcp_pair(&media_host_fd, &media_edge_fd) &&
-          meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
-          initialize_host_media(
-              &fixture, &edge_snapshot, media_host_fd,
-              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL,
-              &render_media, &camera_media, &host_media
-          ) && drive_media_active(
-              edge, edge_arena, fixture.edge_bytes,
-              media_edge_fd, media_host_fd, &host_media, 0U,
-              MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, &receipt
-          ) && drive_camera_start_failure(
-              edge, host, &fixture.catalog, &fixture.camera,
-              MEISO_COMPOSITION_EDGE_APP_MEDIA_CAMERA, 1U
-          ), cleanup);
+    CHECK_GOTO(edge_arena != NULL && host_arena != NULL, cleanup);
+    CHECK_GOTO(meiso_composition_debug_peer_init(
+          host_arena, fixture.host_bytes, &fixture.host_config, &host
+        ) == MEISO_COMPOSITION_DEBUG_PEER_INIT_OK, cleanup);
+    CHECK_GOTO(meiso_composition_edge_app_init(
+          edge_arena, fixture.edge_bytes, &fixture.edge_config, &edge
+        ) == MEISO_COMPOSITION_EDGE_APP_INIT_OK, cleanup);
+    CHECK_GOTO(drive_control_ready(
+          edge, fixture.edge_fd, host, fixture.host_fd,
+          &edge_snapshot, &host_snapshot
+        ), cleanup);
+    CHECK_GOTO(drive_wifi_desired_actual(
+          edge, host, &fixture.catalog
+        ), cleanup);
+    CHECK_GOTO(drive_media_desired_actual(
+          edge, host, &fixture.catalog, true, 1U, 10000U,
+          NULL, &render_media
+        ), cleanup);
+    CHECK_GOTO(drive_media_desired_actual(
+          edge, host, &fixture.catalog, false, 1U, 10000U,
+          NULL, &camera_media
+        ), cleanup);
+    CHECK_GOTO(make_tcp_pair(&media_host_fd, &media_edge_fd), cleanup);
+    CHECK_GOTO(meiso_composition_edge_app_snapshot(edge, &edge_snapshot),
+               cleanup);
+    CHECK_GOTO(initialize_host_media(
+          &fixture, &edge_snapshot, media_host_fd,
+          MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL,
+          &render_media, &camera_media, &host_media
+        ), cleanup);
+    CHECK_GOTO(drive_media_active(
+          edge, edge_arena, fixture.edge_bytes,
+          media_edge_fd, media_host_fd, &host_media, 0U,
+          MEISO_COMPOSITION_EDGE_APP_MEDIA_ALL, &receipt
+        ), cleanup);
+    CHECK_GOTO(drive_camera_start_failure(
+          edge, host, &fixture.catalog, &fixture.camera,
+          MEISO_COMPOSITION_EDGE_APP_MEDIA_CAMERA, 1U
+        ), cleanup);
     destroy_host_media(&host_media);
     close_fd(&media_host_fd);
     close_fd(&media_edge_fd);
@@ -4115,8 +4201,6 @@ static bool test_init_and_control_bootstrap(void)
     size_t cube_blob_size = 0U;
     uint64_t cube_resident_mesh_bytes = 0U;
     uint64_t camera_epoch = 0U;
-    size_t step;
-    bool ready = false;
     bool success = false;
 
     memset(&host_media, 0, sizeof(host_media));
@@ -4153,62 +4237,11 @@ static bool test_init_and_control_bootstrap(void)
           fcntl(fixture.edge_fd, F_GETFL, 0) == fixture.edge_fd_flags,
           cleanup);
 
-    for (step = 0U; step < 20000U && !ready; ++step) {
-        MeisoCompositionDebugPeerPumpResult host_result;
-        MeisoCompositionEdgeAppPumpResult edge_result;
-        MeisoCompositionEdgeAppIoReady io = {
-            true, true, false, false, false, {77U, step + 1U}
-        };
-        MeisoCompositionDebugPeerPumpStatus host_status;
-        MeisoCompositionEdgeAppPumpStatus edge_status;
-
-        memset(&host_result, 0, sizeof(host_result));
-        host_status = meiso_composition_debug_peer_pump(
-            host, true, true, &host_result
-        );
-        if (!benign_host_status(host_status)) {
-            (void)meiso_composition_debug_peer_snapshot(
-                host, &host_snapshot
-            );
-            (void)meiso_composition_edge_app_snapshot(
-                edge, &edge_snapshot
-            );
-            (void)fprintf(
-                stderr,
-                "host bootstrap status=%u step=%zu phase=%u session=%u "
-                "terminal=%u staged=%u active=%u generation=%llu "
-                "runtime=%zu/%zu scheduler=%zu/%zu edge_phase=%u\n",
-                (unsigned)host_status, step,
-                (unsigned)host_snapshot.phase,
-                (unsigned)host_snapshot.session.state,
-                host_snapshot.terminal ? 1U : 0U,
-                host_snapshot.runtime.staged_catalog_present ? 1U : 0U,
-                host_snapshot.runtime.active_catalog_present ? 1U : 0U,
-                (unsigned long long)host_snapshot.catalog_generation,
-                host_snapshot.runtime_bytes,
-                host_snapshot.runtime_reserve_bytes,
-                host_snapshot.scheduler_bytes,
-                host_snapshot.scheduler_reserve_bytes,
-                (unsigned)edge_snapshot.phase
-            );
-        }
-        CHECK_GOTO(benign_host_status(host_status), cleanup);
-        memset(&edge_result, 0, sizeof(edge_result));
-        edge_status = meiso_composition_edge_app_pump(edge, &io, &edge_result);
-        if (!benign_edge_status(edge_status)) {
-            (void)fprintf(
-                stderr, "edge bootstrap status=%u step=%zu\n",
-                (unsigned)edge_status, step
-            );
-        }
-        CHECK_GOTO(benign_edge_status(edge_status), cleanup);
-        CHECK_GOTO(meiso_composition_edge_app_snapshot(edge, &edge_snapshot) &&
-              meiso_composition_debug_peer_snapshot(host, &host_snapshot),
-              cleanup);
-        ready = edge_snapshot.phase == MEISO_COMPOSITION_EDGE_APP_PHASE_READY &&
-            host_snapshot.phase == MEISO_COMPOSITION_DEBUG_PEER_PHASE_READY;
-    }
-    CHECK_GOTO(ready && edge_snapshot.control_ready &&
+    CHECK_GOTO(drive_control_ready(
+          edge, fixture.edge_fd, host, fixture.host_fd,
+          &edge_snapshot, &host_snapshot
+        ), cleanup);
+    CHECK_GOTO(edge_snapshot.control_ready &&
           edge_snapshot.control_session_state == MEISO_SESSION_STATE_READY &&
           edge_snapshot.active_catalog_generation == 1U &&
           host_snapshot.session.state == MEISO_SESSION_STATE_READY &&
