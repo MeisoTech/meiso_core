@@ -236,12 +236,20 @@ class NativeBridgeTests(unittest.TestCase):
         state = DashboardState()
         state.enable_native(executable, None, simulator=True)
         try:
+            def editor_bootstrap_complete() -> bool:
+                snapshot = state.snapshot()
+                scene_status = snapshot["native_truth"]["scene_status"]
+                return bool(
+                    snapshot["native_truth"]["render_result"] is not None and
+                    snapshot["frames"]["render"]["available"] and
+                    scene_status is not None and
+                    scene_status["reason"] == "ready" and
+                    snapshot["bindings"]["render_result_stream"] ==
+                    "SIMULATED"
+                )
+
             _wait_for(
-                lambda: (
-                    state.snapshot()["native_truth"]["render_result"]
-                    is not None and
-                    state.snapshot()["frames"]["render"]["available"]
-                ),
+                editor_bootstrap_complete,
                 timeout=5.0,
             )
             snapshot = state.snapshot()
