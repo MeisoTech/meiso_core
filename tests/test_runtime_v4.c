@@ -1,5 +1,5 @@
-#include "composition_session_v3.h"
-#include "meiso_runtime.h"
+#include <meiso/profiles/composition/profile.h>
+#include <meiso/runtime/runtime.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -20,8 +20,8 @@
 enum {
     CATALOG_ROUTE_OFFSET =
         MEISO_RUNTIME_WIRE_HEADER_SIZE + 16U +
-        MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT * 48U +
-        MEISO_COMPOSITION_SESSION_V3_CAPABILITY_BYTES,
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT * 48U +
+        MEISO_COMPOSITION_PROFILE_CAPABILITY_BYTES,
     RENDER_DESIRED_ROUTE = 12U,
     RENDER_ACTUAL_ROUTE = 13U,
     RENDER_DATA_ROUTE = 14U,
@@ -57,7 +57,7 @@ typedef struct {
     SessionArena edge_session_arena;
     RuntimeArena host_runtime_arena;
     RuntimeArena edge_runtime_arena;
-    uint8_t transfer[MEISO_COMPOSITION_SESSION_V3_MAX_FRAME_BYTES];
+    uint8_t transfer[MEISO_COMPOSITION_PROFILE_MAX_FRAME_BYTES];
     MeisoSession *host_session;
     MeisoSession *edge_session;
     MeisoRuntime *host_runtime;
@@ -69,12 +69,12 @@ typedef struct {
 } RuntimePair;
 
 typedef struct {
-    uint8_t capability[MEISO_COMPOSITION_SESSION_V3_DYNAMIC_CAPABILITY_BYTES];
+    uint8_t capability[MEISO_COMPOSITION_PROFILE_DYNAMIC_CAPABILITY_BYTES];
     MeisoRuntimeEndpointDescriptor endpoints[
-        MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT
     ];
-    MeisoCompositionSessionV3RouteDescriptor routes[
-        MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
+    MeisoCompositionProfileRouteDescriptor routes[
+        MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
     ];
 } Catalog;
 
@@ -158,9 +158,9 @@ static bool route_key_equal(
         lhs.facet == rhs.facet;
 }
 
-static MeisoCompositionSessionV3CatalogConfig catalog_config(void)
+static MeisoCompositionProfileCatalogConfig catalog_config(void)
 {
-    MeisoCompositionSessionV3CatalogConfig value;
+    MeisoCompositionProfileCatalogConfig value;
 
     memset(&value, 0, sizeof(value));
     value.wifi_incarnation = 11U;
@@ -200,15 +200,15 @@ static MeisoCompositionSessionV3CatalogConfig catalog_config(void)
 
 static bool build_catalog(Catalog *catalog)
 {
-    const MeisoCompositionSessionV3CatalogConfig config = catalog_config();
+    const MeisoCompositionProfileCatalogConfig config = catalog_config();
 
     memset(catalog, 0, sizeof(*catalog));
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config,
         (MeisoMutableBuffer){catalog->capability, sizeof(catalog->capability)},
-        catalog->endpoints, MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT,
-        catalog->routes, MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+        catalog->endpoints, MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT,
+        catalog->routes, MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     return true;
 }
 
@@ -230,11 +230,11 @@ static MeisoSessionConfig session_config(
         (MeisoSessionNonce){0x61U, nonce_salt + 1U} :
         (MeisoSessionNonce){0x71U, nonce_salt + 2U};
     value.protocol = (MeisoProtocolVersion){1U, 0U};
-    value.profile = *meiso_composition_scene_profile_v3();
+    value.profile = *meiso_composition_profile_ref();
     value.limits = (MeisoSessionLimits){
-        MEISO_COMPOSITION_SESSION_V3_MAX_FRAME_BYTES,
-        MEISO_COMPOSITION_SESSION_V3_MAX_RUNTIME_PAYLOAD_BYTES,
-        MEISO_COMPOSITION_SESSION_V3_MAX_REGISTRY_ENTRIES
+        MEISO_COMPOSITION_PROFILE_MAX_FRAME_BYTES,
+        MEISO_COMPOSITION_PROFILE_MAX_RUNTIME_PAYLOAD_BYTES,
+        MEISO_COMPOSITION_PROFILE_MAX_REGISTRY_ENTRIES
     };
     return value;
 }
@@ -258,7 +258,7 @@ static bool init_session(
 
 static bool handshake(MeisoSession *sender, MeisoSession *receiver)
 {
-    uint8_t frame[MEISO_COMPOSITION_SESSION_V3_MAX_FRAME_BYTES];
+    uint8_t frame[MEISO_COMPOSITION_PROFILE_MAX_FRAME_BYTES];
     MeisoByteView outbound;
     MeisoSessionRuntimeMessage ignored = {0};
 
@@ -279,12 +279,12 @@ static MeisoRuntimeV4Config runtime_config(MeisoSession *session)
 
     memset(&value, 0, sizeof(value));
     value.base.session = session;
-    value.base.max_endpoints = MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT;
+    value.base.max_endpoints = MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT;
     value.base.max_endpoint_history =
-        MEISO_COMPOSITION_SESSION_V3_MAX_ENDPOINT_HISTORY;
-    value.base.max_routes = MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT;
+        MEISO_COMPOSITION_PROFILE_MAX_ENDPOINT_HISTORY;
+    value.base.max_routes = MEISO_COMPOSITION_PROFILE_ROUTE_COUNT;
     value.base.max_capability_bytes =
-        MEISO_COMPOSITION_SESSION_V3_CAPABILITY_BYTES;
+        MEISO_COMPOSITION_PROFILE_CAPABILITY_BYTES;
     value.base.max_desired_profile_bytes_per_endpoint =
         MEISO_COMPOSITION_SCENE_SCENE_MAX_WIRE_SIZE;
     value.base.max_actual_profile_bytes_per_endpoint =
@@ -716,7 +716,7 @@ static bool test_v2_v3_layout_regression(RuntimePair *pair)
 static bool rejected_offer_is_atomic(
     RuntimePair *pair,
     const Catalog *catalog,
-    const MeisoCompositionSessionV3RouteDescriptor routes[18],
+    const MeisoCompositionProfileRouteDescriptor routes[18],
     MeisoRuntimeStatus expected
 )
 {
@@ -732,8 +732,8 @@ static bool rejected_offer_is_atomic(
             pair->edge_session_size);
     CHECK(meiso_runtime_v4_offer_catalog(
         pair->edge_runtime, 1U, catalog->endpoints,
-        MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT, routes,
-        MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT, routes,
+        MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
     ) == expected);
     CHECK(meiso_runtime_snapshot(pair->edge_runtime, &after));
     CHECK(memcmp(&before, &after, sizeof(before)) == 0 &&
@@ -749,7 +749,7 @@ static bool test_offer_delivery_constraints(
     const Catalog *catalog
 )
 {
-    MeisoCompositionSessionV3RouteDescriptor routes[18];
+    MeisoCompositionProfileRouteDescriptor routes[18];
     MeisoRuntimeRouteDescriptor base_routes[18];
     MeisoRuntimeSnapshot before;
     MeisoRuntimeSnapshot after;
@@ -817,7 +817,7 @@ static bool test_offer_delivery_constraints(
 static bool test_catalog_wire_and_views(
     RuntimePair *pair,
     const Catalog *catalog,
-    uint8_t catalog_wire[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE]
+    uint8_t catalog_wire[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE]
 )
 {
     MeisoSessionRuntimeMessage message = {0};
@@ -826,7 +826,7 @@ static bool test_catalog_wire_and_views(
     MeisoRuntimeRouteDescriptor base_route;
     MeisoRuntimeV4RouteDescriptor route;
     MeisoRuntimeV4ExternalMediaBinding binding;
-    uint8_t malformed[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE];
+    uint8_t malformed[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
     uint8_t runtime_before[300000];
     size_t index;
     MeisoRuntimeStatus offer_status;
@@ -835,8 +835,8 @@ static bool test_catalog_wire_and_views(
 
     offer_status = meiso_runtime_v4_offer_catalog(
         pair->edge_runtime, 1U, catalog->endpoints,
-        MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT, catalog->routes,
-        MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT, catalog->routes,
+        MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
     );
     CHECK(offer_status == MEISO_RUNTIME_OK);
     CHECK(pull_message(
@@ -847,7 +847,7 @@ static bool test_catalog_wire_and_views(
     CHECK(catalog_wire[4] == MEISO_RUNTIME_WIRE_VERSION_V4 &&
           catalog_wire[5] == 1U &&
           fnv1a64(catalog_wire, sizeof(malformed)) ==
-              UINT64_C(0xc1a0ea9f878ea755));
+              UINT64_C(0xf8cdf61c22fd83ed));
 
     memmove(malformed, catalog_wire, sizeof(malformed));
     malformed[delivery_offset] = 0U;
@@ -1288,8 +1288,8 @@ static bool test_replacement_and_terminal(
 
     CHECK(meiso_runtime_v4_offer_catalog(
         pair->edge_runtime, 2U, catalog->endpoints,
-        MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT, catalog->routes,
-        MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT, catalog->routes,
+        MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
     ) == MEISO_RUNTIME_OK);
     CHECK(pull_message(
         pair, pair->edge_session, pair->host_session, &message
@@ -1398,7 +1398,7 @@ int main(void)
     RuntimePair pair;
     Catalog catalog;
     Replicas replicas;
-    uint8_t catalog_wire[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE];
+    uint8_t catalog_wire[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
 
     if (!init_pair(&pair, 100U) || !build_catalog(&catalog) ||
         !test_v2_v3_layout_regression(&pair) ||

@@ -1,4 +1,4 @@
-#include "composition_cpu_raster_renderer.h"
+#include <meiso/composition/cpu_raster_renderer.h>
 
 #include <stdbool.h>
 #include <stddef.h>

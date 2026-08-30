@@ -1,4 +1,4 @@
-#include "meiso_blob.h"
+#include <meiso/core/blob.h>
 
 #include "meiso_test_support.h"
 

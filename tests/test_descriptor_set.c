@@ -1,4 +1,4 @@
-#include "meiso_descriptor_set.h"
+#include <meiso/core/descriptor_set.h>
 
 #include "meiso_test_support.h"
 

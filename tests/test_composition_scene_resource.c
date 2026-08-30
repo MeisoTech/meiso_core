@@ -1,8 +1,8 @@
-#include "composition_scene.h"
-#include "meiso_blob.h"
-#include "meiso_state.h"
-#include "meiso_stream.h"
-#include "scene_store.h"
+#include <meiso/profiles/composition/scene.h>
+#include <meiso/core/blob.h>
+#include <meiso/core/state.h>
+#include <meiso/core/stream.h>
+#include <meiso/composition/scene_store.h>
 
 #include <stdbool.h>
 #include <stddef.h>

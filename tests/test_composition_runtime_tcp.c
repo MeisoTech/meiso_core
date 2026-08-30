@@ -1,12 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "composition_coordinator.h"
-#include "composition_session_v2.h"
-#include "meiso_blob.h"
-#include "meiso_posix_tcp.h"
-#include "meiso_runtime_scheduler.h"
-#include "meiso_state.h"
-#include "meiso_stream.h"
+#include <meiso/composition/coordinator.h>
+#include <meiso/internal/composition/session_v2.h>
+#include <meiso/core/blob.h>
+#include <meiso/adapters/posix/tcp.h>
+#include <meiso/runtime/scheduler.h>
+#include <meiso/core/state.h>
+#include <meiso/core/stream.h>
+#include "composition_profile_fixture.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -390,7 +391,7 @@ static MeisoSessionConfig session_config(
         (MeisoSessionNonce){UINT64_C(0x3131313131313131), nonce_salt + 1U} :
         (MeisoSessionNonce){UINT64_C(0x4141414141414141), nonce_salt + 2U};
     config.protocol = (MeisoProtocolVersion){1U, 0U};
-    config.profile = *meiso_composition_scene_profile_v2();
+    config.profile = meiso_composition_internal_mrt0_v3_fixture_profile();
     config.limits = (MeisoSessionLimits){16384U, 8192U, 32U};
     return config;
 }
@@ -1393,9 +1394,11 @@ static bool initialize_tcp_fixture_with_nonce_salt(
     CHECK(meiso_composition_session_v2_configure_session(&edge_config) ==
           MEISO_COMPOSITION_SESSION_V2_OK);
     CHECK(meiso_profile_ref_equal(
-              host_config.profile, *meiso_composition_scene_profile_v2()) &&
+              host_config.profile,
+              meiso_composition_internal_mrt0_v3_fixture_profile()) &&
           meiso_profile_ref_equal(
-              edge_config.profile, *meiso_composition_scene_profile_v2()));
+              edge_config.profile,
+              meiso_composition_internal_mrt0_v3_fixture_profile()));
     CHECK(make_tcp_pair(&fixture->host.fd, &fixture->edge.fd));
     CHECK(initialize_session(
         &fixture->host.session_arena,
@@ -2119,7 +2122,7 @@ static MeisoCompositionScenePresentationPlan plan_value_at_generation(
     plan.depth_format = MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32;
     plan.max_result_hz = MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ;
     plan.offline_lease_ms = 1000U;
-    if (!meiso_composition_coordinator_plan_digest(&plan, digest)) {
+    if (!meiso_composition_scene_plan_digest(&plan, digest)) {
         memset(&plan, 0, sizeof(plan));
     } else {
         memcpy(plan.candidate_digest, digest, sizeof(digest));

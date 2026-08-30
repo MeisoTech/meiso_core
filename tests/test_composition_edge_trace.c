@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "composition_virtual_edge_application.h"
-#include "meiso_composition_edge_trace.h"
+#include "composition_edge_client_fixture.h"
+#include <meiso/simulation/composition_trace.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -95,9 +95,9 @@ static size_t record_offset(const uint8_t *trace, uint32_t sequence)
     return cursor;
 }
 
-static MeisoCompositionSessionV3CatalogConfig catalog_config(void)
+static MeisoCompositionProfileCatalogConfig catalog_config(void)
 {
-    MeisoCompositionSessionV3CatalogConfig value;
+    MeisoCompositionProfileCatalogConfig value;
 
     memset(&value, 0, sizeof(value));
     value.wifi_incarnation = 11U;
@@ -650,7 +650,7 @@ int main(void)
               MEISO_COMPOSITION_EDGE_TRACE_RECORD_SET_WIFI &&
           result.receipt_present && result.receipt.command_id == 1U &&
           !result.transition_present);
-    CHECK(meiso_test_virtual_edge_bootstrap(handle));
+    CHECK(meiso_test_composition_edge_bootstrap(handle));
     CHECK(meiso_composition_edge_trace_reader_replay_next(
               reader, handle, &result
           ) == MEISO_COMPOSITION_EDGE_TRACE_OK &&
@@ -676,9 +676,9 @@ int main(void)
                MEISO_EDGE_OPERATION_STREAM_READ |
                MEISO_EDGE_OPERATION_MEDIA_READ) &&
           snapshot.edge.endpoint_count ==
-              MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT &&
+              MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT &&
           snapshot.edge.resource_count ==
-              MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT &&
+              MEISO_COMPOSITION_PROFILE_ROUTE_COUNT &&
           snapshot.desired[MEISO_COMPOSITION_EDGE_DESIRED_WIFI]
               .delivery_accepted &&
           snapshot.actual[MEISO_COMPOSITION_EDGE_ACTUAL_WIFI].present &&
@@ -752,7 +752,7 @@ int main(void)
               reader, handle, &result
           ) == MEISO_COMPOSITION_EDGE_TRACE_OK &&
           result.record_sequence == 11U &&
-          meiso_test_virtual_edge_camera_frame(
+          meiso_test_composition_edge_camera_frame(
               handle, 9001U, camera_bytes, 320U * 240U * 3U / 2U
           ));
     CHECK(meiso_composition_edge_trace_reader_replay_next(
@@ -761,7 +761,7 @@ int main(void)
           result.record_sequence == 12U &&
           result.record_kind ==
               MEISO_COMPOSITION_EDGE_TRACE_RECORD_TERMINATE &&
-          meiso_test_virtual_edge_terminal(handle));
+          meiso_test_composition_edge_terminal(handle));
     memset(&unchanged_result, 0xa5, sizeof(unchanged_result));
     CHECK(meiso_composition_edge_trace_reader_replay_next(
               reader, handle, &unchanged_result

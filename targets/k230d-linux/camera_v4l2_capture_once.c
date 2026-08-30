@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "camera_v4l2_adapter.h"
+#include <meiso/edge/linux/camera_v4l2.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -23,7 +23,7 @@ enum {
 #define CAPTURE_RETRY_NS UINT64_C(1000000)
 
 #ifdef MEISO_K230_LINUX_TARGET
-#define CAPTURE_BUILD_TARGET "k230d_linux_candidate"
+#define CAPTURE_BUILD_TARGET "k230d_linux"
 #else
 #define CAPTURE_BUILD_TARGET "native_host"
 #endif

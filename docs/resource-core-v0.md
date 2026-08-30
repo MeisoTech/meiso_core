@@ -32,14 +32,14 @@ stdbool.h / string.h` 即可编译 primitive。
 ## 模块图
 
 ```text
-meiso_resource.h + meiso_resource.c
+include/meiso/core/resource.h + src/core/meiso_resource.c
     value types / views / descriptor validation
-        ├── meiso_state.h + meiso_state.c
-        ├── meiso_stream.h + meiso_stream.c
-        ├── meiso_action.h + meiso_action.c
-        └── meiso_blob.h + meiso_blob.c
+        ├── include/meiso/core/state.h + src/core/meiso_state.c
+        ├── include/meiso/core/stream.h + src/core/meiso_stream.c
+        ├── include/meiso/core/action.h + src/core/meiso_action*.c
+        └── include/meiso/core/blob.h + src/core/meiso_blob.c
 
-meiso_descriptor_set.h + meiso_descriptor_set.c
+include/meiso/core/descriptor_set.h + src/core/meiso_descriptor_set.c
     fixed immutable descriptor snapshot; no generic state-machine dispatcher
 
 tests/

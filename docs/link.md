@@ -89,6 +89,18 @@ handle。Core `READY` 前 Runtime message 不得发出或交付。Core `READY` �
 不是不同 Edge。切换 interface 时 v0 建立新 Session，不得用相同 device identity
 伪装旧 Session 连续恢复。
 
+### 当前 v0 liveness 边界
+
+Session Core v0没有`PING/PONG`、协商idle deadline或心跳超时frame。当前实现只能从
+合法入站frame、EOF/RST、socket error或protocol failure得知对端/transport状态；event-loop的
+poll timeout和browser SSE keepalive都不是Link liveness证据。因此一条不关闭也不交付字节的
+half-open/black-hole TCP可能长时间保持未决；这是当前实现缺口，不得改写成已验恢复。
+
+如后续Profile选择显式heartbeat，它必须由版本化Session/wire冻结：参数有界且双方
+可验证，probe绑定当前SessionId并且最多一个outstanding，旧Session回应无效，超时进入
+sticky terminal并只允许fresh Session。heartbeat只能证明Link对端在协商时窗内回应，不能代替
+authentication、endpoint actual、application health或physical-output truth。
+
 ## Resource 交付
 
 | Resource | Session 内行为 | 中断/新 Session 行为 |

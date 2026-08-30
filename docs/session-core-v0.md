@@ -10,7 +10,7 @@ Core 拥有 connection：peer/boot/Session identity、exact protocol/Profile、h
 bounded wire、lifecycle 与 Runtime-message gate。Runtime 拥有 Resource Graph：capability、
 descriptor/instance、owner/schema/QoS、endpoint 和控制逻辑。Host SDK 拥有 Virtual Edge。
 
-`meiso_resource_core` 的四类 primitive 保持 session-agnostic；它们允许本地 truth、capture
+`meiso_core_resources` 的四类 primitive 保持 session-agnostic；它们允许本地 truth、capture
 或已发布 Blob 在离线时继续存在。跨 peer 路由由 Runtime 强制：只有 Core
 `READY` 且 Runtime route 有效时，remote message 才能进入对应 typed primitive。
 

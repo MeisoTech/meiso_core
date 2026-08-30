@@ -1,5 +1,6 @@
-#include "composition_session_v2.h"
-#include "meiso_runtime_scheduler.h"
+#include <meiso/internal/composition/session_v2.h>
+#include <meiso/runtime/scheduler.h>
+#include "composition_profile_fixture.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -152,7 +153,7 @@ static MeisoSessionConfig base_session_config(
         (MeisoSessionNonce){UINT64_C(0x3131313131313131), nonce_salt + 1U} :
         (MeisoSessionNonce){UINT64_C(0x4141414141414141), nonce_salt + 2U};
     config.protocol = (MeisoProtocolVersion){1U, 0U};
-    config.profile = *meiso_composition_scene_profile_v2();
+    config.profile = meiso_composition_internal_mrt0_v3_fixture_profile();
     config.limits = (MeisoSessionLimits){16384U, 8192U, 32U};
     return config;
 }
@@ -1130,7 +1131,8 @@ static bool test_composite_profile_catalog_builder(void)
     CHECK(meiso_composition_session_v2_configure_session(&configured) ==
           MEISO_COMPOSITION_SESSION_V2_OK);
     CHECK(meiso_profile_ref_equal(
-        configured.profile, *meiso_composition_scene_profile_v2()
+        configured.profile,
+        meiso_composition_internal_mrt0_v3_fixture_profile()
     ));
     CHECK(configured.limits.max_frame_bytes ==
               MEISO_COMPOSITION_SESSION_V2_MAX_FRAME_BYTES &&
@@ -1189,7 +1191,9 @@ static bool test_composite_profile_catalog_builder(void)
     }
     CHECK(activate_catalog(&pair, 1U));
 
-    CHECK(expect_profile_mismatch(*meiso_composition_scene_profile()));
+    CHECK(expect_profile_mismatch(
+        meiso_composition_internal_mrt0_v2_fixture_profile()
+    ));
     CHECK(expect_profile_mismatch(*meiso_wifi_telemetry_profile()));
     for (pair_index = 0U; pair_index < 6U; ++pair_index) {
         CHECK(test_builder_alias_pair(pair_index));

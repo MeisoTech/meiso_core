@@ -3,7 +3,7 @@
 > 状态：所选垂直切片的实现与联调规则；不是新的产品规范。通用语义由
 > [系统](system.md)、[Resource](resource.md)、[Runtime](runtime.md)和
 > [Link](link.md)拥有；字段与 canonical wire 由
-> [Wi-Fi telemetry Profile v0](../profiles/wifi-telemetry-v0/README.md)拥有。
+> [Wi-Fi telemetry Profile](../profiles/wifi/README.md)拥有。
 
 ## 1. 选择与非目标
 
@@ -14,7 +14,7 @@
 | Link bootstrap | 配置给出的 numeric IPv4 + TCP port；Host `connect`，Edge `listen/accept` |
 | Core | exact peer/Profile handshake、单一不恢复的 Session、bounded Resource delivery；Session 内可传递多个 Runtime desired |
 | Runtime | 一个 endpoint；Edge catalog、Host desired State、Edge actual State、Edge data Stream |
-| Profile | `WIFI_TLM/_PROFILE:v1` / `wifi-telemetry-v0` |
+| Profile | `WIFI_TLM/_PROFILE:v1` / `wifi-telemetry` |
 | Host 实现 | macOS foreground Dev Tool；保留有界 one-shot，`--interactive` 在同一 Session 接受 `apply(enabled=true/false)` 与 `close` |
 | Edge 实现 | K230D 大核 Linux foreground target；单连接、多 desired、一个有界 pending sample |
 
@@ -27,11 +27,11 @@ Direct IP 只是当前 bootstrap/transport 选择，不进入 Core identity，�
 
 | 路径 | 归属 | Host/Edge 开发者可依赖的边界 |
 |---|---|---|
-| `src/meiso_session.c`、`src/meiso_resource.c`、`src/meiso_state.c`、`src/meiso_stream.c` | portable Core | Session 与 State/Stream primitive；不理解 Wi-Fi |
-| `src/meiso_runtime.c` | portable Runtime core | catalog、State commit、production gate 与 Stream route；不读取 IP/sysfs |
-| `profiles/wifi-telemetry-v0/` | versioned Profile | capability、desired/effective 参数与 sample schema |
+| `src/core/meiso_session.c`、`src/core/meiso_resource.c`、`src/core/meiso_state.c`、`src/core/meiso_stream.c` | portable Core | Session 与 State/Stream primitive；不理解 Wi-Fi |
+| `src/runtime/meiso_runtime.c` | portable Runtime core | catalog、State commit、production gate 与 Stream route；不读取 IP/sysfs |
+| `profiles/wifi/` | versioned Profile | capability、desired/effective 参数与 sample schema |
 | `adapters/posix/meiso_posix_tcp.*` | transport adapter | 已连接 nonblocking stream 与 Session frame 的有界搬运；不 connect/listen |
-| `targets/k230d-linux/wifi_linux_adapter.*` | Edge private adapter | 私有 interface locator 到匿名 Linux telemetry 的映射 |
+| `targets/k230d-linux/adapters/wifi_linux_adapter.*` | Edge private adapter | 私有 interface locator 到匿名 Linux telemetry 的映射 |
 | `targets/k230d-linux/wifi_runtime_edge.c` | Edge target | listen、catalog、desired apply、actual、production 与 shutdown policy |
 | `devtools/macos/wifi_runtime_host.c` | Host Dev Tool | 可执行联调客户端；不是 Host SDK、Virtual Edge 或应用 API |
 | `devtools/web/wifi_runtime_dashboard/` | 可视化 Dev Tool | 固定 API 把用户意图交给 native Host，并投影脱敏 NDJSON；不解析 wire、不拥有 Runtime truth |

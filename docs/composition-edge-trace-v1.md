@@ -2,7 +2,7 @@
 
 ## 范围
 
-本格式记录固定 Composition Profile v3 simulator 的确定性输入，用于 Host 应用、fixture 与
+本格式记录固定 `COMPOSE_/_PROFILE:v1` simulator 的确定性输入，用于 Host 应用、fixture 与
 conformance 重放。它是 canonical in-memory bytes，不是 Link wire、文件系统 API、远程 transport、
 通用 backend 注册格式或 physical evidence。调用方自行持有存储并决定是否把完整 bytes 写入文件或
 transport；codec 不打开路径、不持 fd、不分配 heap、不读取 wall clock。

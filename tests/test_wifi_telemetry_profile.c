@@ -1,4 +1,4 @@
-#include "wifi_telemetry.h"
+#include <meiso/profiles/wifi_telemetry.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -176,7 +176,7 @@ static bool test_profile_contract(void)
     CHECK(endpoint->low == UINT64_C(0x454e44504f494e54));
     CHECK(capability_schema != NULL);
     CHECK(capability_schema->id.high == UINT64_C(0x574946495f534348));
-    CHECK(capability_schema->id.low == UINT64_C(0x4341505f56303030));
+    CHECK(capability_schema->id.low == UINT64_C(0x4341504142494c5f));
     CHECK(capability_schema->version == 1U);
 
     resources = meiso_wifi_telemetry_resources(&count);
@@ -187,7 +187,7 @@ static bool test_profile_contract(void)
     CHECK(resources[0].id.high == UINT64_C(0x574946495f544c4d));
     CHECK(resources[0].id.low == UINT64_C(0x4445535f53544154));
     CHECK(resources[0].schema.id.high == UINT64_C(0x574946495f534348));
-    CHECK(resources[0].schema.id.low == UINT64_C(0x4445535f56303030));
+    CHECK(resources[0].schema.id.low == UINT64_C(0x444553495245445f));
     CHECK(resources[0].schema.version == 1U);
     CHECK(resources[0].max_payload_size ==
         MEISO_WIFI_TELEMETRY_DESIRED_STATE_MAX_PAYLOAD_SIZE);
@@ -196,7 +196,7 @@ static bool test_profile_contract(void)
     CHECK(resources[1].id.high == UINT64_C(0x574946495f544c4d));
     CHECK(resources[1].id.low == UINT64_C(0x4143545f53544154));
     CHECK(resources[1].schema.id.high == UINT64_C(0x574946495f534348));
-    CHECK(resources[1].schema.id.low == UINT64_C(0x4143545f56303030));
+    CHECK(resources[1].schema.id.low == UINT64_C(0x41435455414c5f5f));
     CHECK(resources[1].schema.version == 1U);
     CHECK(resources[1].max_payload_size ==
         MEISO_WIFI_TELEMETRY_ACTUAL_STATE_MAX_PAYLOAD_SIZE);
@@ -205,7 +205,7 @@ static bool test_profile_contract(void)
     CHECK(resources[2].id.high == UINT64_C(0x574946495f544c4d));
     CHECK(resources[2].id.low == UINT64_C(0x444154415f535452));
     CHECK(resources[2].schema.id.high == UINT64_C(0x574946495f534348));
-    CHECK(resources[2].schema.id.low == UINT64_C(0x534d505f56303030));
+    CHECK(resources[2].schema.id.low == UINT64_C(0x53414d504c455f5f));
     CHECK(resources[2].schema.version == 1U);
     CHECK(resources[2].max_payload_size ==
         MEISO_WIFI_TELEMETRY_SAMPLE_WIRE_SIZE);

@@ -1,4 +1,4 @@
-#include "meiso_resource.h"
+#include <meiso/core/resource.h>
 
 #include "meiso_internal.h"
 

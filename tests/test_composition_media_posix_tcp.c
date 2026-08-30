@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "composition_media_posix_tcp.h"
+#include <meiso/adapters/posix/composition_media_tcp.h>
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -89,6 +89,8 @@ static MeisoCompositionMediaTransportConfig transport_config(
         meiso_composition_camera_media_resources(&camera_count);
     memset(&value, 0, sizeof(value));
     value.local_role = role;
+    value.active_route_mask =
+        MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK;
     value.scope.session_id.host_nonce = (MeisoSessionNonce){11U, 12U};
     value.scope.session_id.edge_nonce = (MeisoSessionNonce){13U, 14U};
     value.scope.catalog_generation = 17U;
@@ -663,7 +665,7 @@ static bool test_fragment_reject_is_nonterminal(void)
     CHECK(meiso_composition_media_frame_encode(
               &overlap,
               (MeisoMutableBuffer){wire, sizeof(wire)}, &wire_size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(raw_write_all(pair.edge_fd, wire, wire_size));
     CHECK(read_one_packet(
         pair.host_adapter, pair.host_fd,
@@ -716,7 +718,7 @@ static bool test_malformed_eof_and_reset_are_terminal(void)
         MEISO_COMPOSITION_MEDIA_FRAME_KEY;
     CHECK(meiso_composition_media_frame_encode(
               &frame, (MeisoMutableBuffer){wire, sizeof(wire)}, &wire_size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     memset(wire + 200U, 0, 4U);
     CHECK(raw_write_all(
         pair.edge_fd, wire, MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE

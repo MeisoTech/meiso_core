@@ -1,0 +1,126 @@
+@PACKAGE_INIT@
+
+set(MeisoGlass_VERSION "@PROJECT_VERSION@")
+set(
+    MeisoGlass_SUPPORTED_COMPONENTS
+    Core
+    Runtime
+    Profiles
+    Client
+    Posix
+    Composition
+    Simulation
+    Control
+    Host
+)
+
+if(NOT MeisoGlass_FIND_COMPONENTS)
+    set(MeisoGlass_FIND_COMPONENTS Core)
+endif()
+
+foreach(component IN LISTS MeisoGlass_FIND_COMPONENTS)
+    list(FIND MeisoGlass_SUPPORTED_COMPONENTS "${component}" component_index)
+    if(component_index EQUAL -1)
+        set(MeisoGlass_FOUND FALSE)
+        set(MeisoGlass_NOT_FOUND_MESSAGE "Unsupported component: ${component}")
+        return()
+    endif()
+endforeach()
+
+set(MeisoGlass_Core_FOUND FALSE)
+set(MeisoGlass_Runtime_FOUND FALSE)
+set(MeisoGlass_Profiles_FOUND FALSE)
+set(MeisoGlass_Client_FOUND FALSE)
+set(MeisoGlass_Posix_FOUND FALSE)
+set(MeisoGlass_Composition_FOUND FALSE)
+set(MeisoGlass_Simulation_FOUND FALSE)
+set(MeisoGlass_Control_FOUND FALSE)
+set(MeisoGlass_Host_FOUND FALSE)
+
+set(want_Core FALSE)
+set(want_Runtime FALSE)
+set(want_Profiles FALSE)
+set(want_Client FALSE)
+set(want_Posix FALSE)
+set(want_Composition FALSE)
+set(want_Simulation FALSE)
+set(want_Control FALSE)
+set(want_Host FALSE)
+foreach(component IN LISTS MeisoGlass_FIND_COMPONENTS)
+    set(want_${component} TRUE)
+endforeach()
+
+if(want_Host)
+    set(want_Client TRUE)
+    set(want_Control TRUE)
+    set(want_Posix TRUE)
+    set(want_Profiles TRUE)
+endif()
+if(want_Simulation)
+    set(want_Client TRUE)
+    set(want_Composition TRUE)
+endif()
+if(want_Control)
+    set(want_Posix TRUE)
+    set(want_Profiles TRUE)
+    set(want_Runtime TRUE)
+endif()
+if(want_Client)
+    set(want_Profiles TRUE)
+endif()
+if(want_Composition)
+    set(want_Profiles TRUE)
+    set(want_Runtime TRUE)
+endif()
+if(want_Posix)
+    set(want_Profiles TRUE)
+endif()
+if(want_Profiles)
+    set(want_Runtime TRUE)
+endif()
+if(want_Runtime)
+    set(want_Core TRUE)
+endif()
+
+set(package_dependency_missing FALSE)
+foreach(component
+        Core
+        Runtime
+        Profiles
+        Client
+        Posix
+        Composition
+        Simulation
+        Control
+        Host)
+    if(want_${component})
+        set(target_file "${CMAKE_CURRENT_LIST_DIR}/Meiso${component}Targets.cmake")
+        if(package_dependency_missing OR NOT EXISTS "${target_file}")
+            set(package_dependency_missing TRUE)
+            set(MeisoGlass_${component}_FOUND FALSE)
+            string(
+                APPEND MeisoGlass_NOT_FOUND_MESSAGE
+                "Missing installed component ${component}. "
+            )
+        else()
+            include("${target_file}")
+            set(MeisoGlass_${component}_FOUND TRUE)
+        endif()
+    endif()
+endforeach()
+
+check_required_components(MeisoGlass)
+
+unset(component)
+unset(component_index)
+unset(package_dependency_missing)
+unset(target_file)
+unset(want_Core)
+unset(want_Runtime)
+unset(want_Profiles)
+unset(want_Client)
+unset(want_Posix)
+unset(want_Composition)
+unset(want_Simulation)
+unset(want_Control)
+unset(want_Host)

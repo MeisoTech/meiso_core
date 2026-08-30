@@ -63,7 +63,8 @@ Virtual Edge 不是透明远程内存：
 - simulator、in-process loopback、recorded replay 和 physical Edge 可以实现同一 facade，
   但各自证据范围不同。
 
-当前Composition Profile v3有两个可执行backend：remote/loopback HostApp adapter投影完整已实现子集；
+当前 `COMPOSE_/_PROFILE:v1` 有两个可执行 backend：remote/loopback
+HostRuntime adapter 投影完整已实现子集；
 caller-owned deterministic simulator以显式activate/step实现Wi-Fi、可选DeviceTelemetry State/Stream、
 render/camera media State/read，以及显式opt-in的Mesh publish→SceneStore/C2→synthetic offscreen
 RenderResult闭环。两者返回同一种opaque handle，application-only TU不读取backend tag。Simulator的
@@ -71,7 +72,7 @@ Composition子组件、pending Mesh和媒体buffer均在caller arena内，不读
 不分配heap，也不把recorded sample/frame或synthetic render冒充physical truth；Composition未启用时
 Blob/Composition操作明确`unsupported`，DeviceTelemetry未启用时SET_DEVICE同样明确`unsupported`。
 
-同一native Composition Debug Host现在提供显式`--simulator --interactive`入口，Dashboard以
+同一native Composition Host Bridge现在提供显式`--simulator --interactive`入口，Dashboard以
 `--native-host ... --native-simulator`启动真实子进程，并通过与remote模式相同的closed NDJSON命令和
 typed snapshot消费上述opaque handle。该模式不读取remote config、不连接control/media TCP、不建立
 Session/catalog wire。native simulator显式启用caller-owned CPU raster：Dashboard把模式标为
@@ -175,60 +176,22 @@ Core 当前不定义：
 
 ## 当前实现范围
 
-当前公开 C11 实现已经包含 `meiso_resource_core`：共同值类型与 descriptor validation、
-固定 immutable descriptor snapshot，以及四种 bounded in-process Resource primitive。
+当前 public C11 baseline 已实现：
 
-这是 Resource semantic core，不是本页所定义的完整产品系统。当前 `meiso_session_core`
-已实现 exact protocol/Profile、四步 handshake、
-bounded wire 和 Runtime-message gate；命名的状态机/wire/integration tests 支持
-`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。POSIX platform layer 另有 caller-owned
-connected-stream adapter，并在 macOS `AF_INET` loopback TCP 上通过 bounded partial-I/O、
-failure 与双向 payload 测试。当前 portable `meiso_runtime` 已实现 READY Session 绑定、原子
-catalog、bounded endpoint-incarnation history、Core State desired/actual exact commit gate 与
-Core Stream data route；source v0 / wire v2 的三套 Host test 支持
-`HOST_SEMANTIC_VERIFIED / HOST_WIRE_VERIFIED`。所选 `wifi-telemetry-v0` slice 另有 K230D Linux
-probe/adapter、numeric direct-IP target 与一次受控 board run；这些是 Profile/platform evidence，
-不是portable Runtime的通用能力。Composition Profile v3 已有首个 Host-facing `EdgeHandle` facade，
-把 accepted 6/18 graph、typed State/Stream/Blob/Composition 与 external media read 投影给应用；它
-已有固定HostApp adapter与caller-owned deterministic simulator两种backend evidence；后者覆盖Wi-Fi、
-可选DeviceTelemetry、两路media与离线Mesh/Scene/Presentation/RenderResult子集。通用hotplug、Action、
-Edge→Host/并行/resumable Blob route、通用plugin backend、
-discovery、通用SDK/backend reconnect/resume与security adapter仍未完成。固定remote Dashboard已有更窄的
-host-local supervisor：typed control transport/Session/catalog terminal会废弃old child/truth/frame，
-退避启动fresh Host child并回放最新browser-owned完整intent；它不恢复旧Session/handle，也不证明Edge或
-target network recovery。R2a另有Composition Profile v2
-专用的caller-owned fair scheduler；它是Runtime--SDK对象，不是Core/wire或通用产品QoS。
-`composition-scene-lab-v0` 已分层完成 C0 codec、C1 SceneStore、C2 coordinator 与 R1 portable
-Blob carriage。Profile v1 保留 MRT0 v2，明确拒绝 Blob/IMMUTABLE route；Profile v2 显式选择
-MRT0 v3 并允许 Host→Edge Blob；R2a进一步完成exact 3/9/920 combined builder与portable scheduler。
-R2b0又在真实`127.0.0.1` AF_INET `SOCK_STREAM`上用双方nonblocking POSIX adapter、17-byte I/O与双方
-scheduler贯通Blob→Core publish→显式visibility、Scene/Plan→C2 ACTIVE及两条exact Stream route，形成
-loopback happy-path semantic/wire/transport evidence。R2b0自身不覆盖wrong Profile、catalog replacement、
-reconnect、backpressure、fair-contention stress、Host editor或K230D renderer。R2b1又在同一真实TCP
-Session内保持Plan与cube publication不变，完成TRS、camera、共享mesh新增对象、删除对象、actual
-epoch cut、drained disable及独立Wi-Fi continuation；R2b1自身不覆盖catalog replacement、RST/reconnect、
-max-Blob与target。R2b2又在同一Session内完成catalog g1 staged→atomic g2 accept、全route scheduler
-rebind、Runtime gate reset/high-water preservation、capability-generation-2 coordinator scope/visibility/
-world重建及Blob cache duplicate revalidation。R2b3又以真实RST使旧Session/Runtime/Scheduler/route/
-epoch fail closed；SceneStore旧world保持到不同SessionId/新arena连接上的新coordinator开始control scope，
-此时才清world/visibility并使旧coordinator/token/world失效。随后显式重发State、重建visibility/world/
-gate；同process Core cache duplicate可复用。R2b4再在该新Session上用64个4096-byte `CHUNK`传输exact
-262144-byte `MSH0`，证明无逐块ACK、262145-byte本地capacity拒绝、Edge反向Wi-Fi/RenderResult及
-Core publish→显式visibility→scene swap的资源边界。该结果不是自动resume或fresh Edge；wrong Profile、
-backpressure、SCAP 16-slot aggregate与target仍未覆盖。R2b5又在真实AF_INET上验证Composition v1/
-Wi-Fi Profile对Composition v2的handshake fail-closed，且没有SessionId、catalog或Runtime frame；
-两方向分别制造`WRITE_WOULD_BLOCK`后，scheduler `TX_BUSY`对完整scheduler/runtime/session/adapter
-arena、source与output原字节零推进，排空后已排队frame exact-once到达。direction-local saturated work
-分别固定为Host 5 slots（4 control + Blob）与Edge 6 slots（4 control + 同一data round的Wi-Fi/
-RenderResult）。两段依次执行，不证明simultaneous saturation、wall-clock/latency/throughput/
-performance、K230/renderer或安全transport。K1a的portable synthetic reference renderer随后在Host
-caller arena中固定两个320×240 color/depth target与两个job，提供source-commit-pinned off-screen
-golden；offline runner把BlobStore、SceneStore、Coordinator与renderer串成一次`baseline_cube_once`。
-这两项是`HOST_OFFSCREEN_REFERENCE_VERIFIED`，不是Runtime/Session/State/Stream路径，也没有执行
-offline lease、K230D backend、CMA、scanout或physical presentation。official K230 Linux toolchain已
-两次byte-exact构建candidate，故build为`TARGET_BUILD_VERIFIED`；ELF未执行，runtime仍为
-`TARGET_NOT_RUN`。
-Resource semantic core v0 的准确 conformance image 已在 K230D
-上人工执行并通过，但这不证明 Session、TCP 或安全。实现状态和平台证据见
-[系统进展](system-report.md)；实现边界见 [Session Core v0](session-core-v0.md)与
-[Runtime negotiation core v0](runtime-core-v0.md)。
+- caller-owned bounded Resource primitives；
+- exact Profile handshake、一次性 Session、bounded wire 与 POSIX connected-stream adapter；
+- 正式 Composition 路径的 MRT0 v4 catalog、desired/actual、production gate、Blob 与
+  inline/external route；MRT0 v2/v3 只作内部 compatibility fixture；
+- `COMPOSE_/_PROFILE:v1` 的 MRT0 v4 固定 6/18 graph、opaque Host `EdgeHandle`、
+  simulator/trace；
+- K230D Linux Wi-Fi/Device/GC2093、Blob/Scene/C2、CPU offscreen raster 与双路 media；
+- native Composition Host Bridge 与 loopback Dashboard 的 typed editor/preview。
+
+实现不等于全部产品能力。当前没有安全 transport、Session resume、通用 discovery/plugin、
+自动 Edge restart、Link heartbeat、physical display/scanout 或长期性能/soak 保证。固定 Dashboard
+只能在 Host 本地废弃 terminal child 并以 fresh child 重放 browser-owned 最新完整 intent；它不恢复
+旧 Session/handle，也不证明 target network recovery。
+
+当前实现、target evidence 与独立未验证边界统一见[系统状态](system-report.md)；具体 Core/Profile
+实现合同见[Session Core v0](session-core-v0.md)、[Runtime Core v0](runtime-core-v0.md)和
+[Host 集成回执](host-integration-receipt-v0.md)。

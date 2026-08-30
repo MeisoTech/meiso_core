@@ -1,9 +1,9 @@
-#include "composition_coordinator.h"
-#include "composition_scene.h"
-#include "meiso_blob.h"
-#include "meiso_state.h"
-#include "meiso_stream.h"
-#include "scene_store.h"
+#include <meiso/composition/coordinator.h>
+#include <meiso/profiles/composition/scene.h>
+#include <meiso/core/blob.h>
+#include <meiso/core/state.h>
+#include <meiso/core/stream.h>
+#include <meiso/composition/scene_store.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -23,10 +23,10 @@
 
 /* Independently computed C0 SHA-256 vector; not produced by this API. */
 static const uint8_t PLAN_DIGEST_GOLDEN[MEISO_SHA256_DIGEST_SIZE] = {
-    0xf6U, 0x3eU, 0x4cU, 0xc6U, 0x12U, 0x96U, 0x53U, 0xe4U,
-    0x29U, 0x9dU, 0x33U, 0x3cU, 0x49U, 0x9dU, 0x46U, 0x4bU,
-    0x22U, 0xfbU, 0xf2U, 0x18U, 0x26U, 0x3cU, 0x62U, 0xecU,
-    0xf6U, 0xcaU, 0x76U, 0xb2U, 0xbcU, 0xcbU, 0x11U, 0x39U
+    0xd2U, 0x3cU, 0x94U, 0x65U, 0x9dU, 0xd8U, 0xf0U, 0xcbU,
+    0xe4U, 0x12U, 0x9dU, 0x8dU, 0x97U, 0x63U, 0x96U, 0x40U,
+    0x40U, 0xe7U, 0x28U, 0x45U, 0xc8U, 0x10U, 0xd5U, 0xa1U,
+    0x83U, 0x84U, 0xdaU, 0xcaU, 0x2dU, 0x00U, 0xc6U, 0x4eU
 };
 
 typedef struct {
@@ -444,7 +444,7 @@ static MeisoCompositionScenePresentationPlan plan_value(
     plan.depth_format = MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32;
     plan.max_result_hz = MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ;
     plan.offline_lease_ms = offline_lease_ms;
-    if (!meiso_composition_coordinator_plan_digest(&plan, digest)) {
+    if (!meiso_composition_scene_plan_digest(&plan, digest)) {
         memset(&plan, 0, sizeof(plan));
     } else {
         memcpy(plan.candidate_digest, digest, sizeof(digest));
@@ -471,13 +471,13 @@ static bool test_plan_digest_independent_golden(void)
     plan.depth_format = MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32;
     plan.max_result_hz = MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ;
     plan.offline_lease_ms = 1000U;
-    CHECK(meiso_composition_coordinator_plan_digest(&plan, digest));
+    CHECK(meiso_composition_scene_plan_digest(&plan, digest));
     CHECK(memcmp(digest, PLAN_DIGEST_GOLDEN, sizeof(digest)) == 0);
 
     plan.prepared_token_echo_present = true;
     fill_nonce(plan.prepared_token_echo, 0x21U);
     memset(digest, 0, sizeof(digest));
-    CHECK(meiso_composition_coordinator_plan_digest(&plan, digest));
+    CHECK(meiso_composition_scene_plan_digest(&plan, digest));
     CHECK(memcmp(digest, PLAN_DIGEST_GOLDEN, sizeof(digest)) == 0);
     return true;
 }
@@ -1135,7 +1135,7 @@ static bool test_async_failures_and_late_completion(void)
 
     baseline_plan = plan;
     baseline_plan.flags = MEISO_COMPOSITION_SCENE_PLAN_USE_SAFETY_FRAME;
-    CHECK(meiso_composition_coordinator_plan_digest(
+    CHECK(meiso_composition_scene_plan_digest(
         &baseline_plan, nonce
     ));
     memcpy(baseline_plan.candidate_digest, nonce, sizeof(nonce));
@@ -1307,7 +1307,7 @@ static bool test_token_scene_supersede_and_generation_guards(void)
     memset(conflict.prepared_token_echo, 0,
            sizeof(conflict.prepared_token_echo));
     conflict.flags = MEISO_COMPOSITION_SCENE_PLAN_USE_SAFETY_FRAME;
-    CHECK(meiso_composition_coordinator_plan_digest(&conflict, nonce));
+    CHECK(meiso_composition_scene_plan_digest(&conflict, nonce));
     memcpy(conflict.candidate_digest, nonce, sizeof(nonce));
     CHECK(publish_plan(
         &fixture, 8U, true, &conflict, time_point(280U), &received_plan,
@@ -1572,7 +1572,7 @@ static bool test_api_memory_alias_and_time_guards(void)
     ));
 
     plan = plan_value(1U, 0U);
-    CHECK(!meiso_composition_coordinator_plan_digest(
+    CHECK(!meiso_composition_scene_plan_digest(
         &plan, plan.candidate_digest
     ));
     CHECK(meiso_composition_scene_presentation_plan_encode(

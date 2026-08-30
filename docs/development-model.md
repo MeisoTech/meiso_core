@@ -87,7 +87,7 @@ Session Core 已有 Host semantic/wire evidence；POSIX adapter 只有指定 mac
 transport evidence。[Runtime negotiation core v0](runtime-core-v0.md) 已冻结 bounded catalog、
 endpoint-incarnation history、Core State desired/actual exact commit、production gate、Core
 Stream data 与 wire v2，并以真实 Session 和 State/Stream primitive 建立 Host evidence。
-当前选择的 [`wifi-telemetry-v0`](../profiles/wifi-telemetry-v0/README.md) 已固定 capability、
+当前选择的 [Wi-Fi telemetry Profile](../profiles/wifi/README.md) 已固定 capability、
 desired/effective 参数与匿名 sample；K230D Linux target 以私有配置与 Linux probe 的交集发布
 catalog，macOS Host Dev Tool 只依赖相同 Profile。两端的 precise locator/config、无 subscription
 控制序列、构建方法和 evidence gate 见

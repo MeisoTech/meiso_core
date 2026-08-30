@@ -1,4 +1,4 @@
-#include "meiso_session.h"
+#include <meiso/core/session.h>
 
 #include "meiso_test_support.h"
 

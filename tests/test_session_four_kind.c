@@ -1,9 +1,9 @@
-#include "meiso_action.h"
-#include "meiso_blob.h"
-#include "meiso_descriptor_set.h"
-#include "meiso_session.h"
-#include "meiso_state.h"
-#include "meiso_stream.h"
+#include <meiso/core/action.h>
+#include <meiso/core/blob.h>
+#include <meiso/core/descriptor_set.h>
+#include <meiso/core/session.h>
+#include <meiso/core/state.h>
+#include <meiso/core/stream.h>
 
 #include "meiso_test_support.h"
 

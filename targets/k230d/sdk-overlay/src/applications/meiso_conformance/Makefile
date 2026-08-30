@@ -39,19 +39,23 @@ $(error staged SDK application Makefile differs from the locked public source)
 endif
 
 override MEISO_REQUIRED_FILES := \
-	include/meiso_resource.h \
-	include/meiso_state.h \
-	include/meiso_stream.h \
-	include/meiso_action.h \
-	include/meiso_blob.h \
-	include/meiso_descriptor_set.h \
-	src/meiso_resource.c \
-	src/meiso_state.c \
-	src/meiso_stream.c \
-	src/meiso_action.c \
-	src/meiso_blob.c \
-	src/meiso_descriptor_set.c \
-	src/meiso_internal.h \
+	include/meiso/core/resource.h \
+	include/meiso/core/state.h \
+	include/meiso/core/stream.h \
+	include/meiso/core/action.h \
+	include/meiso/core/blob.h \
+	include/meiso/core/descriptor_set.h \
+	src/core/meiso_resource.c \
+	src/core/meiso_state.c \
+	src/core/meiso_stream.c \
+	src/core/meiso_blob.c \
+	src/core/meiso_descriptor_set.c \
+	src/core/meiso_action.c \
+	src/core/meiso_action_private.c \
+	src/core/meiso_action_caller.c \
+	src/core/meiso_action_executor.c \
+	src/core/meiso_action_private.h \
+	src/core/meiso_internal.h \
 	tests/meiso_test_support.h \
 	tests/test_resource.c \
 	tests/test_state.c \
@@ -78,9 +82,12 @@ override MEISO_CORE_NAMES := \
 	meiso_resource \
 	meiso_state \
 	meiso_stream \
-	meiso_action \
 	meiso_blob \
-	meiso_descriptor_set
+	meiso_descriptor_set \
+	meiso_action \
+	meiso_action_private \
+	meiso_action_caller \
+	meiso_action_executor
 override MEISO_SUITE_NAMES := \
 	resource \
 	state \
@@ -97,7 +104,7 @@ override DEPS := $(OBJS:.o=.d)
 
 override CPPFLAGS := \
 	-I$(MEISO_PUBLIC_ROOT_RESOLVED)/include \
-	-I$(MEISO_PUBLIC_ROOT_RESOLVED)/src \
+	-I$(MEISO_PUBLIC_ROOT_RESOLVED)/src/core \
 	-I$(MEISO_PUBLIC_ROOT_RESOLVED)/tests \
 	-I$(SDK_SRC_ROOT_DIR)/include \
 	-include generated/autoconf.h \
@@ -133,7 +140,7 @@ $(BIN): $(OBJS) | $(BIN_DIR)
 	$(Q)$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) -o $@
 	$(Q)$(SIZE) $@
 
-$(BUILD)/core/%.o: $(MEISO_PUBLIC_ROOT_RESOLVED)/src/%.c | $(BUILD)/core
+$(BUILD)/core/%.o: $(MEISO_PUBLIC_ROOT_RESOLVED)/src/core/%.c | $(BUILD)/core
 	@$(ECHO) "[CC] $@"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 

@@ -1,4 +1,4 @@
-#include "meiso_runtime.h"
+#include <meiso/runtime/runtime.h>
 
 #include "meiso_test_support.h"
 

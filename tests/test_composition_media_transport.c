@@ -1,4 +1,4 @@
-#include "composition_media_transport.h"
+#include <meiso/profiles/composition/media_transport.h>
 
 #include <stdalign.h>
 #include <stddef.h>
@@ -464,7 +464,7 @@ static bool encode_frame(
               (MeisoMutableBuffer){out_packet->bytes,
                                    sizeof(out_packet->bytes)},
               &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     out_packet->size = size;
     return true;
 }
@@ -483,14 +483,15 @@ static bool receive_frame(
     return true;
 }
 
-static bool test_memory_init_and_alias_contract(void)
+static bool test_memory_init_and_validation_contract(void)
 {
     MeisoCompositionMediaTransportConfig config =
         transport_config(MEISO_SESSION_ROLE_HOST);
     MeisoCompositionMediaTransportConfig invalid = config;
-    MeisoCompositionMediaTransportConfig legacy = config;
+    MeisoCompositionMediaTransportConfig zero_mask = config;
     TestArena arena;
-    TestArena legacy_arena;
+    TestArena zero_mask_arena;
+    TestArena zero_mask_arena_before;
     TestArena before;
     size_t required = 0U;
     size_t alignment = 0U;
@@ -499,8 +500,10 @@ static bool test_memory_init_and_alias_contract(void)
     MeisoCompositionMediaTransport *transport =
         (MeisoCompositionMediaTransport *)(uintptr_t)0x1234U;
     MeisoCompositionMediaTransport *transport_before = transport;
-    MeisoCompositionMediaTransport *legacy_transport = NULL;
-    MeisoCompositionMediaTransportSnapshot legacy_snapshot;
+    MeisoCompositionMediaTransport *zero_mask_transport =
+        (MeisoCompositionMediaTransport *)(uintptr_t)0x5678U;
+    MeisoCompositionMediaTransport *zero_mask_transport_before =
+        zero_mask_transport;
     union {
         max_align_t alignment;
         MeisoCompositionMediaTransportConfig config;
@@ -529,15 +532,23 @@ static bool test_memory_init_and_alias_contract(void)
           ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
     CHECK(size_sentinel == 91U && alignment_sentinel == 92U);
 
-    legacy.active_route_mask = 0U;
+    zero_mask.active_route_mask = 0U;
+    size_sentinel = 91U;
+    alignment_sentinel = 92U;
+    CHECK(meiso_composition_media_transport_memory_required(
+              &zero_mask, &size_sentinel, &alignment_sentinel
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
+    CHECK(size_sentinel == 91U && alignment_sentinel == 92U);
+    memset(&zero_mask_arena, 0xa5, sizeof(zero_mask_arena));
+    zero_mask_arena_before = zero_mask_arena;
     CHECK(meiso_composition_media_transport_init(
-              &legacy,
-              (MeisoMutableBuffer){legacy_arena.bytes, required},
-              &legacy_transport
-          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
-    CHECK(snapshot(legacy_transport, &legacy_snapshot));
-    CHECK(legacy_snapshot.configured_active_route_mask ==
-          MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK);
+              &zero_mask,
+              (MeisoMutableBuffer){zero_mask_arena.bytes, required},
+              &zero_mask_transport
+          ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_CONFIG);
+    CHECK(zero_mask_transport == zero_mask_transport_before &&
+          memcmp(&zero_mask_arena, &zero_mask_arena_before,
+                 sizeof(zero_mask_arena)) == 0);
     config_alias.config = config;
     alignment_sentinel = 92U;
     CHECK(meiso_composition_media_transport_memory_required(
@@ -587,7 +598,7 @@ static bool test_memory_init_and_alias_contract(void)
     return true;
 }
 
-static bool test_handshake_would_block_and_aliases(void)
+static bool test_handshake_would_block_and_overlap_guards(void)
 {
     MediaPair pair;
     OwnedPacket open;
@@ -631,7 +642,7 @@ static bool test_handshake_would_block_and_aliases(void)
         CHECK(bind.ref.kind == MEISO_COMPOSITION_MEDIA_PACKET_BIND);
         CHECK(meiso_composition_media_binding_decode(
                   (MeisoByteView){bind.bytes, bind.size}, &decoded
-              ) == MEISO_COMPOSITION_SESSION_V3_OK);
+              ) == MEISO_COMPOSITION_PROFILE_OK);
         CHECK(binding_equal(&decoded, &pair.edge_config.routes[i].binding));
         CHECK(complete_and_receive(
             pair.edge, pair.host, &bind,
@@ -833,7 +844,7 @@ static bool check_single_active_route(
               &full_edge.routes[inactive_route_index].binding,
               (MeisoMutableBuffer){packet.bytes, sizeof(packet.bytes)},
               &packet_size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     packet.size = packet_size;
     CHECK(meiso_composition_media_transport_receive_packet(
               pair.host, (MeisoByteView){packet.bytes, packet.size}
@@ -1360,8 +1371,8 @@ static bool test_terminal_scope_and_no_resurrection(void)
 
 int main(void)
 {
-    if (!test_memory_init_and_alias_contract() ||
-        !test_handshake_would_block_and_aliases() ||
+    if (!test_memory_init_and_validation_contract() ||
+        !test_handshake_would_block_and_overlap_guards() ||
         !test_active_route_masks() ||
         !test_edge_queue_replacement_and_fragment_rr() ||
         !test_host_reassembly_failures_and_latest() ||

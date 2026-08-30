@@ -1,4 +1,4 @@
-#include "meiso_state.h"
+#include <meiso/core/state.h>
 
 #include "meiso_test_support.h"
 

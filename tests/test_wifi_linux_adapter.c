@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "wifi_linux_adapter.h"
+#include <meiso/edge/linux/wifi.h>
 
 #include <stddef.h>
 #include <stdint.h>

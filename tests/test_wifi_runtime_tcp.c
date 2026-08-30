@@ -1,8 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "meiso_posix_tcp.h"
-#include "meiso_runtime.h"
-#include "wifi_telemetry.h"
+#include <meiso/adapters/posix/tcp.h>
+#include <meiso/runtime/runtime.h>
+#include <meiso/profiles/wifi_telemetry.h>
 
 #include <arpa/inet.h>
 #include <errno.h>

@@ -1,11 +1,12 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "composition_session_v2.h"
-#include "meiso_blob.h"
-#include "meiso_posix_tcp.h"
-#include "meiso_runtime_scheduler.h"
-#include "meiso_state.h"
-#include "meiso_stream.h"
+#include <meiso/internal/composition/session_v2.h>
+#include <meiso/core/blob.h>
+#include <meiso/adapters/posix/tcp.h>
+#include <meiso/runtime/scheduler.h>
+#include <meiso/core/state.h>
+#include <meiso/core/stream.h>
+#include "composition_profile_fixture.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -381,7 +382,7 @@ static MeisoSessionConfig base_session_config(
         (MeisoSessionNonce){UINT64_C(0x3131313131313131), nonce_salt + 1U} :
         (MeisoSessionNonce){UINT64_C(0x4141414141414141), nonce_salt + 2U};
     config.protocol = (MeisoProtocolVersion){1U, 0U};
-    config.profile = *meiso_composition_scene_profile_v2();
+    config.profile = meiso_composition_internal_mrt0_v3_fixture_profile();
     config.limits = (MeisoSessionLimits){16384U, 8192U, 32U};
     return config;
 }
@@ -2720,11 +2721,11 @@ static bool test_wrong_profile_fails_closed_over_tcp(void)
     TcpFixture positive;
 
     CHECK(expect_wrong_profile(
-        *meiso_composition_scene_profile(), 100U
+        meiso_composition_internal_mrt0_v2_fixture_profile(), 100U
     ));
     CHECK(expect_wrong_profile(*meiso_wifi_telemetry_profile(), 200U));
     CHECK(initialize_profile_pair(
-        &positive, *meiso_composition_scene_profile_v2(), 300U
+        &positive, meiso_composition_internal_mrt0_v3_fixture_profile(), 300U
     ));
     CHECK(drive_ready(&positive));
     CHECK(session_ready(positive.host.session) &&

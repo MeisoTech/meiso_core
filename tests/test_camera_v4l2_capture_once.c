@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "camera_v4l2_adapter.h"
+#include <meiso/edge/linux/camera_v4l2.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -26,7 +26,7 @@ enum { FAKE_FD = 73 };
 #define FAKE_MAPPING_BYTES 118784U
 
 #ifdef MEISO_K230_LINUX_TARGET
-#define EXPECTED_BUILD_TARGET "k230d_linux_candidate"
+#define EXPECTED_BUILD_TARGET "k230d_linux"
 #else
 #define EXPECTED_BUILD_TARGET "native_host"
 #endif

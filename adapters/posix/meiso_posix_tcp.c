@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "meiso_posix_tcp.h"
+#include <meiso/adapters/posix/tcp.h>
 
 #include <errno.h>
 #include <fcntl.h>

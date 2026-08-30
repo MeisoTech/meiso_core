@@ -1,4 +1,4 @@
-#include "lab_protocol.h"
+#include <meiso/internal/lab/four_kind_protocol.h>
 
 #include <stdio.h>
 #include <string.h>

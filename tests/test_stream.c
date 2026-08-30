@@ -1,4 +1,4 @@
-#include "meiso_stream.h"
+#include <meiso/core/stream.h>
 
 #include "meiso_test_support.h"
 

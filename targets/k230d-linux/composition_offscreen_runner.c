@@ -1,8 +1,8 @@
-#include "composition_coordinator.h"
-#include "composition_reference_renderer.h"
-#include "composition_scene.h"
-#include "meiso_blob.h"
-#include "scene_store.h"
+#include <meiso/composition/coordinator.h>
+#include <meiso/composition/reference_renderer.h>
+#include <meiso/profiles/composition/scene.h>
+#include <meiso/core/blob.h>
+#include <meiso/composition/scene_store.h>
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -22,7 +22,7 @@ enum {
 
 #ifdef MEISO_K230_LINUX_TARGET
 #define RUNNER_VERIFICATION_LABEL "OFFSCREEN_REFERENCE_VECTOR_PASSED"
-#define RUNNER_BUILD_TARGET "k230d_linux_candidate"
+#define RUNNER_BUILD_TARGET "k230d_linux"
 #else
 #define RUNNER_VERIFICATION_LABEL "HOST_OFFSCREEN_REFERENCE_VERIFIED"
 #define RUNNER_BUILD_TARGET "native_host"
@@ -568,7 +568,7 @@ static bool build_plan(Runner *runner)
         MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32;
     scratch->plan.max_result_hz = MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ;
     scratch->plan.offline_lease_ms = 1000U;
-    if (!meiso_composition_coordinator_plan_digest(&scratch->plan, digest)) {
+    if (!meiso_composition_scene_plan_digest(&scratch->plan, digest)) {
         return false;
     }
     memcpy(scratch->plan.candidate_digest, digest, sizeof(digest));
@@ -831,7 +831,7 @@ static bool write_receipt(Runner *runner, FILE *output)
         scratch->line, sizeof(scratch->line),
         "{\"type\":\"composition_offscreen\",\"schema\":1,"
         "\"verification\":\"%s\",\"build_target\":\"%s\","
-        "\"profile\":\"composition-scene-lab-v0\","
+        "\"contract\":\"composition-scene\","
         "\"scenario\":\"baseline_cube_once\"}",
         RUNNER_VERIFICATION_LABEL, RUNNER_BUILD_TARGET
     );

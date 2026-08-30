@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "device_telemetry_linux_adapter.h"
+#include <meiso/edge/linux/device_telemetry.h>
 
 #include <errno.h>
 #include <stddef.h>

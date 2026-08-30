@@ -1,5 +1,5 @@
-#include "meiso_runtime.h"
-#include "wifi_telemetry.h"
+#include <meiso/runtime/runtime.h>
+#include <meiso/profiles/wifi_telemetry.h>
 
 #include "meiso_test_support.h"
 

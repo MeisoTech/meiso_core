@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
-#include "camera_v4l2_adapter.h"
+#include <meiso/edge/linux/camera_v4l2.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -416,8 +416,10 @@ static bool start_and_check(Fixture *fixture)
           snapshot.queued_buffer_count == 4U && snapshot.stream_on &&
           !snapshot.frame_borrowed && snapshot.mapped_bytes ==
               UINT64_C(4) * MEISO_CAMERA_V4L2_SIZE_IMAGE &&
-          snapshot.last_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
-          snapshot.last_error == 0 &&
+          snapshot.primary_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.primary_error == 0 &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           snapshot.arena_bytes == fixture->arena_size);
     return true;
 }
@@ -468,8 +470,11 @@ static bool test_init_start_stop_and_rollback(void)
           MEISO_CAMERA_V4L2_START_INSUFFICIENT_BUFFERS);
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_STOPPED &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_REQUEST_BUFFERS &&
+          snapshot.primary_error == ENOBUFS &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           fixture.kernel.request_zero_calls == 1U &&
           fixture.kernel.close_calls == 1U);
     fixture.kernel.returned_buffer_count = 4U;
@@ -493,9 +498,11 @@ static bool test_init_start_stop_and_rollback(void)
           fixture.kernel.close_calls == 1U &&
           meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_STOPPED &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_MAP_BUFFER &&
-          snapshot.last_error == ENOMEM);
+          snapshot.primary_error == ENOMEM &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0);
     fixture_destroy(&fixture);
     return true;
 }
@@ -521,6 +528,9 @@ static bool run_start_failure_case(uint32_t variant)
         MEISO_CAMERA_V4L2_FAILURE_QUERY_BUFFER,
         MEISO_CAMERA_V4L2_FAILURE_QUEUE_BUFFER,
         MEISO_CAMERA_V4L2_FAILURE_STREAM_ON
+    };
+    static const int expected_error[8] = {
+        EACCES, ENOTSUP, EIO, ENOTSUP, ENOMEM, EIO, EIO, EIO
     };
     Fixture fixture;
     MeisoCameraV4l2Snapshot snapshot;
@@ -569,7 +579,10 @@ static bool run_start_failure_case(uint32_t variant)
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_STOPPED &&
           snapshot.run_generation == 0U &&
-          snapshot.last_failure_stage == expected_stage[variant] &&
+          snapshot.primary_failure_stage == expected_stage[variant] &&
+          snapshot.primary_error == expected_error[variant] &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           !snapshot.stream_on && snapshot.mapped_buffer_count == 0U &&
           snapshot.queued_buffer_count == 0U &&
           fixture.kernel.close_calls == (variant == 0U ? 0U : 1U));
@@ -758,8 +771,11 @@ static bool test_zero_and_equal_timestamp_then_decrease(void)
     }
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
-          snapshot.last_failure_stage ==
-              MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT);
+          snapshot.primary_failure_stage ==
+              MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+          snapshot.primary_error == EPROTO &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0);
     fixture_destroy(&fixture);
     return true;
 }
@@ -781,8 +797,11 @@ static bool test_contract_failure_terminal_and_cleanup_retry(void)
     }
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+          snapshot.primary_error == EPROTO &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           snapshot.last_dequeue.present &&
           snapshot.last_dequeue.bytes_used ==
               MEISO_CAMERA_V4L2_SIZE_IMAGE - 1U &&
@@ -819,9 +838,6 @@ static bool test_contract_failure_terminal_and_cleanup_retry(void)
           snapshot.cleanup_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_STREAM_OFF &&
           snapshot.cleanup_error == EBUSY &&
-          snapshot.last_failure_stage ==
-              MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
-          snapshot.last_error == EPROTO &&
           snapshot.last_dequeue.reject_reason ==
               MEISO_CAMERA_V4L2_FRAME_REJECT_BYTES_USED &&
           !snapshot.stream_on && snapshot.mapped_buffer_count == 0U);
@@ -838,8 +854,11 @@ static bool test_contract_failure_terminal_and_cleanup_retry(void)
           meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
           snapshot.mapped_buffer_count == 1U &&
-          snapshot.last_failure_stage ==
-              MEISO_CAMERA_V4L2_FAILURE_UNMAP_BUFFER);
+          snapshot.primary_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.primary_error == 0 &&
+          snapshot.cleanup_failure_stage ==
+              MEISO_CAMERA_V4L2_FAILURE_UNMAP_BUFFER &&
+          snapshot.cleanup_error == EIO);
     CHECK(meiso_camera_v4l2_stop(fixture.adapter) ==
               MEISO_CAMERA_V4L2_STOP_TERMINAL &&
           fixture.kernel.unmap_calls[2] == 2U &&
@@ -871,11 +890,15 @@ static bool test_cleanup_failure_stages_and_close_once(void)
               MEISO_CAMERA_V4L2_STOP_TERMINAL);
         CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
               snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
-              snapshot.last_failure_stage == (variant == 0U ?
+              snapshot.primary_failure_stage ==
+                  MEISO_CAMERA_V4L2_FAILURE_NONE &&
+              snapshot.primary_error == 0 &&
+              snapshot.cleanup_failure_stage == (variant == 0U ?
                   MEISO_CAMERA_V4L2_FAILURE_STREAM_OFF :
                   (variant == 1U ?
                       MEISO_CAMERA_V4L2_FAILURE_RELEASE_BUFFERS :
                       MEISO_CAMERA_V4L2_FAILURE_CLOSE)) &&
+              snapshot.cleanup_error == (variant == 1U ? ENOMEM : EIO) &&
               fixture.kernel.close_calls == 1U);
         if (variant == 0U) {
             CHECK(fixture.kernel.stream_off_calls == 0U &&
@@ -914,8 +937,11 @@ static bool test_duplicate_mapping_and_dequeue_error(void)
           MEISO_CAMERA_V4L2_START_BUFFER_SETUP_FAILED);
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_STOPPED &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_MAP_BUFFER &&
+          snapshot.primary_error == EINVAL &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           snapshot.mapped_buffer_count == 0U &&
           fixture.kernel.unmap_order_count == 2U &&
           fixture.kernel.unmap_order[0] == 0U &&
@@ -932,8 +958,11 @@ static bool test_duplicate_mapping_and_dequeue_error(void)
           MEISO_CAMERA_V4L2_START_BUFFER_SETUP_FAILED);
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_STOPPED &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_MAP_BUFFER &&
+          snapshot.primary_error == EINVAL &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           snapshot.mapped_buffer_count == 0U &&
           fixture.kernel.unmap_order_count == 2U &&
           fixture.kernel.unmap_order[0] == 1U &&
@@ -954,9 +983,11 @@ static bool test_duplicate_mapping_and_dequeue_error(void)
     }
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_DEQUEUE_BUFFER &&
-          snapshot.last_error == EIO && fixture.kernel.close_calls == 1U);
+          snapshot.primary_error == EIO &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 && fixture.kernel.close_calls == 1U);
     fixture_destroy(&fixture);
     return true;
 }
@@ -1020,8 +1051,11 @@ static bool run_bad_dequeue_case(uint32_t variant)
     }
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+          snapshot.primary_error == EPROTO &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           !snapshot.frame_borrowed && !snapshot.stream_on &&
           fixture.kernel.close_calls == 1U);
     fixture_destroy(&fixture);
@@ -1101,8 +1135,11 @@ static bool test_mapping_alias_borrow_stop_and_release_failure(void)
           MEISO_CAMERA_V4L2_RELEASE_TERMINAL);
     CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
-          snapshot.last_failure_stage ==
+          snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_QUEUE_BUFFER &&
+          snapshot.primary_error == EIO &&
+          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
+          snapshot.cleanup_error == 0 &&
           !snapshot.frame_borrowed && fixture.kernel.close_calls == 1U);
     fixture_destroy(&fixture);
     return true;

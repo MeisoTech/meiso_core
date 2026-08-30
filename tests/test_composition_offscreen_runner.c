@@ -1,8 +1,8 @@
-#include "composition_coordinator.h"
-#include "composition_reference_renderer.h"
-#include "composition_scene.h"
-#include "meiso_blob.h"
-#include "scene_store.h"
+#include <meiso/composition/coordinator.h>
+#include <meiso/composition/reference_renderer.h>
+#include <meiso/profiles/composition/scene.h>
+#include <meiso/core/blob.h>
+#include <meiso/composition/scene_store.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -28,6 +28,14 @@
 
 #ifndef MEISO_OFFSCREEN_CROSS_SCRIPT_PATH
 #error "cross script path is required"
+#endif
+
+#ifndef MEISO_K230D_CMAKE_HELPER_PATH
+#error "K230D CMake helper path is required"
+#endif
+
+#ifndef MEISO_K230D_XUANTIE_TOOLCHAIN_PATH
+#error "K230D Xuantie toolchain path is required"
 #endif
 
 enum {
@@ -294,13 +302,14 @@ static bool verify_receipt(const CapturedRun *captured)
           strstr(captured->output, "password") == NULL &&
           strstr(captured->output, "secret") == NULL &&
           strstr(captured->output, "prepared_token") == NULL &&
+          strstr(captured->output, "\"profile\"") == NULL &&
           split_receipt(captured, lines));
     CHECK(strcmp(
         lines[0],
         "{\"type\":\"composition_offscreen\",\"schema\":1,"
         "\"verification\":\"HOST_OFFSCREEN_REFERENCE_VERIFIED\","
         "\"build_target\":\"native_host\","
-        "\"profile\":\"composition-scene-lab-v0\","
+        "\"contract\":\"composition-scene\","
         "\"scenario\":\"baseline_cube_once\"}"
     ) == 0);
     for (index = 0U; index < 5U; ++index) {
@@ -443,10 +452,13 @@ cleanup:
 static bool test_cross_script_is_build_only(void)
 {
     char script[8192];
+    char helper[8192];
+    char toolchain[8192];
     char runner_source[65536];
     size_t script_size = 0U;
+    size_t helper_size = 0U;
+    size_t toolchain_size = 0U;
     size_t source_size = 0U;
-    static const char script_suffix[] = "    -o \"$output\"\n";
 
     CHECK(read_path(
         MEISO_OFFSCREEN_CROSS_SCRIPT_PATH,
@@ -455,38 +467,73 @@ static bool test_cross_script_is_build_only(void)
         &script_size
     ));
     CHECK(read_path(
+        MEISO_K230D_CMAKE_HELPER_PATH,
+        helper,
+        sizeof(helper),
+        &helper_size
+    ));
+    CHECK(read_path(
+        MEISO_K230D_XUANTIE_TOOLCHAIN_PATH,
+        toolchain,
+        sizeof(toolchain),
+        &toolchain_size
+    ));
+    CHECK(read_path(
         MEISO_OFFSCREEN_RUNNER_SOURCE_PATH,
         runner_source,
         sizeof(runner_source),
         &source_size
     ));
-    CHECK(script_size >= sizeof(script_suffix) - 1U &&
-          memcmp(
-              script + script_size - (sizeof(script_suffix) - 1U),
-              script_suffix,
-              sizeof(script_suffix) - 1U
-          ) == 0 &&
-          strstr(script, "set -eu") != NULL &&
+    CHECK(script_size != 0U && strstr(script, "set -eu") != NULL &&
           strstr(script, "${MEISO_K230_LINUX_CC:-}") != NULL &&
-          strstr(script, "\"$MEISO_K230_LINUX_CC\"") != NULL &&
-          strstr(script, "-DMEISO_K230_LINUX_TARGET=1") != NULL &&
-          strstr(script, "-march=rv64gcv_xtheadc") != NULL &&
-          strstr(
-              script,
-              "-Wl,--dynamic-linker=/lib/ld-linux-riscv64-lp64d.so.1"
-          ) != NULL &&
-          strstr(script, "ld-linux-riscv64v_xthead-lp64d.so.1") == NULL &&
-          strstr(script, "composition_offscreen_runner.c") != NULL &&
+          strstr(script, "_build_cmake_target.sh") != NULL &&
+          strstr(script, "meiso_composition_offscreen_runner") != NULL &&
+          strstr(script, ".c\"") == NULL &&
+          strstr(script, "-I\"") == NULL &&
+          strstr(script, "-march=") == NULL &&
+          strstr(script, "-Wl,") == NULL &&
           strstr(script, "qemu") == NULL && strstr(script, "ssh") == NULL &&
           strstr(script, "scp") == NULL && strstr(script, "\ncc ") == NULL &&
           strstr(script, "\ngcc ") == NULL &&
           strstr(script, "\nclang ") == NULL &&
+          helper_size != 0U &&
+          strstr(helper, "${MEISO_K230_LINUX_CC:-}") != NULL &&
+          strstr(helper, "-DCMAKE_TOOLCHAIN_FILE=") != NULL &&
+          strstr(helper, "-DBUILD_TESTING=OFF") != NULL &&
+          strstr(helper, "-DMEISO_BUILD_APPLICATIONS=ON") != NULL &&
+          strstr(helper, "-DMEISO_BUILD_K230D_LINUX_APPS=ON") != NULL &&
+          strstr(helper, "cmake --build") != NULL &&
+          strstr(helper, "cmake -E copy") != NULL &&
+          strstr(helper, "meiso_k230d_camera_v4l2_capture_once") != NULL &&
+          strstr(helper, "meiso_k230d_composition_edge_service") != NULL &&
+          strstr(helper, "meiso_composition_offscreen_runner") != NULL &&
+          strstr(helper, "meiso_four_kind_lab") != NULL &&
+          strstr(helper, "meiso_k230d_wifi_runtime_edge") != NULL &&
+          strstr(helper, "src/") == NULL &&
+          strstr(helper, "profiles/") == NULL &&
+          strstr(helper, "adapters/") == NULL &&
+          strstr(helper, "qemu") == NULL && strstr(helper, "ssh") == NULL &&
+          strstr(helper, "scp") == NULL &&
+          toolchain_size != 0U &&
+          strstr(toolchain, "CMAKE_SYSTEM_NAME Linux") != NULL &&
+          strstr(toolchain, "CMAKE_SYSTEM_PROCESSOR riscv64") != NULL &&
+          strstr(toolchain, "ENV{MEISO_K230_LINUX_CC}") != NULL &&
+          strstr(toolchain, "-march=rv64gcv_xtheadc -mabi=lp64d") != NULL &&
+          strstr(
+              toolchain,
+              "/lib/ld-linux-riscv64-lp64d.so.1"
+          ) != NULL &&
+          strstr(toolchain, "MEISO_BUILD_K230D_LINUX_APPS") != NULL &&
+          strstr(toolchain, "CMAKE_C_FLAGS_RELEASE") != NULL &&
+          strstr(toolchain, "src/") == NULL &&
+          strstr(toolchain, "profiles/") == NULL &&
+          strstr(toolchain, "adapters/") == NULL &&
           source_size != 0U &&
           strstr(runner_source, "TARGET_OFFSCREEN_REFERENCE_VERIFIED") ==
               NULL &&
           strstr(runner_source, "OFFSCREEN_REFERENCE_VECTOR_PASSED") !=
               NULL &&
-          strstr(runner_source, "k230d_linux_candidate") != NULL);
+          strstr(runner_source, "k230d_linux") != NULL);
     return true;
 }
 

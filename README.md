@@ -8,10 +8,10 @@ portable C11 参考实现和可重复实验。
 ## 模型
 
 - `Edge` 拥有设备 truth、platform adapter、本地安全行为，并对已声明的物理输出拥有最终 authority；
-- `Host` 运行应用与重计算，通过 SDK 的 Virtual Edge 操作远端或模拟 Edge；
+- `Host` 运行应用与重计算，通过 portable Edge facade 操作远端或模拟 Edge；
 - 公共 Resource 是 `State / Stream / Action / Blob`，MediaStream 是 Stream 的专业化；
 - Core 负责 identity、Session 与 Resource delivery，Runtime 负责 capability、endpoint 和控制，
-  Host SDK 负责 Virtual Edge 与应用 API。
+  Host SDK 负责 opaque `MeisoEdgeHandle` 与应用 API。
 
 项目不绑定特定 SoC、开发板、操作系统、图形 API 或网络载体。IP、端口和 TCP adapter
 属于 bootstrap/transport，不是 peer identity。
@@ -21,13 +21,13 @@ portable C11 参考实现和可重复实验。
 | 组件 | 已有实现 | 证据边界 |
 | --- | --- | --- |
 | Resource Core | caller-owned arena 上的 bounded `State / Stream / Action / Blob` | portable C11 source API，不冻结二进制 ABI |
-| Session 与 Runtime | exact Profile handshake、bounded wire、catalog、State/Stream production gate、MRT0 v2/v3 Blob carriage | Host semantic/wire 与 POSIX loopback；不包含安全 transport 或通用 discovery |
+| Session 与 Runtime | exact Profile handshake、bounded wire、catalog、State/Stream production gate、Blob carriage 与 MRT0 v4 external route | Host semantic/wire 与 POSIX loopback；不包含安全 transport 或通用 discovery |
 | Wi-Fi telemetry | macOS Host、K230D Linux Edge、direct-IP State/Stream 闭环与本地 dashboard | 已有受限 board evidence，不等于通用产品 Runtime |
-| Composition scene lab | codec、SceneStore、coordinator、fair scheduler，以及真实 TCP lifecycle、explicit same-process reconnect、分方向 backpressure 与 max-Blob 实验 | Host/loopback semantic、wire 与 transport evidence |
-| K1a reference renderer | bounded 320×240 synthetic offscreen renderer 与 offline runner | `HOST_OFFSCREEN_REFERENCE_VERIFIED`、`TARGET_BUILD_VERIFIED`、`TARGET_NOT_RUN`；不证明几何正确、driver、scanout 或物理显示 |
+| Composition Profile | `COMPOSE_/_PROFILE:v1`、MRT0 v4、6/18 graph、SceneStore、coordinator、scheduler 与双路 media | Host/loopback semantic、wire 与 transport evidence；fresh board gate 待本轮收口 |
+| CPU raster / Edge compositor | bounded 320×240 reference CPU off-screen renderer 与 integrated K230D backend | 旧身份有 board render/CMFB 证据；正式身份待 fresh 复验；不证明 driver scanout 或物理显示 |
 | K230D camera capture | bounded Linux V4L2 four-buffer NV12 adapter 与一次三帧 target receipt | `BOARD_VERIFIED` 仅指单适配器物理采集；不证明 CameraMedia transport、combined service、性能或 E2E |
-| K230D Composition debug chain | 同一Session内Blob、Scene/C2、CPU render、Render/Camera Media、Wi-Fi/DeviceTelemetry与local Web bridge | [一次受控四门实机证据](docs/k230d-composition-debug-e2e-v0.md)；不证明physical display、安全transport、板端断网/重启恢复、性能或长稳 |
-| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release、caller-owned deterministic simulator、canonical trace v1，以及同一native Debug Host的Dashboard离线入口 | HostApp/AF_INET与simulator两种backend；remote Dashboard可在typed transport/Session/catalog terminal后启动fresh Host child并回放最新local editor intent，但不resume旧Session/handle，也不等于通用SDK/backend或Edge重启恢复；`--simulator`可从本地编辑器真实子进程驱动Mesh→Scene/C2→source-pinned CPU RenderResult和完整320×240 RGBA CMFB preview、Wi-Fi、DeviceTelemetry及两路media State，但不建立Session/TCP、camera frame、target或physical evidence，也不承诺跨target像素一致；trace v1仍只重放Wi-Fi/media |
+| K230D Composition E2E chain | 同一Session内Blob、Scene/C2、CPU render、Render/Camera Media、Wi-Fi/DeviceTelemetry与local Web bridge | [当前身份的实机复验门](docs/k230d-composition-e2e.md)尚待fresh run；旧身份证据只保留在archive，不证明当前工作树 |
+| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release、caller-owned deterministic simulator、canonical trace v1，以及同一native Composition Host Bridge的Composition Editor离线入口 | HostRuntime/AF_INET与simulator两种backend；remote Composition Editor可在typed transport/Session/catalog terminal后启动fresh Host child并回放最新local editor intent，但不resume旧Session/handle，也不等于通用SDK/backend或Edge重启恢复；`--simulator`可从本地编辑器真实子进程驱动Mesh→Scene/C2→source-pinned CPU RenderResult和完整320×240 RGBA CMFB preview、Wi-Fi、DeviceTelemetry及两路media State，但不建立Session/TCP、camera frame、target或physical evidence，也不承诺跨target像素一致；trace v1仍只重放Wi-Fi/media |
 
 逐版本提交、CI、资源账本和 target receipt 统一记录在
 [系统进展](docs/system-report.md)，不在首页重复维护。
@@ -41,6 +41,33 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
+
+纯 library/SDK 构建不创建应用和测试 target：
+
+```sh
+cmake -S . -B build-sdk \
+  -DBUILD_TESTING=OFF \
+  -DMEISO_BUILD_APPLICATIONS=OFF \
+  -DCMAKE_INSTALL_PREFIX=/tmp/meiso
+cmake --build build-sdk --parallel
+cmake --install build-sdk --component Core
+cmake --install build-sdk --component Runtime
+```
+
+仓外 consumer 可以只选 Core，或在同一 prefix 中安装 Core+Runtime 后链接
+`Meiso::Runtime`：
+
+```cmake
+find_package(MeisoGlass 0.1 CONFIG REQUIRED COMPONENTS Runtime)
+target_link_libraries(my_runtime PRIVATE Meiso::Runtime)
+```
+
+公开头按职责使用 `<meiso/core/...>`、`<meiso/runtime/...>`、
+`<meiso/profiles/...>` 等 namespace；本轮是 pre-public 硬迁移，不提供旧根头、旧 target alias
+或 forwarding shim。完整组件图与安装例见 [SDK 指南](docs/sdk-guide.md)。
+
+> 注：当前仓库尚无 `LICENSE`/`COPYING`/`NOTICE`。上述 package 已通过技术安装与
+> relocation 验证，但不因此自动具备对外分发授权。
 
 Windows（MSVC x64 v143 + Ninja）：
 
@@ -69,18 +96,21 @@ ctest --preset windows-msvc-debug
 
 实验与 target：
 
-- [Wi-Fi telemetry Profile](profiles/wifi-telemetry-v0/README.md) 与
+- [Wi-Fi telemetry Profile](profiles/wifi/README.md) 与
   [direct-IP 实装规则](docs/wifi-runtime-direct-ip-v0.md)
-- [Composition scene lab](profiles/composition-scene-lab-v0/README.md) 与
+- [Composition Profile](profiles/composition/README.md) 与
   [Edge local compositor 方案](docs/edge-local-compositor-v0.md)
+- [Composition Editor](devtools/web/composition_editor/README.md)
 - [K230D Linux Edge](targets/k230d-linux/README.md)
-- [K230D Composition debug 联调证据](docs/k230d-composition-debug-e2e-v0.md)
+- [K230D Composition E2E 验收状态](docs/k230d-composition-e2e.md)
 
 ## 尚未完成
 
-当前仓库不是 application-facing 完整产品：已有 Composition Profile v3 的首个 Virtual Edge/SDK
-facade、包含离线Composition编辑闭环的deterministic simulator与同一native Debug Host/Dashboard入口、固定版本canonical trace，但通用backend plugin、discovery/reconnect、
+当前仓库不是 application-facing 完整产品：已有正式
+`COMPOSE_/_PROFILE:v1` 的首个 portable Edge
+facade、包含离线Composition编辑闭环的deterministic simulator与同一native Composition Host Bridge/Dashboard入口、固定版本canonical trace，但通用backend plugin、discovery/reconnect、
 State watch、Action、认证与安全transport尚未完成。
-Composition debug candidate已有一次准确K230D上的combined offscreen render/camera
-MediaStream与local Web bridge证据；当前Dashboard仅实现host-local fresh-child自动重连，板端
+旧身份的 Composition Edge 已有一次准确 K230D 上的 combined off-screen
+render/camera MediaStream 与 local Web bridge 证据；当前正式身份需 fresh 复验。
+Dashboard 仅实现 host-local fresh-child 自动重连，板端
 network/Edge恢复、Session resume、通用fresh Edge、性能、长稳和physical presentation evidence仍未完成。

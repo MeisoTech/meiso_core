@@ -1,6 +1,7 @@
-#include "composition_scene.h"
-#include "meiso_runtime.h"
-#include "scene_store.h"
+#include <meiso/profiles/composition/scene.h>
+#include <meiso/runtime/runtime.h>
+#include <meiso/composition/scene_store.h>
+#include "composition_profile_fixture.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -197,7 +198,7 @@ static MeisoSessionConfig session_config(MeisoSessionRole role)
         (MeisoSessionNonce){0x61U, 0x62U} :
         (MeisoSessionNonce){0x71U, 0x72U};
     config.protocol = (MeisoProtocolVersion){1U, 0U};
-    config.profile = *meiso_composition_scene_profile_v2();
+    config.profile = meiso_composition_internal_mrt0_v3_fixture_profile();
     config.limits = (MeisoSessionLimits){16384U, 8192U, 32U};
     return config;
 }
@@ -406,15 +407,11 @@ static bool activate_blob_catalog(RuntimePair *pair)
 
 static bool test_frozen_v3_literals(void)
 {
-    CHECK(MEISO_RUNTIME_WIRE_VERSION == MEISO_RUNTIME_WIRE_VERSION_V2);
     CHECK(MEISO_RUNTIME_WIRE_VERSION_V2 == 2U &&
-          MEISO_RUNTIME_WIRE_VERSION_V3 == 3U);
-    CHECK(MEISO_COMPOSITION_SCENE_PROFILE_VERSION ==
-              MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V1 &&
-          MEISO_COMPOSITION_SCENE_PROFILE_V1_RUNTIME_WIRE_VERSION ==
-              MEISO_RUNTIME_WIRE_VERSION_V2 &&
-          MEISO_COMPOSITION_SCENE_PROFILE_V2_RUNTIME_WIRE_VERSION ==
-              MEISO_RUNTIME_WIRE_VERSION_V3);
+          MEISO_RUNTIME_WIRE_VERSION_V3 == 3U &&
+          MEISO_RUNTIME_WIRE_VERSION_V4 == 4U);
+    CHECK(meiso_composition_internal_mrt0_v2_fixture_profile().version == 1U &&
+          meiso_composition_internal_mrt0_v3_fixture_profile().version == 2U);
     CHECK(sizeof(GOLDEN_BLOB_BEGIN) ==
               MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE &&
           sizeof(GOLDEN_BLOB_CHUNK) ==
@@ -636,19 +633,11 @@ static bool test_profile_and_runtime_version_selection(void)
     size_t edge_runtime_size;
 
     CHECK(meiso_profile_ref_equal(
-        *meiso_composition_scene_profile_v2(), host.profile
+        meiso_composition_internal_mrt0_v3_fixture_profile(), host.profile
     ));
-    CHECK(meiso_composition_scene_profile()->version ==
-          MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V1);
-    CHECK(meiso_composition_scene_profile_v2()->version ==
-          MEISO_COMPOSITION_SCENE_PROFILE_VERSION_V2);
-    CHECK(meiso_composition_scene_profile()->id.high ==
-              meiso_composition_scene_profile_v2()->id.high &&
-          meiso_composition_scene_profile()->id.low ==
-              meiso_composition_scene_profile_v2()->id.low);
 
-    host.profile = *meiso_composition_scene_profile();
-    edge.profile = *meiso_composition_scene_profile();
+    host.profile = meiso_composition_internal_mrt0_v2_fixture_profile();
+    edge.profile = meiso_composition_internal_mrt0_v2_fixture_profile();
     CHECK(init_session(&host_session_arena, &host, &host_session));
     CHECK(init_session(&edge_session_arena, &edge, &edge_session));
     CHECK(meiso_session_start(edge_session) == MEISO_SESSION_START_STARTED);
@@ -709,7 +698,7 @@ static bool test_profile_mismatch_and_wire_mismatch(void)
     MeisoByteView outbound;
     uint8_t changed[sizeof(GOLDEN_BLOB_BEGIN)];
 
-    edge.profile = *meiso_composition_scene_profile();
+    edge.profile = meiso_composition_internal_mrt0_v2_fixture_profile();
     CHECK(init_session(&host_arena, &host, &host_session));
     CHECK(init_session(&edge_arena, &edge, &edge_session));
     CHECK(meiso_session_start(edge_session) == MEISO_SESSION_START_STARTED);

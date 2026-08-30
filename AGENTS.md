@@ -23,7 +23,7 @@ than simulated as success.
 
 ## Host/Edge collaboration
 
-- Host code depends on the public Profile, versioned schema/wire, Virtual Edge API, simulator and
+- Host code depends on the public Profile, versioned schema/wire, portable Edge facade, simulator and
   conformance vectors. Host business logic must not depend on a board SDK, driver handle,
   hard-coded address or internal Edge IPC.
 - Edge code owns truthful capability publication, bounded platform adapters and physical evidence.

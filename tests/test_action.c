@@ -1,4 +1,4 @@
-#include "meiso_action.h"
+#include <meiso/core/action.h>
 
 #include "meiso_test_support.h"
 

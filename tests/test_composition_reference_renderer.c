@@ -1,4 +1,4 @@
-#include "composition_reference_renderer.h"
+#include <meiso/composition/reference_renderer.h>
 
 #include <stdbool.h>
 #include <stddef.h>

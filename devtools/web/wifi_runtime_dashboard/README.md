@@ -1,6 +1,6 @@
 # Wi-Fi Runtime dashboard
 
-Loopback-only Dev Tool for the formal `wifi-telemetry-v0` direct-IP slice. It
+Loopback-only Dev Tool for the formal `wifi-telemetry` direct-IP slice. It
 keeps one native macOS Host process alive and gives the browser four bounded
 operations: connect, apply/start desired, stop production, and normal close.
 The browser never implements Core, Runtime, Profile, wire, or transport.

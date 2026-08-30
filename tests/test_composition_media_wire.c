@@ -1,5 +1,4 @@
-#include "composition_session_v2.h"
-#include "composition_session_v3.h"
+#include <meiso/profiles/composition/profile.h>
 
 #include <stddef.h>
 #include <stdio.h>
@@ -50,7 +49,7 @@ static MeisoSessionConfig base_session_config(void)
     value.local_nonce = (MeisoSessionNonce){4U, 5U};
     value.expected_peer_id = (MeisoPeerId){6U, 7U};
     value.protocol = (MeisoProtocolVersion){1U, 0U};
-    value.profile = *meiso_composition_scene_profile();
+    value.profile = *meiso_composition_profile_ref();
     value.limits = (MeisoSessionLimits){16384U, 8192U, 32U};
     return value;
 }
@@ -110,7 +109,7 @@ static MeisoSessionConfig base_session_config(void)
     CHECK(Encode(&typed_overlap.typed,                                         \
                  (MeisoMutableBuffer){typed_overlap.bytes, (WireSize)},        \
                  &separate_size) ==                                           \
-          MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);                     \
+          MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);                     \
     CHECK(separate_size == 77U &&                                             \
           memcmp(typed_overlap.bytes, typed_before, sizeof(typed_before)) ==   \
               0);                                                             \
@@ -119,21 +118,21 @@ static MeisoSessionConfig base_session_config(void)
     CHECK(Encode(&(Value),                                                     \
                  (MeisoMutableBuffer){size_overlap.bytes, (WireSize)},         \
                  &size_overlap.size) ==                                       \
-          MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);                     \
+          MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);                     \
     CHECK(memcmp(size_overlap.bytes, size_before, sizeof(size_before)) == 0);  \
     memset(&decode_overlap, 0x3c, sizeof(decode_overlap));                     \
     memcpy(decode_overlap.bytes, (Wire), (WireSize));                          \
     memcpy(decode_before, decode_overlap.bytes, sizeof(decode_before));        \
     CHECK(Decode((MeisoByteView){decode_overlap.bytes, (WireSize)},            \
                  &decode_overlap.typed) ==                                    \
-          MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);                     \
+          MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);                     \
     CHECK(memcmp(decode_overlap.bytes, decode_before,                          \
                  sizeof(decode_before)) == 0);                                \
 } while (0)
 
-static MeisoCompositionSessionV3CatalogConfig catalog_config(void)
+static MeisoCompositionProfileCatalogConfig catalog_config(void)
 {
-    MeisoCompositionSessionV3CatalogConfig value;
+    MeisoCompositionProfileCatalogConfig value;
     memset(&value, 0, sizeof(value));
     value.wifi_incarnation = 11U;
     value.presentation_incarnation = 12U;
@@ -171,6 +170,11 @@ static MeisoCompositionSessionV3CatalogConfig catalog_config(void)
 
 static bool test_device_literals(void)
 {
+    const MeisoProfileRef *profile = meiso_device_telemetry_profile();
+    const MeisoEndpointId *endpoint = meiso_device_telemetry_endpoint();
+    const MeisoSchemaRef *capability_schema =
+        meiso_device_telemetry_capability_schema();
+    const MeisoResourceDescriptor *resources;
     const MeisoDeviceTelemetryCapability value = {
         MEISO_DEVICE_TELEMETRY_FIELD_ALL,
         100U, 1000U, 100U, -40000, 125000, 1000U
@@ -185,9 +189,34 @@ static bool test_device_literals(void)
     };
     uint8_t bytes[sizeof(golden)];
     MeisoDeviceTelemetryCapability decoded;
+    size_t resource_count = 0U;
     size_t size = 99U;
-    CHECK(meiso_device_telemetry_profile()->id.high ==
-          UINT64_C(0x4445564943455f54));
+
+    CHECK(profile->id.high == UINT64_C(0x4445564943455f54) &&
+          profile->id.low == UINT64_C(0x5f50524f46494c45) &&
+          profile->version == 1U);
+    CHECK(endpoint->high == UINT64_C(0x4445564943455f54) &&
+          endpoint->low == UINT64_C(0x454e44504f494e54));
+    CHECK(capability_schema->id.high == UINT64_C(0x4445564943455f53) &&
+          capability_schema->id.low == UINT64_C(0x4341504142494c5f) &&
+          capability_schema->version == 1U);
+    resources = meiso_device_telemetry_resources(&resource_count);
+    CHECK(resources != NULL && resource_count == 3U);
+    CHECK(resources[0].id.high == UINT64_C(0x4445564943455f54) &&
+          resources[0].id.low == UINT64_C(0x4445535f53544154) &&
+          resources[0].schema.id.high == UINT64_C(0x4445564943455f53) &&
+          resources[0].schema.id.low == UINT64_C(0x444553495245445f) &&
+          resources[0].schema.version == 1U);
+    CHECK(resources[1].id.high == UINT64_C(0x4445564943455f54) &&
+          resources[1].id.low == UINT64_C(0x4143545f53544154) &&
+          resources[1].schema.id.high == UINT64_C(0x4445564943455f53) &&
+          resources[1].schema.id.low == UINT64_C(0x41435455414c5f5f) &&
+          resources[1].schema.version == 1U);
+    CHECK(resources[2].id.high == UINT64_C(0x4445564943455f54) &&
+          resources[2].id.low == UINT64_C(0x444154415f535452) &&
+          resources[2].schema.id.high == UINT64_C(0x4445564943455f53) &&
+          resources[2].schema.id.low == UINT64_C(0x53414d504c455f5f) &&
+          resources[2].schema.version == 1U);
     CHECK(meiso_device_telemetry_capability_encode(
               &value, (MeisoMutableBuffer){bytes, sizeof(bytes)}, &size
           ) == MEISO_DEVICE_TELEMETRY_CODEC_OK);
@@ -395,42 +424,42 @@ static bool test_device_codec_boundaries(void)
 
 static bool test_profile_and_catalog(void)
 {
-    MeisoCompositionSessionV3CatalogConfig config = catalog_config();
-    uint8_t capability[MEISO_COMPOSITION_SESSION_V3_DYNAMIC_CAPABILITY_BYTES];
+    MeisoCompositionProfileCatalogConfig config = catalog_config();
+    uint8_t capability[MEISO_COMPOSITION_PROFILE_DYNAMIC_CAPABILITY_BYTES];
     MeisoRuntimeEndpointDescriptor endpoints[
-        MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT
     ];
-    MeisoCompositionSessionV3RouteDescriptor routes[
-        MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
+    MeisoCompositionProfileRouteDescriptor routes[
+        MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
     ];
-    uint8_t catalog[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE];
+    uint8_t catalog[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
     size_t size = 0U;
     size_t i;
 
-    CHECK(meiso_composition_scene_profile()->version == 1U);
-    CHECK(meiso_composition_scene_profile_v2()->version == 2U);
-    CHECK(meiso_composition_scene_profile_v3()->version == 3U);
-    CHECK(meiso_composition_scene_profile_v3()->id.high ==
-          UINT64_C(0x4b3233305f53434e));
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_ref()->version == 1U);
+    CHECK(meiso_composition_profile_ref()->id.high ==
+              UINT64_C(0x434f4d504f53455f) &&
+          meiso_composition_profile_ref()->id.low ==
+              UINT64_C(0x5f50524f46494c45));
+    CHECK(meiso_composition_profile_build_catalog(
               &config, (MeisoMutableBuffer){capability, sizeof(capability)},
-              endpoints, MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT,
-              routes, MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+              endpoints, MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT,
+              routes, MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(endpoints[3].capability.size == 48U);
     CHECK(routes[14].delivery ==
           MEISO_COMPOSITION_DELIVERY_EXTERNAL_MEDIA);
     CHECK(routes[17].delivery ==
           MEISO_COMPOSITION_DELIVERY_EXTERNAL_MEDIA);
-    CHECK(meiso_composition_session_v3_catalog_encode(
-              7U, endpoints, MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT,
-              routes, MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT,
+    CHECK(meiso_composition_profile_catalog_encode(
+              7U, endpoints, MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT,
+              routes, MEISO_COMPOSITION_PROFILE_ROUTE_COUNT,
               (MeisoMutableBuffer){catalog, sizeof(catalog)}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
-    CHECK(size == MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
+    CHECK(size == MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE);
     CHECK(memcmp(catalog, "MRT0\x04\x01\0\0\0\0\x07\xf0", 12U) == 0);
     CHECK(catalog[27] == 18U);
-    for (i = 0U; i < MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT; ++i) {
+    for (i = 0U; i < MEISO_COMPOSITION_PROFILE_ROUTE_COUNT; ++i) {
         const uint8_t expected = i == 14U || i == 17U ?
             MEISO_COMPOSITION_DELIVERY_EXTERNAL_MEDIA :
             MEISO_COMPOSITION_DELIVERY_INLINE_RUNTIME;
@@ -439,11 +468,11 @@ static bool test_profile_and_catalog(void)
     }
     memset(catalog, 0xa5, sizeof(catalog));
     size = 44U;
-    CHECK(meiso_composition_session_v3_catalog_encode(
-              7U, endpoints, MEISO_COMPOSITION_SESSION_V3_ENDPOINT_COUNT,
-              routes, MEISO_COMPOSITION_SESSION_V3_ROUTE_COUNT,
+    CHECK(meiso_composition_profile_catalog_encode(
+              7U, endpoints, MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT,
+              routes, MEISO_COMPOSITION_PROFILE_ROUTE_COUNT,
               (MeisoMutableBuffer){catalog, sizeof(catalog) - 1U}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+          ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && bytes_are(catalog, 0xa5, sizeof(catalog)));
     return true;
 }
@@ -463,21 +492,19 @@ static bool test_profile_catalog_shape_and_failures(void)
         MEISO_RUNTIME_FACET_DESIRED, MEISO_RUNTIME_FACET_ACTUAL,
         MEISO_RUNTIME_FACET_DATA
     };
-    MeisoCompositionSessionV3CatalogConfig config = catalog_config();
-    const MeisoProfileRef *v1 = meiso_composition_scene_profile();
-    const MeisoProfileRef *v2 = meiso_composition_scene_profile_v2();
-    const MeisoProfileRef *v3 = meiso_composition_scene_profile_v3();
+    MeisoCompositionProfileCatalogConfig config = catalog_config();
+    const MeisoProfileRef *profile = meiso_composition_profile_ref();
     MeisoSessionConfig session = base_session_config();
     MeisoSessionConfig session_before;
-    uint8_t capability[MEISO_COMPOSITION_SESSION_V3_DYNAMIC_CAPABILITY_BYTES];
+    uint8_t capability[MEISO_COMPOSITION_PROFILE_DYNAMIC_CAPABILITY_BYTES];
     uint8_t capability_before[sizeof(capability)];
     MeisoRuntimeEndpointDescriptor endpoints[6];
     MeisoRuntimeEndpointDescriptor endpoints_before[6];
     MeisoRuntimeEndpointDescriptor catalog_alias_endpoints[6];
-    MeisoCompositionSessionV3RouteDescriptor routes[18];
-    MeisoCompositionSessionV3RouteDescriptor routes_before[18];
-    uint8_t catalog[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE];
-    uint8_t catalog_alias[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE];
+    MeisoCompositionProfileRouteDescriptor routes[18];
+    MeisoCompositionProfileRouteDescriptor routes_before[18];
+    uint8_t catalog[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
+    uint8_t catalog_alias[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
     uint8_t catalog_alias_before[sizeof(catalog_alias)];
     const MeisoResourceDescriptor *wifi_resources;
     const MeisoResourceDescriptor *scene_resources;
@@ -498,37 +525,28 @@ static bool test_profile_catalog_shape_and_failures(void)
     size_t i;
     union {
         max_align_t alignment;
-        MeisoCompositionSessionV3CatalogConfig config;
+        MeisoCompositionProfileCatalogConfig config;
         size_t size;
-        uint8_t bytes[MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE];
+        uint8_t bytes[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
     } alias;
     union {
         max_align_t alignment;
         MeisoRuntimeEndpointDescriptor endpoints[6];
-        MeisoCompositionSessionV3RouteDescriptor routes[18];
+        MeisoCompositionProfileRouteDescriptor routes[18];
         uint8_t bytes[sizeof(routes)];
     } descriptor_alias;
     uint8_t alias_before[sizeof(alias.bytes)];
     uint8_t descriptor_alias_before[sizeof(descriptor_alias.bytes)];
 
-    CHECK(v1->id.high == UINT64_C(0x4b3233305f53434e) &&
-          v1->id.low == UINT64_C(0x5f4c41425f563030) && v1->version == 1U);
-    CHECK(v2->id.high == v1->id.high && v2->id.low == v1->id.low &&
-          v2->version == 2U);
-    CHECK(v3->id.high == v1->id.high && v3->id.low == v1->id.low &&
-          v3->version == 3U);
-    CHECK(MEISO_COMPOSITION_SCENE_PROFILE_V1_RUNTIME_WIRE_VERSION == 2U &&
-          MEISO_COMPOSITION_SCENE_PROFILE_V2_RUNTIME_WIRE_VERSION == 3U &&
-          MEISO_COMPOSITION_SESSION_V3_RUNTIME_WIRE_VERSION == 4U);
-    CHECK(MEISO_COMPOSITION_SESSION_V2_ENDPOINT_COUNT == 3U &&
-          MEISO_COMPOSITION_SESSION_V2_ROUTE_COUNT == 9U &&
-          MEISO_COMPOSITION_SESSION_V2_CATALOG_WIRE_SIZE == 920U &&
-          MEISO_COMPOSITION_SESSION_V2_MAX_REGISTRY_ENTRIES == 12U);
+    CHECK(profile->id.high == UINT64_C(0x434f4d504f53455f) &&
+          profile->id.low == UINT64_C(0x5f50524f46494c45) &&
+          profile->version == 1U);
+    CHECK(MEISO_COMPOSITION_PROFILE_RUNTIME_WIRE_VERSION == 4U);
 
     session_before = session;
-    CHECK(meiso_composition_session_v3_configure_session(&session) ==
-          MEISO_COMPOSITION_SESSION_V3_OK);
-    CHECK(meiso_profile_ref_equal(session.profile, *v3));
+    CHECK(meiso_composition_profile_configure_session(&session) ==
+          MEISO_COMPOSITION_PROFILE_OK);
+    CHECK(meiso_profile_ref_equal(session.profile, *profile));
     CHECK(session.limits.max_frame_bytes == 8236U &&
           session.limits.max_runtime_payload_bytes == 8192U &&
           session.limits.max_registry_entries == 24U);
@@ -541,14 +559,14 @@ static bool test_profile_catalog_shape_and_failures(void)
     session = base_session_config();
     session.local_role = 0U;
     session_before = session;
-    CHECK(meiso_composition_session_v3_configure_session(&session) ==
-          MEISO_COMPOSITION_SESSION_V3_INVALID_CONFIG);
+    CHECK(meiso_composition_profile_configure_session(&session) ==
+          MEISO_COMPOSITION_PROFILE_INVALID_CONFIG);
     CHECK(memcmp(&session, &session_before, sizeof(session)) == 0);
 
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config, (MeisoMutableBuffer){capability, sizeof(capability)},
         endpoints, 6U, routes, 18U
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     expected_endpoint[0] = meiso_wifi_telemetry_endpoint();
     expected_endpoint[1] = meiso_composition_scene_presentation_endpoint();
     expected_endpoint[2] = meiso_composition_scene_scene_endpoint();
@@ -573,7 +591,7 @@ static bool test_profile_catalog_shape_and_failures(void)
     CHECK(endpoints[0].capability.size + endpoints[1].capability.size +
               endpoints[2].capability.size + endpoints[3].capability.size +
               endpoints[4].capability.size + endpoints[5].capability.size ==
-          MEISO_COMPOSITION_SESSION_V3_CAPABILITY_BYTES);
+          MEISO_COMPOSITION_PROFILE_CAPABILITY_BYTES);
 
     wifi_resources = meiso_wifi_telemetry_resources(&wifi_count);
     scene_resources = meiso_composition_scene_resources(&scene_count);
@@ -582,6 +600,41 @@ static bool test_profile_catalog_shape_and_failures(void)
     camera_resources = meiso_composition_camera_media_resources(&camera_count);
     CHECK(wifi_count == 3U && scene_count == 6U && device_count == 3U &&
           render_count == 3U && camera_count == 3U);
+    CHECK(meiso_composition_media_capability_schema()->id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          meiso_composition_media_capability_schema()->id.low ==
+              UINT64_C(0x4341504142494c5f) &&
+          meiso_composition_media_capability_schema()->version == 1U);
+    CHECK(render_resources[0].schema.id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          render_resources[0].schema.id.low ==
+              UINT64_C(0x444553495245445f) &&
+          render_resources[0].schema.version == 1U &&
+          render_resources[1].schema.id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          render_resources[1].schema.id.low ==
+              UINT64_C(0x41435455414c5f5f) &&
+          render_resources[1].schema.version == 1U &&
+          render_resources[2].schema.id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          render_resources[2].schema.id.low ==
+              UINT64_C(0x554e49545f5f5f5f) &&
+          render_resources[2].schema.version == 1U);
+    CHECK(camera_resources[0].schema.id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          camera_resources[0].schema.id.low ==
+              UINT64_C(0x444553495245445f) &&
+          camera_resources[0].schema.version == 1U &&
+          camera_resources[1].schema.id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          camera_resources[1].schema.id.low ==
+              UINT64_C(0x41435455414c5f5f) &&
+          camera_resources[1].schema.version == 1U &&
+          camera_resources[2].schema.id.high ==
+              UINT64_C(0x4d454449415f5343) &&
+          camera_resources[2].schema.id.low ==
+              UINT64_C(0x554e49545f5f5f5f) &&
+          camera_resources[2].schema.version == 1U);
     for (i = 0U; i < 3U; ++i) {
         expected_resources[i] = &wifi_resources[i];
         expected_resources[9U + i] = &device_resources[i];
@@ -607,12 +660,12 @@ static bool test_profile_catalog_shape_and_failures(void)
             MEISO_COMPOSITION_DELIVERY_INLINE_RUNTIME));
     }
 
-    CHECK(meiso_composition_session_v3_catalog_encode(
+    CHECK(meiso_composition_profile_catalog_encode(
         7U, endpoints, 6U, routes, 18U,
         (MeisoMutableBuffer){catalog, sizeof(catalog)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(size == 2032U &&
-          fnv1a64(catalog, size) == UINT64_C(0x534e6b158059f197));
+          fnv1a64(catalog, size) == UINT64_C(0x3ae2d6a3d127a4df));
     memset(catalog_alias, 0x6a, sizeof(catalog_alias));
     memcpy(catalog_alias, capability, sizeof(capability));
     memcpy(catalog_alias_before, catalog_alias, sizeof(catalog_alias));
@@ -628,29 +681,29 @@ static bool test_profile_catalog_shape_and_failures(void)
         MEISO_DEVICE_TELEMETRY_CAPABILITY_WIRE_SIZE +
         MEISO_COMPOSITION_MEDIA_CAPABILITY_WIRE_SIZE;
     size = 44U;
-    CHECK(meiso_composition_session_v3_catalog_encode(
+    CHECK(meiso_composition_profile_catalog_encode(
         7U, catalog_alias_endpoints, 6U, routes, 18U,
         (MeisoMutableBuffer){catalog_alias, sizeof(catalog_alias)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(size == 44U &&
           memcmp(catalog_alias, catalog_alias_before,
                  sizeof(catalog_alias)) == 0);
     memset(&alias, 0x6d, sizeof(alias));
     memcpy(alias_before, alias.bytes, sizeof(alias.bytes));
-    CHECK(meiso_composition_session_v3_catalog_encode(
+    CHECK(meiso_composition_profile_catalog_encode(
         7U, endpoints, 6U, routes, 18U,
         (MeisoMutableBuffer){alias.bytes,
-                             MEISO_COMPOSITION_SESSION_V3_CATALOG_WIRE_SIZE},
+                             MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE},
         &alias.size
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(memcmp(alias.bytes, alias_before, sizeof(alias.bytes)) == 0);
     memset(catalog, 0xa5, sizeof(catalog));
     routes[0].delivery = MEISO_COMPOSITION_DELIVERY_EXTERNAL_MEDIA;
     size = 44U;
-    CHECK(meiso_composition_session_v3_catalog_encode(
+    CHECK(meiso_composition_profile_catalog_encode(
         7U, endpoints, 6U, routes, 18U,
         (MeisoMutableBuffer){catalog, sizeof(catalog)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_CONFIG);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_CONFIG);
     CHECK(size == 0U && bytes_are(catalog, 0xa5, sizeof(catalog)));
 
     memset(capability, 0xa5, sizeof(capability));
@@ -659,32 +712,32 @@ static bool test_profile_catalog_shape_and_failures(void)
     memcpy(capability_before, capability, sizeof(capability));
     memcpy(endpoints_before, endpoints, sizeof(endpoints));
     memcpy(routes_before, routes, sizeof(routes));
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config, (MeisoMutableBuffer){capability, sizeof(capability) - 1U},
         endpoints, 6U, routes, 18U
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(memcmp(capability, capability_before, sizeof(capability)) == 0 &&
           memcmp(endpoints, endpoints_before, sizeof(endpoints)) == 0 &&
           memcmp(routes, routes_before, sizeof(routes)) == 0);
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config, (MeisoMutableBuffer){capability, sizeof(capability)},
         endpoints, 5U, routes, 18U
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(memcmp(capability, capability_before, sizeof(capability)) == 0 &&
           memcmp(endpoints, endpoints_before, sizeof(endpoints)) == 0 &&
           memcmp(routes, routes_before, sizeof(routes)) == 0);
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config, (MeisoMutableBuffer){capability, sizeof(capability)},
         endpoints, 6U, routes, 17U
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(memcmp(capability, capability_before, sizeof(capability)) == 0 &&
           memcmp(endpoints, endpoints_before, sizeof(endpoints)) == 0 &&
           memcmp(routes, routes_before, sizeof(routes)) == 0);
     config.camera_media_incarnation = 0U;
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config, (MeisoMutableBuffer){capability, sizeof(capability)},
         endpoints, 6U, routes, 18U
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_CONFIG);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_CONFIG);
     CHECK(memcmp(capability, capability_before, sizeof(capability)) == 0 &&
           memcmp(endpoints, endpoints_before, sizeof(endpoints)) == 0 &&
           memcmp(routes, routes_before, sizeof(routes)) == 0);
@@ -693,12 +746,12 @@ static bool test_profile_catalog_shape_and_failures(void)
     memset(&alias, 0x5a, sizeof(alias));
     alias.config = config;
     memcpy(alias_before, alias.bytes, sizeof(alias.bytes));
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &alias.config,
         (MeisoMutableBuffer){alias.bytes + 1U,
-                             MEISO_COMPOSITION_SESSION_V3_DYNAMIC_CAPABILITY_BYTES},
+                             MEISO_COMPOSITION_PROFILE_DYNAMIC_CAPABILITY_BYTES},
         endpoints, 6U, routes, 18U
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(memcmp(alias.bytes, alias_before, sizeof(alias.bytes)) == 0 &&
           memcmp(endpoints, endpoints_before, sizeof(endpoints)) == 0 &&
           memcmp(routes, routes_before, sizeof(routes)) == 0);
@@ -706,11 +759,11 @@ static bool test_profile_catalog_shape_and_failures(void)
     memset(&descriptor_alias, 0x3c, sizeof(descriptor_alias));
     memcpy(descriptor_alias_before, descriptor_alias.bytes,
            sizeof(descriptor_alias.bytes));
-    CHECK(meiso_composition_session_v3_build_catalog(
+    CHECK(meiso_composition_profile_build_catalog(
         &config, (MeisoMutableBuffer){capability, sizeof(capability)},
         descriptor_alias.endpoints, 6U, descriptor_alias.routes,
         18U
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(memcmp(descriptor_alias.bytes, descriptor_alias_before,
                  sizeof(descriptor_alias.bytes)) == 0);
     return true;
@@ -785,10 +838,10 @@ static bool test_control_codecs(void)
     CHECK(meiso_composition_media_desired_supported(&capability, &desired));
     CHECK(meiso_composition_media_capability_encode(
               &capability, (MeisoMutableBuffer){bytes, 64U}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK && size == 64U);
+          ) == MEISO_COMPOSITION_PROFILE_OK && size == 64U);
     CHECK(meiso_composition_media_capability_decode(
               (MeisoByteView){bytes, 64U}, &cap_decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(cap_decoded.source == capability.source);
     CHECK(cap_decoded.pixel_formats == capability.pixel_formats);
     CHECK(cap_decoded.codecs == capability.codecs);
@@ -804,10 +857,10 @@ static bool test_control_codecs(void)
     CHECK(cap_decoded.max_bitrate_bps == capability.max_bitrate_bps);
     CHECK(meiso_composition_media_desired_encode(
               &desired, (MeisoMutableBuffer){bytes, 32U}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK && size == 32U);
+          ) == MEISO_COMPOSITION_PROFILE_OK && size == 32U);
     CHECK(meiso_composition_media_desired_decode(
               (MeisoByteView){bytes, 32U}, &desired_decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(desired_decoded.pixel_format == desired.pixel_format);
     CHECK(desired_decoded.codec == desired.codec);
     CHECK(desired_decoded.width == desired.width);
@@ -818,25 +871,25 @@ static bool test_control_codecs(void)
     CHECK(desired_decoded.recovery_flags == desired.recovery_flags);
     CHECK(meiso_composition_media_open_encode(
               &open, (MeisoMutableBuffer){bytes, 64U}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK && size == 64U);
+          ) == MEISO_COMPOSITION_PROFILE_OK && size == 64U);
     CHECK(meiso_composition_media_open_decode(
               (MeisoByteView){bytes, 64U}, &open_decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(meiso_session_id_equal(open.session_id, open_decoded.session_id));
     CHECK(meiso_composition_media_binding_encode(
               &binding, (MeisoMutableBuffer){bytes, sizeof(bytes)}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK && size == sizeof(bytes));
+          ) == MEISO_COMPOSITION_PROFILE_OK && size == sizeof(bytes));
     CHECK(bytes[88] == MEISO_COMPOSITION_MEDIA_SOURCE_RENDER_PREVIEW);
     CHECK(bytes[89] == MEISO_RUNTIME_FACET_DATA);
     CHECK(bytes[90] == MEISO_COMPOSITION_DELIVERY_EXTERNAL_MEDIA);
     CHECK(meiso_composition_media_binding_decode(
               (MeisoByteView){bytes, sizeof(bytes)}, &binding_decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(binding_decoded.production_epoch == binding.production_epoch);
     bytes[91] = 1U;
     CHECK(meiso_composition_media_binding_decode(
               (MeisoByteView){bytes, sizeof(bytes)}, &binding_decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+          ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     return true;
 }
 
@@ -870,19 +923,19 @@ static bool test_media_codec_boundaries_and_aliases(void)
     CHECK(meiso_composition_media_capability_encode(
         &capability,
         (MeisoMutableBuffer){capability_wire, sizeof(capability_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(meiso_composition_media_desired_encode(
         &desired, (MeisoMutableBuffer){desired_wire, sizeof(desired_wire)},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(meiso_composition_media_actual_encode(
         &actual, (MeisoMutableBuffer){actual_wire, sizeof(actual_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(memcmp(actual_wire, "MACT\0\1\1\0", 8U) == 0 &&
           bytes_are(actual_wire + 72U, 0U, 8U));
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){actual_wire, sizeof(actual_wire)}, &actual_out
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(actual_out.source == actual.source &&
           actual_out.effective.pixel_format == actual.effective.pixel_format &&
           actual_out.effective.codec == actual.effective.codec &&
@@ -897,11 +950,11 @@ static bool test_media_codec_boundaries_and_aliases(void)
           actual_out.recovery_generation == actual.recovery_generation);
     CHECK(meiso_composition_media_open_encode(
         &open, (MeisoMutableBuffer){open_wire, sizeof(open_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(meiso_composition_media_binding_encode(
         &binding,
         (MeisoMutableBuffer){binding_wire, sizeof(binding_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memcpy(output, capability_wire, sizeof(capability_wire));
     output[sizeof(capability_wire)] = 0U;
@@ -909,7 +962,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
     memcpy(typed_before, &capability_out, sizeof(capability_out));
     CHECK(meiso_composition_media_capability_decode(
         (MeisoByteView){output, sizeof(capability_wire) + 1U}, &capability_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&capability_out, typed_before, sizeof(capability_out)) == 0);
     memcpy(output, desired_wire, sizeof(desired_wire));
     output[sizeof(desired_wire)] = 0U;
@@ -917,7 +970,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
     memcpy(typed_before, &desired_out, sizeof(desired_out));
     CHECK(meiso_composition_media_desired_decode(
         (MeisoByteView){output, sizeof(desired_wire) + 1U}, &desired_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&desired_out, typed_before, sizeof(desired_out)) == 0);
     memcpy(output, actual_wire, sizeof(actual_wire));
     output[sizeof(actual_wire)] = 0U;
@@ -925,7 +978,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
     memcpy(typed_before, &actual_out, sizeof(actual_out));
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){output, sizeof(actual_wire) + 1U}, &actual_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&actual_out, typed_before, sizeof(actual_out)) == 0);
     memcpy(output, open_wire, sizeof(open_wire));
     output[sizeof(open_wire)] = 0U;
@@ -933,7 +986,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
     memcpy(typed_before, &open_out, sizeof(open_out));
     CHECK(meiso_composition_media_open_decode(
         (MeisoByteView){output, sizeof(open_wire) + 1U}, &open_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&open_out, typed_before, sizeof(open_out)) == 0);
     memcpy(binding_trailing, binding_wire, sizeof(binding_wire));
     binding_trailing[sizeof(binding_wire)] = 0U;
@@ -942,7 +995,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
     CHECK(meiso_composition_media_binding_decode(
         (MeisoByteView){binding_trailing, sizeof(binding_trailing)},
         &binding_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&binding_out, typed_before, sizeof(binding_out)) == 0);
 
     memset(output, 0xa5, sizeof(output));
@@ -953,7 +1006,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
         (MeisoMutableBuffer){output,
                              MEISO_COMPOSITION_MEDIA_CAPABILITY_WIRE_SIZE - 1U},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
     size = 99U;
     CHECK(meiso_composition_media_desired_encode(
@@ -961,7 +1014,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
         (MeisoMutableBuffer){output,
                              MEISO_COMPOSITION_MEDIA_DESIRED_WIRE_SIZE - 1U},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
     size = 99U;
     CHECK(meiso_composition_media_actual_encode(
@@ -969,7 +1022,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
         (MeisoMutableBuffer){output,
                              MEISO_COMPOSITION_MEDIA_ACTUAL_WIRE_SIZE - 1U},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
     size = 99U;
     CHECK(meiso_composition_media_open_encode(
@@ -977,7 +1030,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
         (MeisoMutableBuffer){output,
                              MEISO_COMPOSITION_MEDIA_OPEN_WIRE_SIZE - 1U},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
     size = 99U;
     CHECK(meiso_composition_media_binding_encode(
@@ -985,7 +1038,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
         (MeisoMutableBuffer){output,
                              MEISO_COMPOSITION_MEDIA_BIND_WIRE_SIZE - 1U},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
     invalid_desired = desired;
     invalid_desired.width = 0U;
@@ -995,7 +1048,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
         (MeisoMutableBuffer){output,
                              MEISO_COMPOSITION_MEDIA_DESIRED_WIRE_SIZE},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_CONFIG);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_CONFIG);
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
 
     memset(&capability_out, 0xa5, sizeof(capability_out));
@@ -1003,80 +1056,80 @@ static bool test_media_codec_boundaries_and_aliases(void)
     CHECK(meiso_composition_media_capability_decode(
         (MeisoByteView){capability_wire, sizeof(capability_wire) - 1U},
         &capability_out
-    ) == MEISO_COMPOSITION_SESSION_V3_TRUNCATED);
+    ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
     CHECK(memcmp(&capability_out, typed_before, sizeof(capability_out)) == 0);
     capability_wire[44] = 1U;
     CHECK(meiso_composition_media_capability_decode(
         (MeisoByteView){capability_wire, sizeof(capability_wire)},
         &capability_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&capability_out, typed_before, sizeof(capability_out)) == 0);
     CHECK(meiso_composition_media_capability_encode(
         &capability,
         (MeisoMutableBuffer){capability_wire, sizeof(capability_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&desired_out, 0xa5, sizeof(desired_out));
     memcpy(typed_before, &desired_out, sizeof(desired_out));
     CHECK(meiso_composition_media_desired_decode(
         (MeisoByteView){desired_wire, sizeof(desired_wire) - 1U}, &desired_out
-    ) == MEISO_COMPOSITION_SESSION_V3_TRUNCATED);
+    ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
     CHECK(memcmp(&desired_out, typed_before, sizeof(desired_out)) == 0);
     desired_wire[6] = 1U;
     CHECK(meiso_composition_media_desired_decode(
         (MeisoByteView){desired_wire, sizeof(desired_wire)}, &desired_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&desired_out, typed_before, sizeof(desired_out)) == 0);
     CHECK(meiso_composition_media_desired_encode(
         &desired, (MeisoMutableBuffer){desired_wire, sizeof(desired_wire)},
         &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&actual_out, 0xa5, sizeof(actual_out));
     memcpy(typed_before, &actual_out, sizeof(actual_out));
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){actual_wire, sizeof(actual_wire) - 1U}, &actual_out
-    ) == MEISO_COMPOSITION_SESSION_V3_TRUNCATED);
+    ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
     CHECK(memcmp(&actual_out, typed_before, sizeof(actual_out)) == 0);
     actual_wire[72] = 1U;
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){actual_wire, sizeof(actual_wire)}, &actual_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&actual_out, typed_before, sizeof(actual_out)) == 0);
     CHECK(meiso_composition_media_actual_encode(
         &actual, (MeisoMutableBuffer){actual_wire, sizeof(actual_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&open_out, 0xa5, sizeof(open_out));
     memcpy(typed_before, &open_out, sizeof(open_out));
     CHECK(meiso_composition_media_open_decode(
         (MeisoByteView){open_wire, sizeof(open_wire) - 1U}, &open_out
-    ) == MEISO_COMPOSITION_SESSION_V3_TRUNCATED);
+    ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
     CHECK(memcmp(&open_out, typed_before, sizeof(open_out)) == 0);
     open_wire[48] = 1U;
     CHECK(meiso_composition_media_open_decode(
         (MeisoByteView){open_wire, sizeof(open_wire)}, &open_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&open_out, typed_before, sizeof(open_out)) == 0);
     CHECK(meiso_composition_media_open_encode(
         &open, (MeisoMutableBuffer){open_wire, sizeof(open_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&binding_out, 0xa5, sizeof(binding_out));
     memcpy(typed_before, &binding_out, sizeof(binding_out));
     CHECK(meiso_composition_media_binding_decode(
         (MeisoByteView){binding_wire, sizeof(binding_wire) - 1U}, &binding_out
-    ) == MEISO_COMPOSITION_SESSION_V3_TRUNCATED);
+    ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
     CHECK(memcmp(&binding_out, typed_before, sizeof(binding_out)) == 0);
     binding_wire[91] = 1U;
     CHECK(meiso_composition_media_binding_decode(
         (MeisoByteView){binding_wire, sizeof(binding_wire)}, &binding_out
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&binding_out, typed_before, sizeof(binding_out)) == 0);
     CHECK(meiso_composition_media_binding_encode(
         &binding,
         (MeisoMutableBuffer){binding_wire, sizeof(binding_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
 
     CHECK_MEDIA_ALIAS(
         MeisoCompositionMediaCapability, capability,
@@ -1137,7 +1190,7 @@ static bool test_frame_codec(void)
         MEISO_COMPOSITION_MEDIA_FRAME_KEY;
     CHECK(meiso_composition_media_frame_encode(
               &value, (MeisoMutableBuffer){bytes, sizeof(bytes)}, &size
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(size == sizeof(bytes));
     CHECK(memcmp(bytes, "MFRM\0\x01\0\x07", 8U) == 0);
     CHECK(bytes[128] == MEISO_OWNER_ROLE_HOST);
@@ -1147,16 +1200,16 @@ static bool test_frame_codec(void)
                  fragment, sizeof(fragment)) == 0);
     CHECK(meiso_composition_media_frame_decode(
               (MeisoByteView){bytes, sizeof(bytes)}, &decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_OK);
+          ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(decoded.frame_sequence == 1U && decoded.fragment.size == 4U);
     CHECK(memcmp(decoded.fragment.data, fragment, 4U) == 0);
     CHECK(meiso_composition_media_frame_decode(
               (MeisoByteView){bytes, sizeof(bytes) - 1U}, &decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_TRUNCATED);
+          ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
     bytes[224] = 1U;
     CHECK(meiso_composition_media_frame_decode(
               (MeisoByteView){bytes, sizeof(bytes)}, &decoded
-          ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+          ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     return true;
 }
 
@@ -1209,15 +1262,15 @@ static bool test_frame_capacity_alias_and_borrow(void)
     size = 99U;
     CHECK(meiso_composition_media_frame_encode(
         &value, (MeisoMutableBuffer){wire, sizeof(wire) - 1U}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U && memcmp(wire, before, sizeof(wire)) == 0);
     CHECK(meiso_composition_media_frame_encode(
         &value, (MeisoMutableBuffer){wire, sizeof(wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     memset(&decoded, 0, sizeof(decoded));
     CHECK(meiso_composition_media_frame_decode(
         (MeisoByteView){wire, sizeof(wire)}, &decoded
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(decoded.fragment.data ==
               wire + MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE &&
           decoded.fragment.size == 4U &&
@@ -1229,7 +1282,7 @@ static bool test_frame_capacity_alias_and_borrow(void)
     memcpy(decoded_before, &decoded, sizeof(decoded));
     CHECK(meiso_composition_media_frame_decode(
         (MeisoByteView){trailing_wire, sizeof(trailing_wire)}, &decoded
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&decoded, decoded_before, sizeof(decoded)) == 0);
 
     memset(max_fragment, 0x7c, sizeof(max_fragment));
@@ -1243,18 +1296,18 @@ static bool test_frame_capacity_alias_and_borrow(void)
     size = 99U;
     CHECK(meiso_composition_media_frame_encode(
         &value, (MeisoMutableBuffer){max_wire, sizeof(max_wire) - 1U}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_CAPACITY);
+    ) == MEISO_COMPOSITION_PROFILE_CAPACITY);
     CHECK(size == 0U &&
           memcmp(max_wire, overlap_before, sizeof(overlap_before)) == 0 &&
           bytes_are(max_wire + sizeof(overlap_before), 0xa5,
                     sizeof(max_wire) - sizeof(overlap_before)));
     CHECK(meiso_composition_media_frame_encode(
         &value, (MeisoMutableBuffer){max_wire, sizeof(max_wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(size == sizeof(max_wire));
     CHECK(meiso_composition_media_frame_decode(
         (MeisoByteView){max_wire, sizeof(max_wire)}, &decoded
-    ) == MEISO_COMPOSITION_SESSION_V3_OK);
+    ) == MEISO_COMPOSITION_PROFILE_OK);
     CHECK(decoded.fragment.size == sizeof(max_fragment) &&
           decoded.fragment.data == max_wire +
               MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE &&
@@ -1266,7 +1319,7 @@ static bool test_frame_capacity_alias_and_borrow(void)
     wire[204] = 1U;
     CHECK(meiso_composition_media_frame_decode(
         (MeisoByteView){wire, sizeof(wire)}, &decoded
-    ) == MEISO_COMPOSITION_SESSION_V3_MALFORMED);
+    ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
     CHECK(memcmp(&decoded, decoded_before, sizeof(decoded)) == 0);
     wire[204] = 0U;
 
@@ -1278,7 +1331,7 @@ static bool test_frame_capacity_alias_and_borrow(void)
     size = 99U;
     CHECK(meiso_composition_media_frame_encode(
         &value, (MeisoMutableBuffer){overlap.bytes, sizeof(wire)}, &size
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(size == 0U &&
           memcmp(overlap.bytes, overlap_before, sizeof(overlap_before)) == 0);
 
@@ -1288,7 +1341,7 @@ static bool test_frame_capacity_alias_and_borrow(void)
     CHECK(meiso_composition_media_frame_encode(
         &value, (MeisoMutableBuffer){overlap.bytes, sizeof(wire)},
         &overlap.size
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(memcmp(overlap.bytes, overlap_before, sizeof(overlap_before)) == 0);
 
     memset(&overlap, 0x6b, sizeof(overlap));
@@ -1297,7 +1350,7 @@ static bool test_frame_capacity_alias_and_borrow(void)
     CHECK(meiso_composition_media_frame_decode(
         (MeisoByteView){overlap.bytes, sizeof(wire)},
         &overlap.frame
-    ) == MEISO_COMPOSITION_SESSION_V3_INVALID_ARGUMENT);
+    ) == MEISO_COMPOSITION_PROFILE_INVALID_ARGUMENT);
     CHECK(memcmp(overlap.bytes, overlap_before, sizeof(overlap_before)) == 0);
     return true;
 }

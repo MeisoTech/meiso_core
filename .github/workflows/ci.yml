@@ -64,14 +64,6 @@ jobs:
       - name: Build
         run: cmake --build "build/${{ matrix.name }}" --parallel 2
 
-      - name: Run four-kind integration
-        run: >-
-          ctest --test-dir "build/${{ matrix.name }}"
-          --output-on-failure
-          --no-tests=error
-          --timeout 180
-          -R '^meiso_four_kind_lab_internal_test$'
-
       - name: Run native test suite
         run: >-
           ctest --test-dir "build/${{ matrix.name }}"

@@ -128,7 +128,7 @@ boot transition 或证明持续 liveness。
 
 后续受控 bring-up 已验证 Linux 串口登录、Wi-Fi association/DHCP/default route、sshd 与
 public-key-only SSH；首次 host key 经串口交叉核对。另一个固定、非产品的
-[`four-kind-lab-v0`](../profiles/four-kind-lab-v0/README.md) 已在 macOS Host 与大核 Linux
+[Four-kind internal fixture](../profiles/internal/four_kind/README.md) 已在 macOS Host 与大核 Linux
 Edge 间经 Wi-Fi plain TCP 完成 Session，以及 State / Stream / Action / Blob 四项语意交换。
 它展示真实 Wi-Fi telemetry 与片上 junction temperature，并全部返回 PASS。
 
