@@ -181,6 +181,17 @@ function renderSnapshot(next) {
 
 function appendEvent(eventId, event) {
   eventRows.push({id: eventId, command: event.command, status: event.status});
+  if (event.status === "NATIVE_REQUEST_REJECTED") {
+    const rejection = event.native_event ?? {};
+    const origin = rejection.browser_command ?? "Native request";
+    const revision = rejection.browser_revision ?? "?";
+    const command = rejection.native_command ?? "unknown";
+    const code = rejection.code ?? "UNKNOWN";
+    showToast(
+      `${origin} revision ${revision} / ${command} rejected: ${code}`,
+      true,
+    );
+  }
   while (eventRows.length > 256) eventRows.shift();
   const log = node("event-log");
   log.replaceChildren();

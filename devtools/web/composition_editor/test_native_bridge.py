@@ -67,7 +67,27 @@ else:
         value = json.loads(raw)
         request_id = value["request_id"]
         command = value["command"]
-        if command == "snapshot":
+        if mode == "zero_error":
+            output = {"type": "error", "request_id": 0, "code": "CONFLICT"}
+        elif mode == "unknown_error":
+            output = {
+                "type": "error", "request_id": request_id + 100,
+                "code": "CONFLICT",
+            }
+        elif mode == "mixed_error" and command == "set_presentation":
+            output = {
+                "type": "error", "request_id": request_id,
+                "code": "CONFLICT",
+            }
+        elif mode == "wrong_completion":
+            output = {
+                "type": "command.receipt", "request_id": request_id,
+                "command_id": request_id, "kind": "set_scene",
+                "local_result": "queued", "replaced": False,
+                "replaced_command_id": 0, "state_version": 1,
+                "plan_generation": 0,
+            }
+        elif command == "snapshot":
             output = {
                 "type": "snapshot", "request_id": request_id,
                 "phase": "ready", "terminal_reason": "none",
@@ -91,6 +111,8 @@ else:
                 "plan_generation": 0,
             }
         print(json.dumps(output, separators=(",", ":")), flush=True)
+        if mode == "duplicate":
+            print(json.dumps(output, separators=(",", ":")), flush=True)
 '''
 
 ASYNC_TEST_TIMEOUT_SECONDS = 10.0
@@ -166,6 +188,116 @@ class NativeBridgeTests(unittest.TestCase):
                 self.assertEqual(snapshot["browser_revision"], 7)
             finally:
                 bridge.close()
+
+    def test_correlated_error_rejects_only_one_request_and_child_continues(
+        self,
+    ) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "mixed_error"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event["type"] == "service.ready" for event in events
+                ))
+                process = bridge._process
+                self.assertIsNotNone(process)
+                process_id = process.pid
+                with bridge._condition:
+                    bridge._frames["render"] = (
+                        b"kept-frame", {"frame_sequence": 7}
+                    )
+                self.assertEqual(bridge.submit_batch([
+                    {"command": "set_presentation"},
+                    {"command": "set_render_media"},
+                ], origin="intent.render.set", revision=3), [1, 2])
+                _wait_for(lambda: sum(
+                    event["type"] in {"error", "command.receipt"}
+                    for event in events
+                ) == 2)
+                rejection = next(
+                    event for event in events if event["type"] == "error"
+                )
+                receipt = next(
+                    event for event in events
+                    if event["type"] == "command.receipt"
+                )
+                self.assertEqual(rejection["code"], "CONFLICT")
+                self.assertEqual(rejection["browser_command"],
+                                 "intent.render.set")
+                self.assertEqual(rejection["browser_revision"], 3)
+                self.assertEqual(rejection["native_command"],
+                                 "set_presentation")
+                self.assertEqual(rejection["native_batch_id"], 1)
+                self.assertEqual(rejection["native_batch_index"], 1)
+                self.assertEqual(rejection["native_batch_count"], 2)
+                self.assertEqual(receipt["native_command"],
+                                 "set_render_media")
+                self.assertEqual(receipt["native_batch_index"], 2)
+                self.assertFalse(any(
+                    event["type"] == "native.bridge_terminal"
+                    for event in events
+                ))
+                self.assertEqual(bridge._requests, {})
+                self.assertEqual(
+                    bridge.latest_frame("render"),
+                    (b"kept-frame", {"frame_sequence": 7}),
+                )
+                self.assertIsNone(process.poll())
+                self.assertEqual(process.pid, process_id)
+
+                self.assertEqual(bridge.submit_batch(
+                    [{"command": "snapshot"}],
+                    origin="native.refresh", revision=3,
+                ), [3])
+                _wait_for(lambda: any(
+                    event["type"] == "snapshot" and
+                    event["request_id"] == 3 for event in events
+                ))
+                self.assertIsNone(process.poll())
+                self.assertEqual(process.pid, process_id)
+            finally:
+                bridge.close()
+
+    def test_unowned_or_duplicate_completion_is_terminal(self) -> None:
+        for mode in (
+            "zero_error", "unknown_error", "duplicate", "wrong_completion",
+        ):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as raw:
+                events: list[dict[str, object]] = []
+                executable, config = self._fake_child(Path(raw), mode)
+                bridge = NativeBridge(
+                    str(executable), str(config), events.append,
+                    lambda *_: None,
+                )
+                bridge.start()
+                try:
+                    _wait_for(lambda: any(
+                        event["type"] == "service.ready" for event in events
+                    ))
+                    bridge.submit_batch(
+                        [{"command": "snapshot"}],
+                        origin="native.refresh", revision=1,
+                    )
+                    _wait_for(lambda: any(
+                        event.get("type") == "native.bridge_terminal"
+                        for event in events
+                    ))
+                    terminal = next(
+                        event for event in events
+                        if event["type"] == "native.bridge_terminal"
+                    )
+                    self.assertEqual(
+                        terminal["code"], "NATIVE_REQUEST_CORRELATION"
+                    )
+                    self.assertEqual(bridge._requests, {})
+                finally:
+                    bridge.close()
 
     def test_simulator_child_needs_no_config_and_stays_non_session(self) -> None:
         events: list[dict[str, object]] = []
@@ -439,6 +571,75 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertEqual(len(bridge._outbound), 0)
         self.assertEqual(len(bridge._requests), 0)
+
+    def test_request_rejection_is_bounded_revision_aware_browser_truth(
+        self,
+    ) -> None:
+        state = CompositionEditorState()
+        common = {
+            "browser_command": "intent.render.set",
+            "browser_revision": 3,
+            "native_batch_id": 21,
+            "native_batch_count": 2,
+        }
+        state._native_event({
+            "type": "error", "request_id": 21, "code": "CONFLICT",
+            "native_command": "set_presentation",
+            "native_batch_index": 1, **common,
+        })
+        state._native_event({
+            "type": "command.receipt", "request_id": 22,
+            "command_id": 8, "kind": "set_render_media",
+            "local_result": "queued", "replaced": False,
+            "replaced_command_id": 0, "state_version": 2,
+            "plan_generation": 0, "native_command": "set_render_media",
+            "native_batch_index": 2, **common,
+        })
+        snapshot = state.snapshot()
+        batch = snapshot["native_truth"]["request_batches"][
+            "intent.render.set"
+        ]
+        self.assertEqual(batch["status"], "PARTIAL_REJECTED")
+        self.assertEqual(batch["completed"], 2)
+        self.assertEqual(batch["accepted"], 1)
+        self.assertEqual(batch["rejected"], 1)
+        self.assertEqual(
+            [item["native_command"] for item in batch["outcomes"]],
+            ["set_presentation", "set_render_media"],
+        )
+        self.assertEqual(
+            list(state._events)[-2][1]["status"],
+            "NATIVE_REQUEST_REJECTED",
+        )
+        self.assertEqual(snapshot["backend"]["session_status"], "ABSENT")
+
+        state._native_event({
+            "type": "command.receipt", "request_id": 30,
+            "command_id": 9, "kind": "set_presentation",
+            "local_result": "queued", "replaced": False,
+            "replaced_command_id": 0, "state_version": 4,
+            "plan_generation": 3, "native_command": "set_presentation",
+            "browser_command": "intent.render.set",
+            "browser_revision": 4, "native_batch_id": 30,
+            "native_batch_index": 1, "native_batch_count": 1,
+        })
+        state._native_event({
+            "type": "error", "request_id": 20, "code": "CONFLICT",
+            "native_command": "set_presentation",
+            "browser_command": "intent.render.set",
+            "browser_revision": 2, "native_batch_id": 20,
+            "native_batch_index": 1, "native_batch_count": 1,
+        })
+        snapshot = state.snapshot()
+        current = snapshot["native_truth"]["request_batches"][
+            "intent.render.set"
+        ]
+        self.assertEqual(current["revision"], 4)
+        self.assertEqual(current["status"], "ACCEPTED")
+        self.assertEqual(
+            snapshot["native_truth"]["request_outcomes"][-1]["result"],
+            "REJECTED",
+        )
 
     def test_start_failure_restores_snapshot_and_event_ring(self) -> None:
         state = CompositionEditorState()
@@ -750,8 +951,8 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.calls, [
             ([{"command": "snapshot"}], "native.refresh", 0),
         ])
-        state._native_event({
-            "type": "snapshot", "request_id": 1, "phase": "ready",
+        snapshot_event = {
+            "type": "snapshot", "phase": "ready",
             "terminal_reason": "none", "control_ready": True,
             "catalog_generation": 1, "media_bound": True,
             "media_mask": "both", "media_slots_consumed": 2,
@@ -762,6 +963,31 @@ class NativeBridgeTests(unittest.TestCase):
             "wifi_sample": True, "render_result": True,
             "device_sample": True, "render_frame": True,
             "camera_frame": True,
+        }
+        state._native_event({
+            **snapshot_event, "request_id": 99,
+            "browser_command": "native.bootstrap", "browser_revision": 0,
+            "native_command": "snapshot", "native_batch_id": 90,
+            "native_batch_index": 9, "native_batch_count": 9,
+        })
+        self.assertTrue(state._native_refresh_pending)
+        state._native_event({**actual, "state_version": 2})
+        self.assertEqual(len(bridge.calls), 1)
+        state._native_event({
+            "type": "error", "request_id": 1,
+            "code": "SNAPSHOT_FAILED", "native_command": "snapshot",
+            "browser_command": "native.refresh", "browser_revision": 0,
+            "native_batch_id": 1, "native_batch_index": 1,
+            "native_batch_count": 1,
+        })
+        self.assertFalse(state._native_refresh_pending)
+        state._native_event({**actual, "state_version": 3})
+        self.assertEqual(len(bridge.calls), 2)
+        state._native_event({
+            **snapshot_event, "request_id": 2,
+            "browser_command": "native.refresh", "browser_revision": 0,
+            "native_command": "snapshot", "native_batch_id": 2,
+            "native_batch_index": 1, "native_batch_count": 1,
         })
         snapshot = state.snapshot()
         self.assertTrue(snapshot["backend"]["device_connected"])
@@ -769,6 +995,7 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot["bindings"]["render_result_stream"], "BOUND")
         self.assertEqual(snapshot["bindings"]["camera_media_stream"], "BOUND")
         state._native_event({"type": "media.connected", "transport": "tcp"})
+        self.assertEqual(len(bridge.calls), 3)
         self.assertEqual(bridge.calls[-1], (
             [{"command": "snapshot"}], "native.refresh", 0,
         ))
@@ -1060,10 +1287,10 @@ class NativeBridgeTests(unittest.TestCase):
         encoded = json.dumps(
             _default_snapshot(), separators=(",", ":")
         ).encode("utf-8")
-        self.assertEqual(len(encoded), 1427)
+        self.assertEqual(len(encoded), 1470)
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "a47f332ec63141330c41bc5c12009f64ddf3e9795c5d0aa5f9f8a70e49dacbb5",
+            "1a952b4ac154f456bd717868cefe8bbdc70299c30097e49711aeedf339de91ba",
         )
         with mock.patch.object(
             server_module, "NativeBridge",

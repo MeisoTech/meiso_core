@@ -139,5 +139,11 @@ export function evidenceRows(snapshot) {
       "world_generation", "applied_scene_state_version",
     ]);
   }
+  for (const [origin, batch] of Object.entries(truth.request_batches ?? {})) {
+    appendPresent(rows, `request.${origin}`, batch, [
+      "revision", "native_batch_id", "status", "expected", "completed",
+      "accepted", "rejected",
+    ]);
+  }
   return rows;
 }

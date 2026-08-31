@@ -40,6 +40,8 @@ MAX_CONTROL_BODY_BYTES = 2048
 MAX_STATIC_ASSET_BYTES = 256 * 1024
 MAX_SSE_BATCH = 64
 MAX_OBJECTS = 32
+MAX_NATIVE_REQUEST_OUTCOMES = 64
+MAX_NATIVE_REQUEST_BATCHES = 32
 CSRF_PLACEHOLDER = "__MEISO_CSRF_TOKEN__"
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 NATIVE_RECONNECT_INITIAL_SECONDS = 0.1
@@ -101,7 +103,7 @@ def _exact_keys(command: dict[str, Any], expected: set[str]) -> None:
 
 def _default_snapshot() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "revision": 0,
         "backend": {
             "mode": "RECORDED_LOCAL",
@@ -181,6 +183,8 @@ def _default_snapshot() -> dict[str, Any]:
             "scene_status": None,
             "render_result": None,
             "media_actual": {},
+            "request_outcomes": [],
+            "request_batches": {},
         },
         "frames": {
             "render": {"available": False},
@@ -645,11 +649,20 @@ class CompositionEditorState:
             backend = self._snapshot["backend"]
             truth = self._snapshot["native_truth"]
             truth["last_event"] = copy.deepcopy(event)
+            if (event_type in {
+                    "command.receipt", "asset.loaded", "error", "snapshot",
+                    "closing",
+                } and "browser_command" in event):
+                self._record_native_request_outcome_locked(event)
+                if (event_type == "error" and
+                        event["browser_command"] == "native.refresh"):
+                    self._native_refresh_pending = False
             if event_type == "service.ready":
                 backend["native_host_bound"] = True
                 backend["session_status"] = "CONNECTING"
             elif event_type == "snapshot":
-                self._native_refresh_pending = False
+                if event.get("browser_command") == "native.refresh":
+                    self._native_refresh_pending = False
                 truth["control_snapshot"] = copy.deepcopy(event)
                 simulated = backend["mode"] == "NATIVE_SIMULATOR"
                 backend["device_connected"] = (
@@ -736,7 +749,10 @@ class CompositionEditorState:
                 refresh_revision = self._snapshot["revision"]
             self._refresh_bindings_locked()
             self._append_event_locked(
-                f"native:{event_type}", "NATIVE_EVENT", event
+                f"native:{event_type}",
+                ("NATIVE_REQUEST_REJECTED" if event_type == "error" else
+                 "NATIVE_EVENT"),
+                event,
             )
         if refresh_bridge is not None:
             try:
@@ -748,6 +764,74 @@ class CompositionEditorState:
                 with self._condition:
                     if self._native_bridge is refresh_bridge:
                         self._native_refresh_pending = False
+
+    def _record_native_request_outcome_locked(
+        self, event: dict[str, Any]
+    ) -> None:
+        """Record bounded browser coordination truth, never native apply truth."""
+        truth = self._snapshot["native_truth"]
+        rejected = event["type"] == "error"
+        outcome: dict[str, Any] = {
+            "request_id": event["request_id"],
+            "native_command": event["native_command"],
+            "browser_command": event["browser_command"],
+            "browser_revision": event["browser_revision"],
+            "native_batch_id": event["native_batch_id"],
+            "native_batch_index": event["native_batch_index"],
+            "native_batch_count": event["native_batch_count"],
+            "result": "REJECTED" if rejected else "COMPLETED",
+        }
+        if rejected:
+            outcome["code"] = event["code"]
+        elif event["type"] == "command.receipt":
+            outcome.update({
+                "kind": event["kind"],
+                "local_result": event["local_result"],
+                "state_version": event["state_version"],
+                "plan_generation": event["plan_generation"],
+            })
+        history = truth["request_outcomes"]
+        history.append(copy.deepcopy(outcome))
+        del history[:-MAX_NATIVE_REQUEST_OUTCOMES]
+
+        batches = truth["request_batches"]
+        origin = event["browser_command"]
+        ordering = (event["browser_revision"], event["native_batch_id"])
+        current = batches.get(origin)
+        if current is not None and ordering < (
+            current["revision"], current["native_batch_id"]
+        ):
+            return
+        if current is None or ordering > (
+            current["revision"], current["native_batch_id"]
+        ):
+            if current is None and len(batches) >= MAX_NATIVE_REQUEST_BATCHES:
+                batches.pop(next(iter(batches)))
+            current = {
+                "revision": event["browser_revision"],
+                "native_batch_id": event["native_batch_id"],
+                "expected": event["native_batch_count"],
+                "completed": 0,
+                "accepted": 0,
+                "rejected": 0,
+                "status": "PENDING",
+                "outcomes": [],
+            }
+            batches[origin] = current
+        current["outcomes"].append(copy.deepcopy(outcome))
+        current["outcomes"].sort(key=lambda item: item["native_batch_index"])
+        current["completed"] += 1
+        current["rejected" if rejected else "accepted"] += 1
+        if current["completed"] < current["expected"]:
+            current["status"] = (
+                "PARTIAL_REJECTED" if current["rejected"] else "PENDING"
+            )
+        else:
+            current["status"] = (
+                "PARTIAL_REJECTED" if current["rejected"] and
+                current["accepted"] else
+                "REJECTED" if current["rejected"] else "ACCEPTED"
+            )
 
     def _refresh_bindings_locked(self) -> None:
         truth = self._snapshot["native_truth"]

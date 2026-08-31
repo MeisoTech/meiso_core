@@ -84,3 +84,29 @@ test("unallocated protocol evidence stays visibly unallocated", () => {
     {name: "world_generation", value: "not allocated", bound: false},
   ]);
 });
+
+test("request batch outcome is visible without claiming native apply", () => {
+  const rows = evidenceRows({
+    protocol_evidence: {},
+    native_truth: {request_batches: {
+      "intent.render.set": {
+        revision: 3,
+        native_batch_id: 21,
+        status: "PARTIAL_REJECTED",
+        expected: 2,
+        completed: 2,
+        accepted: 1,
+        rejected: 1,
+      },
+    }},
+  });
+  assert.deepEqual(rows, [
+    {name: "request.intent.render.set.revision", value: "3", bound: true},
+    {name: "request.intent.render.set.native_batch_id", value: "21", bound: true},
+    {name: "request.intent.render.set.status", value: "PARTIAL_REJECTED", bound: true},
+    {name: "request.intent.render.set.expected", value: "2", bound: true},
+    {name: "request.intent.render.set.completed", value: "2", bound: true},
+    {name: "request.intent.render.set.accepted", value: "1", bound: true},
+    {name: "request.intent.render.set.rejected", value: "1", bound: true},
+  ]);
+});

@@ -41,9 +41,16 @@ In native mode the bridge converts every scene mutation into a complete strict
 `set_scene` command. It converts XYZ Euler degrees to the Host's Hamilton
 `qz*qy*qx` quaternion; the native service owns scene-space/time epochs and the
 fixed target viewport. Native command batches are built and admitted to one
-bounded local queue candidate-first. A later child failure is projected as a
-terminal event; the bridge does not promise transaction rollback across
-multiple already-enqueued native commands.
+bounded local queue candidate-first. HTTP `202` and `NATIVE_QUEUED` mean only
+that the Editor-local revision was accepted and its native lines were queued;
+they do not mean native apply. A batch is enqueue-atomic, not a remote
+transaction: each subcommand owns one request ID and may independently produce
+a receipt or a request-scoped rejection. A correlated rejection preserves the
+child, sibling requests, frames and later work. The bounded
+`native_truth.request_batches` projection exposes the latest batch outcome per
+Editor command/revision, while fresh Actual/SceneStatus/RenderResult remains
+the authority for applied state. Unknown, zero or duplicate request
+completions are correlation failures and terminate the bridge fail-closed.
 
 Remote native mode has one deliberately narrow process supervisor. A typed
 control-transport, Session, or catalog terminal closes the old child, clears
@@ -129,6 +136,10 @@ Frame endpoints return the newest complete record as
 `application/vnd.meiso.cmfb`, or `404 FRAME_UNAVAILABLE`. They are loopback-only
 and read-only.
 
+Snapshot schema version 2 adds bounded per-request and per-batch coordination
+outcomes. It replaces version 1 directly; this machine-local Editor API has no
+compatibility shim.
+
 `POST` requires the page Origin and generated CSRF token. Accepted commands and
 their exact JSON shapes are:
 
@@ -161,7 +172,11 @@ wire ownership.
 
 Unknown keys, non-finite values, invalid ranges, unknown assets and missing
 objects are rejected without changing the sticky revision or event ring. The
-SSE ring holds the newest 256 complete projections.
+SSE ring holds the newest 256 complete projections. An asynchronously rejected
+native subcommand is emitted as `NATIVE_REQUEST_REJECTED` with its request ID,
+native subcommand, batch index/count, Editor command/revision and fixed error
+code. It does not roll back the already accepted local revision or imply that a
+sibling subcommand was accepted; every sibling needs its own outcome.
 
 ## Verify
 

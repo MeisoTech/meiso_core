@@ -544,6 +544,28 @@ def sanitize_native_event(value: Any) -> dict[str, Any]:
     return {key: copy.deepcopy(value[key]) for key in value if key in schema[1]}
 
 
+def _request_completion_matches(
+    request: dict[str, Any], event: dict[str, Any]
+) -> bool:
+    """Bind each successful completion family to the submitted command."""
+    if event["type"] == "error":
+        return True
+    command = request["native_command"]
+    if command == "asset.load_builtin":
+        return (
+            event["type"] == "asset.loaded" or
+            (event["type"] == "command.receipt" and
+             event["kind"] == "put_mesh")
+        )
+    if command == "snapshot":
+        return event["type"] == "snapshot"
+    if command == "close":
+        return event["type"] == "closing"
+    return (
+        event["type"] == "command.receipt" and event["kind"] == command
+    )
+
+
 class NativeBridge:
     """Own exactly one native service, bounded command queue and CMFB cache."""
 
@@ -566,7 +588,7 @@ class NativeBridge:
         self._condition = threading.Condition()
         self._outbound: deque[bytes] = deque()
         self._next_request_id = 1
-        self._requests: dict[int, tuple[str, int]] = {}
+        self._requests: dict[int, dict[str, Any]] = {}
         self._frames: dict[str, tuple[bytes, dict[str, Any]]] = {}
         self._process: subprocess.Popen[bytes] | None = None
         self._frame_socket: socket.socket | None = None
@@ -676,9 +698,20 @@ class NativeBridge:
                 candidate_lines.append(encoded)
                 candidate_ids.append(request_id)
             self._next_request_id += len(commands)
-            for request_id, encoded in zip(candidate_ids, candidate_lines):
+            batch_count = len(commands)
+            batch_id = candidate_ids[0]
+            for batch_index, (request_id, encoded, command) in enumerate(
+                zip(candidate_ids, candidate_lines, commands), start=1
+            ):
                 self._outbound.append(encoded)
-                self._requests[request_id] = (origin, revision)
+                self._requests[request_id] = {
+                    "origin": origin,
+                    "revision": revision,
+                    "native_command": command["command"],
+                    "batch_id": batch_id,
+                    "batch_index": batch_index,
+                    "batch_count": batch_count,
+                }
             self._condition.notify_all()
             return candidate_ids
 
@@ -816,29 +849,49 @@ class NativeBridge:
                         raise NativeBridgeError("NATIVE_MODE_MISMATCH")
                     event = sanitize_native_event(value)
                     request_id = event.get("request_id")
-                    if isinstance(request_id, int):
+                    if event["type"] in {
+                        "command.receipt", "asset.loaded", "error",
+                        "snapshot", "closing",
+                    }:
+                        if (not isinstance(request_id, int) or
+                                request_id == 0):
+                            raise NativeBridgeError(
+                                "NATIVE_REQUEST_CORRELATION"
+                            )
                         with self._condition:
-                            request = self._requests.get(request_id)
-                            if event["type"] in {
-                                "command.receipt", "asset.loaded", "error",
-                                "snapshot", "closing",
-                            }:
-                                self._requests.pop(request_id, None)
-                        if request is not None:
-                            event["browser_command"] = request[0]
-                            event["browser_revision"] = request[1]
+                            request = self._requests.pop(request_id, None)
+                        if request is None:
+                            raise NativeBridgeError(
+                                "NATIVE_REQUEST_CORRELATION"
+                            )
+                        if not _request_completion_matches(request, event):
+                            raise NativeBridgeError(
+                                "NATIVE_REQUEST_CORRELATION"
+                            )
+                        event.update({
+                            "browser_command": request["origin"],
+                            "browser_revision": request["revision"],
+                            "native_command": request["native_command"],
+                            "native_batch_id": request["batch_id"],
+                            "native_batch_index": request["batch_index"],
+                            "native_batch_count": request["batch_count"],
+                        })
                     self._on_event(event)
-                    if event["type"] in {"error", "terminal"}:
-                        self._emit_terminal(
-                            "NATIVE_COMMAND_ERROR" if event["type"] == "error"
-                            else "NATIVE_HOST_TERMINAL"
-                        )
+                    if event["type"] == "terminal":
+                        self._emit_terminal("NATIVE_HOST_TERMINAL")
                         return
             if buffer:
                 raise NativeBridgeError("NATIVE_OUTPUT_PARTIAL")
             if not self._stopping:
                 self._emit_terminal("NATIVE_STDOUT_EOF")
-        except (UnicodeDecodeError, json.JSONDecodeError, NativeBridgeError):
+        except NativeBridgeError as error:
+            if not self._stopping:
+                self._emit_terminal(
+                    "NATIVE_REQUEST_CORRELATION" if
+                    str(error) == "NATIVE_REQUEST_CORRELATION" else
+                    "NATIVE_STDOUT"
+                )
+        except (UnicodeDecodeError, json.JSONDecodeError):
             if not self._stopping:
                 self._emit_terminal("NATIVE_STDOUT")
 
