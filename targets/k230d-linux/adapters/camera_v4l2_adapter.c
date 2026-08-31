@@ -489,6 +489,7 @@ MeisoCameraV4l2StartStatus meiso_camera_v4l2_start(
     adapter->synthetic_sequence_high_water = 0U;
     adapter->driver_sequence_present = false;
     adapter->last_sequence_provenance = MEISO_CAMERA_V4L2_SEQUENCE_NONE;
+    adapter->last_timestamp_provenance = MEISO_CAMERA_V4L2_TIMESTAMP_NONE;
     memset(&adapter->last_dequeue, 0, sizeof(adapter->last_dequeue));
     adapter->primary_failure_stage = MEISO_CAMERA_V4L2_FAILURE_NONE;
     adapter->primary_error = 0;

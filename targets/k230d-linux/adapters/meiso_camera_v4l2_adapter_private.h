@@ -60,6 +60,7 @@ struct MeisoCameraV4l2Adapter {
     bool frame_borrowed;
     bool driver_sequence_present;
     MeisoCameraV4l2SequenceProvenance last_sequence_provenance;
+    MeisoCameraV4l2TimestampProvenance last_timestamp_provenance;
     bool callback_active;
     MeisoCameraV4l2DequeuedDiagnostic last_dequeue;
     char device_path[MEISO_CAMERA_V4L2_DEVICE_PATH_CAPACITY];
@@ -152,6 +153,12 @@ MEISO_CAMERA_V4L2_PRIVATE_API
 int meiso_camera_v4l2_private_call_close(
     MeisoCameraV4l2Adapter *adapter,
     int fd
+);
+
+MEISO_CAMERA_V4L2_PRIVATE_API
+int meiso_camera_v4l2_private_call_monotonic_now(
+    MeisoCameraV4l2Adapter *adapter,
+    uint64_t *out_monotonic_ns
 );
 
 MEISO_CAMERA_V4L2_PRIVATE_API

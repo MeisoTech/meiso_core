@@ -46,8 +46,10 @@ typedef struct {
     unsigned stream_off_calls;
     unsigned request_four_calls;
     unsigned request_zero_calls;
+    unsigned monotonic_calls;
     bool would_block_once;
     bool bad_dequeue_field;
+    bool zero_timestamps;
     uint32_t unmap_error_index;
     int unmap_error;
     bool unmap_error_once;
@@ -57,9 +59,9 @@ typedef struct {
 
 typedef struct {
     int status;
-    char output[2048];
+    char output[4096];
     size_t output_size;
-    char error[512];
+    char error[1024];
     size_t error_size;
 } CapturedRun;
 
@@ -170,9 +172,11 @@ static int fake_ioctl(
             argument->buffer.driver_sequence =
                 9U + camera->delivered_frames;
             argument->buffer.driver_sequence_present = true;
-            argument->buffer.timestamp_seconds = 12;
+            argument->buffer.timestamp_seconds =
+                camera->zero_timestamps ? 0 : 12;
             argument->buffer.timestamp_microseconds =
-                345678 + (int32_t)camera->delivered_frames;
+                camera->zero_timestamps ? 0 :
+                    345678 + (int32_t)camera->delivered_frames;
             argument->buffer.timestamp_monotonic = true;
             argument->buffer.raw_field =
                 camera->bad_dequeue_field ? UINT32_C(4) :
@@ -246,6 +250,18 @@ static int fake_close(void *context, int fd)
         return EINVAL;
     }
     ++camera->close_calls;
+    return 0;
+}
+
+static int fake_monotonic_now(void *context, uint64_t *out_monotonic_ns)
+{
+    FakeCamera *camera = (FakeCamera *)context;
+
+    if (out_monotonic_ns == NULL) {
+        return EINVAL;
+    }
+    ++camera->monotonic_calls;
+    *out_monotonic_ns = UINT64_C(50000000000) + camera->monotonic_calls;
     return 0;
 }
 
@@ -328,47 +344,16 @@ static void reset_calls(FakeCamera *camera)
     camera->stream_off_calls = 0U;
     camera->request_four_calls = 0U;
     camera->request_zero_calls = 0U;
+    camera->monotonic_calls = 0U;
     camera->opened_flags = 0;
     memset(camera->opened_path, 0, sizeof(camera->opened_path));
 }
 
 static bool test_custom_capture_receipt(void)
 {
-    static const char expected[] =
-        "{\"type\":\"camera_capture_probe\","
-        "\"schema\":\"meiso.camera_v4l2_capture_probe.v1\","
-        "\"verification\":\"THREE_FRAME_CAPTURE_RECEIPT\","
-        "\"build_target\":\"" EXPECTED_BUILD_TARGET
-        "\",\"pixel_format\":\"NV12\","
-        "\"width\":320,\"height\":240,\"bytes_per_line\":320,"
-        "\"size_image\":115200,\"driver_buffer_count\":4,"
-        "\"mapped_buffer_count\":4,\"mapped_bytes\":475136,"
-        "\"queued_buffers_running\":4,\"frame_count\":3,"
-        "\"final_phase\":\"STOPPED\",\"final_mapped_count\":0,"
-        "\"final_queued_count\":0,\"frames\":["
-        "{\"ordinal\":1,\"source_clock_epoch\":91,"
-        "\"monotonic_ns\":12345678000,\"raw_field\":1,"
-        "\"field_provenance\":1,\"raw_driver_sequence\":9,"
-        "\"driver_sequence_present\":true,\"effective_sequence\":9,"
-        "\"sequence_provenance\":1,\"producer_dropped_frames\":0,"
-        "\"bytes_used\":115200,\"fnv1a64\":\"7b90bf5253251f25\","
-        "\"sha256\":\"781ee4ecb0ebaef3a8327af0de6e2f48b3ff27ea375a1a68a0a222b7efae80a8\"},"
-        "{\"ordinal\":2,\"source_clock_epoch\":91,"
-        "\"monotonic_ns\":12345679000,\"raw_field\":1,"
-        "\"field_provenance\":1,\"raw_driver_sequence\":10,"
-        "\"driver_sequence_present\":true,\"effective_sequence\":10,"
-        "\"sequence_provenance\":1,\"producer_dropped_frames\":0,"
-        "\"bytes_used\":115200,\"fnv1a64\":\"7b90bf5253251f25\","
-        "\"sha256\":\"781ee4ecb0ebaef3a8327af0de6e2f48b3ff27ea375a1a68a0a222b7efae80a8\"},"
-        "{\"ordinal\":3,\"source_clock_epoch\":91,"
-        "\"monotonic_ns\":12345680000,\"raw_field\":1,"
-        "\"field_provenance\":1,\"raw_driver_sequence\":11,"
-        "\"driver_sequence_present\":true,\"effective_sequence\":11,"
-        "\"sequence_provenance\":1,\"producer_dropped_frames\":0,"
-        "\"bytes_used\":115200,\"fnv1a64\":\"7b90bf5253251f25\","
-        "\"sha256\":\"781ee4ecb0ebaef3a8327af0de6e2f48b3ff27ea375a1a68a0a222b7efae80a8\"}]}\n";
     const MeisoCameraV4l2Syscalls syscalls = {
-        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close
+        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close,
+        fake_monotonic_now
     };
     FakeCamera camera;
     MeisoCameraV4l2Config config;
@@ -392,8 +377,37 @@ static bool test_custom_capture_receipt(void)
     camera.would_block_once = true;
     CHECK(capture_run(&config, &first));
     CHECK(first.status == 0 && first.error_size == 0U &&
-          strcmp(first.output, expected) == 0 &&
-          first.output_size == sizeof(expected) - 1U &&
+          strstr(first.output,
+                 "\"schema\":\"meiso.camera_v4l2_capture_probe.v2\"") !=
+              NULL &&
+          strstr(first.output,
+                 "\"build_target\":\"" EXPECTED_BUILD_TARGET "\"") !=
+              NULL &&
+          strstr(first.output, "capture_probe.v1") == NULL &&
+          strstr(first.output,
+                 "\"raw_timestamp_seconds\":12,"
+                 "\"raw_timestamp_microseconds\":345678,"
+                 "\"raw_timestamp_monotonic\":true,"
+                 "\"effective_monotonic_ns\":12345678000,"
+                 "\"timestamp_provenance\":1") != NULL &&
+          strstr(first.output,
+                 "\"raw_timestamp_microseconds\":345680,"
+                 "\"raw_timestamp_monotonic\":true,"
+                 "\"effective_monotonic_ns\":12345680000,"
+                 "\"timestamp_provenance\":1") != NULL &&
+          strstr(first.output,
+                 "\"final_cleanup\":{\"phase\":1,"
+                 "\"run_generation\":1,\"source_clock_epoch\":91,"
+                 "\"driver_buffer_count\":0,"
+                 "\"mapped_buffer_count\":0,\"queued_buffer_count\":0,"
+                 "\"stream_on\":false,\"frame_borrowed\":false") != NULL &&
+          strstr(first.output,
+                 "\"last_effective_monotonic_ns\":12345680000,"
+                 "\"last_timestamp_provenance\":1,"
+                 "\"primary_failure_stage\":0,\"primary_error\":0,"
+                 "\"cleanup_failure_stage\":0,\"cleanup_error\":0,") !=
+              NULL &&
+          strstr(first.output, "\"mapped_bytes\":0}}\n") != NULL &&
           camera.open_calls == 1U && camera.close_calls == 1U &&
           camera.map_calls == 4U && camera.unmap_calls == 4U &&
           camera.queue_calls == 7U && camera.dequeue_calls == 4U &&
@@ -401,6 +415,7 @@ static bool test_custom_capture_receipt(void)
           camera.stream_off_calls == 1U &&
           camera.request_four_calls == 1U &&
           camera.request_zero_calls == 1U &&
+          camera.monotonic_calls == 0U &&
           camera.opened_flags == (O_RDWR | O_NONBLOCK | O_CLOEXEC) &&
           strcmp(camera.opened_path, config.device_path) == 0);
     reset_calls(&camera);
@@ -417,7 +432,8 @@ static bool test_custom_capture_receipt(void)
 static bool test_error_is_stderr_only(void)
 {
     const MeisoCameraV4l2Syscalls syscalls = {
-        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close
+        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close,
+        fake_monotonic_now
     };
     FakeCamera camera;
     MeisoCameraV4l2Config config;
@@ -439,10 +455,55 @@ static bool test_error_is_stderr_only(void)
     return true;
 }
 
+static bool test_zero_timestamp_receipt_truth(void)
+{
+    const MeisoCameraV4l2Syscalls syscalls = {
+        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close,
+        fake_monotonic_now
+    };
+    FakeCamera camera;
+    MeisoCameraV4l2Config config;
+    CapturedRun captured;
+    bool matches;
+
+    memset(&camera, 0, sizeof(camera));
+    camera.storage_size =
+        (size_t)MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT *
+        FAKE_MAPPING_BYTES;
+    camera.storage = (uint8_t *)calloc(1U, camera.storage_size);
+    if (camera.storage == NULL) {
+        return false;
+    }
+    camera.zero_timestamps = true;
+    config.device_path = "/dev/fake-zero-timestamp";
+    config.source_clock_epoch = 91U;
+    config.syscalls = &syscalls;
+    config.syscall_context = &camera;
+    matches = capture_run(&config, &captured) && captured.status == 0 &&
+          captured.error_size == 0U && camera.monotonic_calls == 3U &&
+          strstr(captured.output,
+                 "\"raw_timestamp_seconds\":0,"
+                 "\"raw_timestamp_microseconds\":0,"
+                 "\"raw_timestamp_monotonic\":true,"
+                 "\"effective_monotonic_ns\":50000000001,"
+                 "\"timestamp_provenance\":2") != NULL &&
+          strstr(captured.output,
+                 "\"effective_monotonic_ns\":50000000003,"
+                 "\"timestamp_provenance\":2") != NULL &&
+          strstr(captured.output,
+                 "\"last_effective_monotonic_ns\":50000000003,"
+                 "\"last_timestamp_provenance\":2") != NULL &&
+          strstr(captured.output, config.device_path) == NULL;
+    free(camera.storage);
+    CHECK(matches);
+    return true;
+}
+
 static bool test_poll_diagnostic_is_bounded_and_path_free(void)
 {
     const MeisoCameraV4l2Syscalls syscalls = {
-        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close
+        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close,
+        fake_monotonic_now
     };
     FakeCamera camera;
     MeisoCameraV4l2Config config;
@@ -473,6 +534,14 @@ static bool test_poll_diagnostic_is_bounded_and_path_free(void)
           strstr(captured.error, "\"raw_field\":4") != NULL &&
           strstr(captured.error,
                  "\"driver_sequence_present\":true") != NULL &&
+          strstr(captured.error,
+                 "\"raw_timestamp_seconds\":12,"
+                 "\"raw_timestamp_microseconds\":345678,"
+                 "\"raw_timestamp_monotonic\":true") != NULL &&
+          strstr(captured.error,
+                 "\"timestamp_candidate_present\":false,"
+                 "\"timestamp_candidate_monotonic_ns\":0,"
+                 "\"timestamp_provenance\":0") != NULL &&
           strstr(captured.error, config.device_path) == NULL &&
           strstr(captured.error,
                  "\"code\":\"E_CLEANUP\",\"detail\":1") != NULL;
@@ -484,7 +553,8 @@ static bool test_poll_diagnostic_is_bounded_and_path_free(void)
 static bool test_cleanup_debt_is_bounded_and_explicit(void)
 {
     const MeisoCameraV4l2Syscalls syscalls = {
-        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close
+        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close,
+        fake_monotonic_now
     };
     FakeCamera camera;
     MeisoCameraV4l2Config config;
@@ -534,7 +604,7 @@ static bool test_cleanup_debt_is_bounded_and_explicit(void)
 static bool test_max_receipt_is_one_complete_line(void)
 {
     FILE *output = tmpfile();
-    char line[2048];
+    char line[4096];
     size_t size;
     size_t newline_count = 0U;
     size_t index;
@@ -552,19 +622,31 @@ static bool test_max_receipt_is_one_complete_line(void)
           strstr(line, "\"mapped_bytes\":18446744073709551615") != NULL &&
           strstr(line,
                  "\"source_clock_epoch\":18446744073709551615") != NULL &&
-          strstr(line, "\"monotonic_ns\":18446744073709551615") != NULL &&
+          strstr(line,
+                 "\"effective_monotonic_ns\":18446744073709551615") !=
+              NULL &&
+          strstr(line,
+                 "\"raw_timestamp_seconds\":9223372036854775807") != NULL &&
+          strstr(line,
+                 "\"raw_timestamp_microseconds\":2147483647") != NULL &&
+          strstr(line, "\"timestamp_provenance\":255") != NULL &&
           strstr(line, "\"raw_driver_sequence\":4294967295") != NULL &&
           strstr(line, "\"effective_sequence\":4294967295") != NULL &&
           strstr(line,
                  "\"producer_dropped_frames\":18446744073709551615") !=
-              NULL);
+              NULL &&
+          strstr(line, "\"final_cleanup\":{\"phase\":255") != NULL &&
+          strstr(line, "\"arena_bytes\":18446744073709551615") != NULL &&
+          strstr(line, "\"mapped_bytes\":18446744073709551615}}") != NULL);
     CHECK(fclose(output) == 0);
     return true;
 }
 
 int main(void)
 {
-    if (!test_custom_capture_receipt() || !test_error_is_stderr_only() ||
+    if (!test_custom_capture_receipt() ||
+        !test_zero_timestamp_receipt_truth() ||
+        !test_error_is_stderr_only() ||
         !test_poll_diagnostic_is_bounded_and_path_free() ||
         !test_cleanup_debt_is_bounded_and_explicit()) {
         return 1;

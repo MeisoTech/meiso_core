@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(__linux__)
 #include <linux/videodev2.h>
@@ -323,13 +324,48 @@ static int native_close_device(void *context, int fd)
 #endif
 }
 
+static int native_monotonic_now(
+    void *context,
+    uint64_t *out_monotonic_ns
+)
+{
+    struct timespec now;
+    uint64_t seconds;
+    uint64_t nanoseconds;
+    uint64_t candidate;
+    int saved;
+
+    (void)context;
+    if (out_monotonic_ns == NULL) {
+        return EINVAL;
+    }
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        saved = errno;
+        return meiso_camera_v4l2_private_error_or_io(saved);
+    }
+    if (now.tv_sec < (time_t)0 || now.tv_nsec < 0L ||
+        now.tv_nsec >= 1000000000L) {
+        return EOVERFLOW;
+    }
+    seconds = (uint64_t)now.tv_sec;
+    nanoseconds = (uint64_t)now.tv_nsec;
+    if (seconds > (UINT64_MAX - nanoseconds) /
+            UINT64_C(1000000000)) {
+        return EOVERFLOW;
+    }
+    candidate = seconds * UINT64_C(1000000000) + nanoseconds;
+    *out_monotonic_ns = candidate;
+    return 0;
+}
+
 const MeisoCameraV4l2Syscalls
     meiso_camera_v4l2_private_native_syscalls = {
         native_open_device,
         native_device_ioctl,
         native_map_buffer,
         native_unmap_buffer,
-        native_close_device
+        native_close_device,
+        native_monotonic_now
     };
 
 int meiso_camera_v4l2_private_call_open(
@@ -421,4 +457,27 @@ int meiso_camera_v4l2_private_call_close(
     adapter->callback_active = false;
     return result == 0 ? 0 :
         meiso_camera_v4l2_private_error_or_io(result);
+}
+
+int meiso_camera_v4l2_private_call_monotonic_now(
+    MeisoCameraV4l2Adapter *adapter,
+    uint64_t *out_monotonic_ns
+)
+{
+    uint64_t candidate = 0U;
+    int result;
+
+    if (out_monotonic_ns == NULL) {
+        return EINVAL;
+    }
+    adapter->callback_active = true;
+    result = adapter->syscalls.monotonic_now(
+        adapter->syscall_context, &candidate
+    );
+    adapter->callback_active = false;
+    if (result != 0) {
+        return meiso_camera_v4l2_private_error_or_io(result);
+    }
+    *out_monotonic_ns = candidate;
+    return 0;
 }

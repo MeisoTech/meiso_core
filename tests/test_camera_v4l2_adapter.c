@@ -78,6 +78,12 @@ typedef struct {
     bool reenter_on_open;
     MeisoCameraV4l2StartStatus reentrant_start_status;
     bool reentrant_snapshot_failed;
+    uint64_t monotonic_now_ns;
+    uint64_t monotonic_step_ns;
+    int monotonic_error;
+    unsigned monotonic_calls;
+    bool reenter_on_monotonic;
+    bool monotonic_reentrant_snapshot_failed;
 } FakeKernel;
 
 typedef struct {
@@ -125,6 +131,8 @@ static void fake_kernel_defaults(FakeKernel *kernel)
     kernel->dequeue.raw_field = MEISO_CAMERA_V4L2_RAW_FIELD_NONE;
     kernel->dequeue.field_provenance =
         MEISO_CAMERA_V4L2_FIELD_EXPLICIT_PROGRESSIVE;
+    kernel->monotonic_now_ns = UINT64_C(30000000000);
+    kernel->monotonic_step_ns = 1U;
 }
 
 static void fake_clear_calls(FakeKernel *kernel)
@@ -143,6 +151,7 @@ static void fake_clear_calls(FakeKernel *kernel)
     kernel->stream_off_calls = 0U;
     kernel->request_four_calls = 0U;
     kernel->request_zero_calls = 0U;
+    kernel->monotonic_calls = 0U;
     kernel->opened_flags = 0;
     memset(kernel->opened_path, 0, sizeof(kernel->opened_path));
     memset(&kernel->set_format, 0, sizeof(kernel->set_format));
@@ -347,6 +356,32 @@ static int fake_close(void *context, int fd)
     return kernel->close_error;
 }
 
+static int fake_monotonic_now(void *context, uint64_t *out_monotonic_ns)
+{
+    FakeKernel *kernel = (FakeKernel *)context;
+
+    ++kernel->monotonic_calls;
+    if (kernel->reenter_on_monotonic && kernel->reentry_adapter != NULL) {
+        MeisoCameraV4l2Snapshot snapshot;
+        kernel->monotonic_reentrant_snapshot_failed =
+            !meiso_camera_v4l2_snapshot(
+                kernel->reentry_adapter, &snapshot
+            );
+    }
+    if (kernel->monotonic_error != 0) {
+        return kernel->monotonic_error;
+    }
+    if (out_monotonic_ns == NULL) {
+        return EINVAL;
+    }
+    *out_monotonic_ns = kernel->monotonic_now_ns;
+    if (kernel->monotonic_step_ns <=
+        UINT64_MAX - kernel->monotonic_now_ns) {
+        kernel->monotonic_now_ns += kernel->monotonic_step_ns;
+    }
+    return 0;
+}
+
 static void fixture_destroy(Fixture *fixture)
 {
     free(fixture->kernel.storage);
@@ -365,7 +400,8 @@ static bool fixture_init(Fixture *fixture)
         (uint8_t *)calloc(1U, fixture->kernel.storage_size);
     CHECK(fixture->kernel.storage != NULL);
     fixture->syscalls = (MeisoCameraV4l2Syscalls){
-        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close
+        fake_open, fake_ioctl, fake_map, fake_unmap, fake_close,
+        fake_monotonic_now
     };
     (void)snprintf(fixture->path, sizeof(fixture->path), "%s", "/dev/fake0");
     fixture->config.device_path = fixture->path;
@@ -654,6 +690,8 @@ static bool test_poll_borrow_release_sequence_and_transient(void)
               MEISO_CAMERA_V4L2_FIELD_EXPLICIT_PROGRESSIVE &&
           frame.sequence_provenance ==
               MEISO_CAMERA_V4L2_SEQUENCE_DRIVER &&
+          frame.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
           frame.pixel_format == MEISO_COMPOSITION_MEDIA_PIXEL_NV12 &&
           frame.width == MEISO_CAMERA_V4L2_WIDTH &&
           frame.height == MEISO_CAMERA_V4L2_HEIGHT &&
@@ -725,6 +763,11 @@ static bool test_poll_borrow_release_sequence_and_transient(void)
           snapshot.last_sequence == 4U &&
           snapshot.last_sequence_provenance ==
               MEISO_CAMERA_V4L2_SEQUENCE_DRIVER &&
+          snapshot.last_timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
+          snapshot.last_dequeue.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
+          snapshot.last_dequeue.timestamp_candidate_present &&
           !snapshot.frame_borrowed);
     CHECK(meiso_camera_v4l2_stop(fixture.adapter) ==
           MEISO_CAMERA_V4L2_STOP_STOPPED);
@@ -732,7 +775,87 @@ static bool test_poll_borrow_release_sequence_and_transient(void)
     return true;
 }
 
-static bool test_zero_and_equal_timestamp_then_decrease(void)
+static bool cleanup_is_complete(const MeisoCameraV4l2Snapshot *snapshot)
+{
+    return snapshot != NULL && !snapshot->stream_on &&
+        !snapshot->frame_borrowed && snapshot->driver_buffer_count == 0U &&
+        snapshot->mapped_buffer_count == 0U &&
+        snapshot->queued_buffer_count == 0U && snapshot->mapped_bytes == 0U;
+}
+
+static bool test_timestamp_provenance_and_zero_fallback(void)
+{
+    Fixture fixture;
+    MeisoCameraV4l2FrameView frame;
+    MeisoCameraV4l2Snapshot snapshot;
+
+    CHECK(fixture_init(&fixture) && start_and_check(&fixture));
+    fixture.kernel.reenter_on_monotonic = true;
+    fixture.kernel.dequeue.timestamp_seconds = 0;
+    fixture.kernel.dequeue.timestamp_microseconds = 0;
+    fixture.kernel.dequeue.driver_sequence = 1U;
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+              MEISO_CAMERA_V4L2_POLL_FRAME &&
+          frame.source_time.monotonic_ns == UINT64_C(30000000000) &&
+          frame.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+          fixture.kernel.monotonic_calls == 1U &&
+          fixture.kernel.monotonic_reentrant_snapshot_failed &&
+          meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+          snapshot.last_timestamp_monotonic_ns ==
+              UINT64_C(30000000000) &&
+          snapshot.last_timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+          snapshot.last_dequeue.timestamp_seconds == 0 &&
+          snapshot.last_dequeue.timestamp_microseconds == 0 &&
+          snapshot.last_dequeue.timestamp_monotonic &&
+          snapshot.last_dequeue.timestamp_candidate_present &&
+          snapshot.last_dequeue.timestamp_candidate_monotonic_ns ==
+              UINT64_C(30000000000) &&
+          snapshot.last_dequeue.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
+              MEISO_CAMERA_V4L2_RELEASE_RELEASED);
+    fixture.kernel.dequeue.driver_sequence = 2U;
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+              MEISO_CAMERA_V4L2_POLL_FRAME &&
+          frame.source_time.monotonic_ns == UINT64_C(30000000001) &&
+          frame.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+          fixture.kernel.monotonic_calls == 2U &&
+          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
+              MEISO_CAMERA_V4L2_RELEASE_RELEASED);
+    fixture.kernel.dequeue.driver_sequence = 3U;
+    fixture.kernel.dequeue.timestamp_seconds = 31;
+    fixture.kernel.dequeue.timestamp_microseconds = 0;
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+              MEISO_CAMERA_V4L2_POLL_FRAME &&
+          frame.source_time.monotonic_ns == UINT64_C(31000000000) &&
+          frame.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
+          fixture.kernel.monotonic_calls == 2U &&
+          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
+              MEISO_CAMERA_V4L2_RELEASE_RELEASED);
+    fixture.kernel.dequeue.driver_sequence = 4U;
+    fixture.kernel.dequeue.timestamp_seconds = 0;
+    fixture.kernel.monotonic_now_ns = UINT64_C(32000000000);
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+              MEISO_CAMERA_V4L2_POLL_FRAME &&
+          frame.source_time.monotonic_ns == UINT64_C(32000000000) &&
+          frame.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+          fixture.kernel.monotonic_calls == 3U &&
+          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
+              MEISO_CAMERA_V4L2_RELEASE_RELEASED &&
+          meiso_camera_v4l2_stop(fixture.adapter) ==
+              MEISO_CAMERA_V4L2_STOP_STOPPED &&
+          meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+          cleanup_is_complete(&snapshot));
+    fixture_destroy(&fixture);
+    return true;
+}
+
+static bool run_nonzero_timestamp_violation(bool regression)
 {
     Fixture fixture;
     MeisoCameraV4l2FrameView frame;
@@ -740,28 +863,14 @@ static bool test_zero_and_equal_timestamp_then_decrease(void)
     MeisoCameraV4l2Snapshot snapshot;
 
     CHECK(fixture_init(&fixture) && start_and_check(&fixture));
-    fixture.kernel.dequeue.timestamp_seconds = 0;
-    fixture.kernel.dequeue.timestamp_microseconds = 0;
-    fixture.kernel.dequeue.driver_sequence = 1U;
     CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
               MEISO_CAMERA_V4L2_POLL_FRAME &&
-          frame.source_time.monotonic_ns == 0U &&
+          frame.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
           meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
               MEISO_CAMERA_V4L2_RELEASE_RELEASED);
     fixture.kernel.dequeue.driver_sequence = 2U;
-    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
-              MEISO_CAMERA_V4L2_POLL_FRAME &&
-          frame.source_time.monotonic_ns == 0U &&
-          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
-              MEISO_CAMERA_V4L2_RELEASE_RELEASED);
-    fixture.kernel.dequeue.driver_sequence = 3U;
-    fixture.kernel.dequeue.timestamp_seconds = 1;
-    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
-              MEISO_CAMERA_V4L2_POLL_FRAME &&
-          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
-              MEISO_CAMERA_V4L2_RELEASE_RELEASED);
-    fixture.kernel.dequeue.driver_sequence = 4U;
-    fixture.kernel.dequeue.timestamp_seconds = 0;
+    fixture.kernel.dequeue.timestamp_microseconds = regression ? 19 : 20;
     memset(&output, 0xa5, sizeof(output));
     {
         const MeisoCameraV4l2FrameView before = output;
@@ -769,14 +878,152 @@ static bool test_zero_and_equal_timestamp_then_decrease(void)
                   MEISO_CAMERA_V4L2_POLL_TERMINAL &&
               memcmp(&before, &output, sizeof(before)) == 0);
     }
-    CHECK(meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+    CHECK(fixture.kernel.monotonic_calls == 0U &&
+          meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
           snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
           snapshot.primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
           snapshot.primary_error == EPROTO &&
-          snapshot.cleanup_failure_stage == MEISO_CAMERA_V4L2_FAILURE_NONE &&
-          snapshot.cleanup_error == 0);
+          snapshot.last_dequeue.reject_reason ==
+              MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP &&
+          snapshot.last_dequeue.timestamp_candidate_present &&
+          snapshot.last_dequeue.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
+          snapshot.last_timestamp_monotonic_ns == UINT64_C(10000020000) &&
+          snapshot.last_timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
+          cleanup_is_complete(&snapshot));
     fixture_destroy(&fixture);
+    return true;
+}
+
+static bool run_fallback_failure(
+    int clock_error,
+    uint64_t clock_value,
+    MeisoCameraV4l2FailureStage expected_stage,
+    int expected_error,
+    MeisoCameraV4l2FrameRejectReason expected_reject
+)
+{
+    Fixture fixture;
+    MeisoCameraV4l2FrameView frame;
+    MeisoCameraV4l2FrameView output;
+    MeisoCameraV4l2Snapshot snapshot;
+
+    CHECK(fixture_init(&fixture) && start_and_check(&fixture));
+    CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+              MEISO_CAMERA_V4L2_POLL_FRAME &&
+          meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
+              MEISO_CAMERA_V4L2_RELEASE_RELEASED);
+    fixture.kernel.dequeue.driver_sequence = 2U;
+    fixture.kernel.dequeue.timestamp_seconds = 0;
+    fixture.kernel.dequeue.timestamp_microseconds = 0;
+    fixture.kernel.monotonic_error = clock_error;
+    fixture.kernel.monotonic_now_ns = clock_value;
+    memset(&output, 0xa5, sizeof(output));
+    {
+        const MeisoCameraV4l2FrameView before = output;
+        CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &output) ==
+                  MEISO_CAMERA_V4L2_POLL_TERMINAL &&
+              memcmp(&before, &output, sizeof(before)) == 0);
+    }
+    CHECK(fixture.kernel.monotonic_calls == 1U &&
+          meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+          snapshot.phase == MEISO_CAMERA_V4L2_PHASE_TERMINAL &&
+          snapshot.primary_failure_stage == expected_stage &&
+          snapshot.primary_error == expected_error &&
+          snapshot.last_dequeue.reject_reason == expected_reject &&
+          snapshot.last_dequeue.timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+          snapshot.last_dequeue.timestamp_candidate_present ==
+              (clock_error == 0) &&
+          snapshot.last_dequeue.timestamp_candidate_monotonic_ns ==
+              (clock_error == 0 ? clock_value : 0U) &&
+          snapshot.last_timestamp_monotonic_ns == UINT64_C(10000020000) &&
+          snapshot.last_timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC &&
+          cleanup_is_complete(&snapshot));
+    fixture_destroy(&fixture);
+    return true;
+}
+
+static bool test_timestamp_terminal_matrix(void)
+{
+    Fixture fixture;
+    MeisoCameraV4l2FrameView frame;
+    MeisoCameraV4l2FrameView output;
+    MeisoCameraV4l2Snapshot snapshot;
+    uint32_t variant;
+
+    CHECK(run_nonzero_timestamp_violation(false));
+    CHECK(run_nonzero_timestamp_violation(true));
+    CHECK(run_fallback_failure(
+        EIO, UINT64_C(40000000000),
+        MEISO_CAMERA_V4L2_FAILURE_TIMESTAMP_CLOCK, EIO,
+        MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_CLOCK
+    ));
+    CHECK(run_fallback_failure(
+        EOVERFLOW, UINT64_MAX,
+        MEISO_CAMERA_V4L2_FAILURE_TIMESTAMP_CLOCK, EOVERFLOW,
+        MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_CLOCK
+    ));
+    CHECK(run_fallback_failure(
+        0, 0U, MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO,
+        MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP
+    ));
+    CHECK(run_fallback_failure(
+        0, UINT64_C(10000020000),
+        MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO,
+        MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP
+    ));
+    CHECK(run_fallback_failure(
+        0, UINT64_C(10000019999),
+        MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO,
+        MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP
+    ));
+    for (variant = 0U; variant < 3U; ++variant) {
+        CHECK(fixture_init(&fixture) && start_and_check(&fixture));
+        fixture.kernel.dequeue.timestamp_seconds = 0;
+        fixture.kernel.dequeue.timestamp_microseconds = 0;
+        CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &frame) ==
+                  MEISO_CAMERA_V4L2_POLL_FRAME &&
+              frame.timestamp_provenance ==
+                  MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+              meiso_camera_v4l2_release_frame(fixture.adapter, &frame.ref) ==
+                  MEISO_CAMERA_V4L2_RELEASE_RELEASED);
+        fixture.kernel.dequeue.driver_sequence = 2U;
+        if (variant == 0U) {
+            fixture.kernel.dequeue.timestamp_seconds = 30;
+            fixture.kernel.monotonic_now_ns = UINT64_C(90000000000);
+        } else {
+            fixture.kernel.monotonic_now_ns = variant == 1U ?
+                UINT64_C(30000000000) : UINT64_C(29999999999);
+        }
+        memset(&output, 0xa5, sizeof(output));
+        {
+            const MeisoCameraV4l2FrameView before = output;
+            CHECK(meiso_camera_v4l2_poll_frame(fixture.adapter, &output) ==
+                      MEISO_CAMERA_V4L2_POLL_TERMINAL &&
+                  memcmp(&before, &output, sizeof(before)) == 0);
+        }
+        CHECK(fixture.kernel.monotonic_calls == (variant == 0U ? 1U : 2U) &&
+              meiso_camera_v4l2_snapshot(fixture.adapter, &snapshot) &&
+              snapshot.primary_failure_stage ==
+                  MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT &&
+              snapshot.last_dequeue.reject_reason ==
+                  MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP &&
+              snapshot.last_dequeue.timestamp_candidate_present &&
+              snapshot.last_dequeue.timestamp_provenance ==
+                  (variant == 0U ?
+                       MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC :
+                       MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC) &&
+              snapshot.last_timestamp_monotonic_ns ==
+                  UINT64_C(30000000000) &&
+              snapshot.last_timestamp_provenance ==
+                  MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC &&
+              cleanup_is_complete(&snapshot));
+        fixture_destroy(&fixture);
+    }
     return true;
 }
 
@@ -1036,10 +1283,15 @@ static bool run_bad_dequeue_case(uint32_t variant)
         case 7U:
             fixture.kernel.dequeue.driver_sequence = 19U;
             break;
-        default:
+        case 8U:
             fixture.kernel.dequeue.driver_sequence = 21U;
             fixture.kernel.dequeue.timestamp_seconds = 10;
             fixture.kernel.dequeue.timestamp_microseconds = 19;
+            break;
+        default:
+            fixture.kernel.dequeue.driver_sequence = 21U;
+            fixture.kernel.dequeue.timestamp_seconds = INT64_MAX;
+            fixture.kernel.dequeue.timestamp_microseconds = 999999;
             break;
     }
     memset(&output, 0xa5, sizeof(output));
@@ -1066,7 +1318,7 @@ static bool test_poll_contract_matrix(void)
 {
     uint32_t variant;
 
-    for (variant = 0U; variant < 9U; ++variant) {
+    for (variant = 0U; variant < 10U; ++variant) {
         CHECK(run_bad_dequeue_case(variant));
     }
     return true;
@@ -1232,6 +1484,7 @@ static bool test_init_alias_bounds_and_public_aliases(void)
         (MeisoCameraV4l2Adapter *)(uintptr_t)UINTPTR_MAX;
     MeisoCameraV4l2Snapshot snapshot;
     MeisoCameraV4l2FrameView frame;
+    MeisoCameraV4l2Syscalls incomplete_syscalls;
     size_t required;
     size_t alignment;
     char unterminated[MEISO_CAMERA_V4L2_DEVICE_PATH_CAPACITY];
@@ -1265,6 +1518,14 @@ static bool test_init_alias_bounds_and_public_aliases(void)
     ));
     config = fixture.config;
     config.source_clock_epoch = 0U;
+    CHECK(check_init_failure(
+        &config, required, 0U, &sentinel,
+        MEISO_CAMERA_V4L2_INIT_INVALID_CONFIG
+    ));
+    incomplete_syscalls = fixture.syscalls;
+    incomplete_syscalls.monotonic_now = NULL;
+    config = fixture.config;
+    config.syscalls = &incomplete_syscalls;
     CHECK(check_init_failure(
         &config, required, 0U, &sentinel,
         MEISO_CAMERA_V4L2_INIT_INVALID_CONFIG
@@ -1367,7 +1628,8 @@ int main(void)
         !test_start_failure_matrix() ||
         !test_callback_reentry_is_fail_closed() ||
         !test_poll_borrow_release_sequence_and_transient() ||
-        !test_zero_and_equal_timestamp_then_decrease() ||
+        !test_timestamp_provenance_and_zero_fallback() ||
+        !test_timestamp_terminal_matrix() ||
         !test_contract_failure_terminal_and_cleanup_retry() ||
         !test_cleanup_failure_stages_and_close_once() ||
         !test_duplicate_mapping_and_dequeue_error() ||

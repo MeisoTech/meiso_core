@@ -546,6 +546,20 @@ static int fake_camera_close(void *context, int fd)
     return camera->succeed && fd == FAKE_CAMERA_FD ? 0 : ENOSYS;
 }
 
+static int fake_camera_monotonic_now(
+    void *context,
+    uint64_t *out_monotonic_ns
+)
+{
+    FakeCamera *camera = context;
+
+    if (!camera->succeed || out_monotonic_ns == NULL) {
+        return ENOSYS;
+    }
+    *out_monotonic_ns = UINT64_C(2000000000);
+    return 0;
+}
+
 static MeisoCompositionProfileCatalogConfig catalog_config(void)
 {
     MeisoCompositionProfileCatalogConfig value;
@@ -751,7 +765,8 @@ static bool fixture_shape_create(EdgeFixtureShape *fixture, uint64_t salt)
         fake_camera_ioctl,
         fake_camera_map,
         fake_camera_unmap,
-        fake_camera_close
+        fake_camera_close,
+        fake_camera_monotonic_now
     };
     fixture->camera.storage_size =
         (size_t)MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT *

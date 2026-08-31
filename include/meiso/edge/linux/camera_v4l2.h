@@ -82,6 +82,14 @@ enum {
     MEISO_CAMERA_V4L2_SEQUENCE_ADAPTER_SYNTHETIC = 2
 };
 
+/* Truth source for the effective CLOCK_MONOTONIC frame timestamp. */
+typedef uint8_t MeisoCameraV4l2TimestampProvenance;
+enum {
+    MEISO_CAMERA_V4L2_TIMESTAMP_NONE = 0,
+    MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC = 1,
+    MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC = 2
+};
+
 typedef struct {
     uint32_t index;
     uint32_t length;
@@ -127,6 +135,10 @@ typedef union {
  * close_device transfers fd ownership on its first call even if it reports an
  * error; the adapter never retries or reuses that integer. Failed unmap keeps
  * ownership of that mapping so a later stop may retry bounded cleanup.
+ * monotonic_now returns a same-domain CLOCK_MONOTONIC nanosecond reading; it
+ * is called only when a successful DQBUF reports the exact raw timestamp
+ * (seconds=0,microseconds=0). Every callback returns zero on success or a
+ * positive errno without changing its output on failure.
  */
 typedef struct {
     int (*open_device)(
@@ -150,6 +162,7 @@ typedef struct {
     );
     int (*unmap_buffer)(void *context, void *mapping, size_t length);
     int (*close_device)(void *context, int fd);
+    int (*monotonic_now)(void *context, uint64_t *out_monotonic_ns);
 } MeisoCameraV4l2Syscalls;
 
 typedef struct {
@@ -187,7 +200,8 @@ enum {
     MEISO_CAMERA_V4L2_FAILURE_STREAM_OFF = 12,
     MEISO_CAMERA_V4L2_FAILURE_UNMAP_BUFFER = 13,
     MEISO_CAMERA_V4L2_FAILURE_RELEASE_BUFFERS = 14,
-    MEISO_CAMERA_V4L2_FAILURE_CLOSE = 15
+    MEISO_CAMERA_V4L2_FAILURE_CLOSE = 15,
+    MEISO_CAMERA_V4L2_FAILURE_TIMESTAMP_CLOCK = 16
 };
 
 typedef struct {
@@ -211,6 +225,7 @@ typedef struct {
     uint64_t producer_dropped_frames;
     MeisoCameraV4l2FieldProvenance field_provenance;
     MeisoCameraV4l2SequenceProvenance sequence_provenance;
+    MeisoCameraV4l2TimestampProvenance timestamp_provenance;
     MeisoCompositionMediaPixelFormat pixel_format;
     uint16_t width;
     uint16_t height;
@@ -230,9 +245,10 @@ enum {
     MEISO_CAMERA_V4L2_FRAME_REJECT_FRAME_ERROR = 6,
     MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_VALUE = 7,
     MEISO_CAMERA_V4L2_FRAME_REJECT_MAPPING = 8,
-    MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_REGRESSION = 9,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP = 9,
     MEISO_CAMERA_V4L2_FRAME_REJECT_SEQUENCE = 10,
-    MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED = 11
+    MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED = 11,
+    MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_CLOCK = 12
 };
 
 /*
@@ -252,6 +268,10 @@ typedef struct {
     int64_t timestamp_seconds;
     int32_t timestamp_microseconds;
     bool timestamp_monotonic;
+    /* Candidate source/value, including one rejected before frame exposure. */
+    bool timestamp_candidate_present;
+    uint64_t timestamp_candidate_monotonic_ns;
+    MeisoCameraV4l2TimestampProvenance timestamp_provenance;
     bool frame_error;
     MeisoCameraV4l2FrameRejectReason reject_reason;
 } MeisoCameraV4l2DequeuedDiagnostic;
@@ -272,6 +292,7 @@ typedef struct {
     uint32_t last_sequence;
     MeisoCameraV4l2SequenceProvenance last_sequence_provenance;
     uint64_t last_timestamp_monotonic_ns;
+    MeisoCameraV4l2TimestampProvenance last_timestamp_provenance;
     MeisoCameraV4l2DequeuedDiagnostic last_dequeue;
     /* Primary operation failure and first cleanup failure never overwrite. */
     MeisoCameraV4l2FailureStage primary_failure_stage;
@@ -376,7 +397,16 @@ MeisoCameraV4l2StartStatus meiso_camera_v4l2_start(
  * WOULD_BLOCK and EINTR returns INTERRUPTED with adapter and output byte-exact
  * unchanged. Only FRAME changes out_frame and creates the sole outstanding
  * borrow. A dequeued buffer must have exact index, bytesused, monotonic V4L2
- * timestamp flag/value and configured format. For a present driver sequence,
+ * timestamp flag/value and configured format. A valid non-zero raw driver
+ * timestamp is accepted only when it is strictly newer than the last
+ * effective timestamp and is marked DRIVER_MONOTONIC. Exact raw (0,0) means
+ * unavailable: the adapter reads the injected/native CLOCK_MONOTONIC clock at
+ * dequeue, preserves raw zero in last_dequeue, and marks the effective value
+ * ADAPTER_DEQUEUE_MONOTONIC. That local value must be non-zero and strictly
+ * newer than the last effective timestamp. A non-zero driver equal/regression,
+ * invalid raw timeval, fallback clock failure, or non-forward fallback is
+ * terminal; the adapter never repairs a timestamp with +1. For a present
+ * driver sequence,
  * the first value is accepted; thereafter modulo-u32 delta 1..0x7fffffff is
  * forward, delta-1 is added to producer_dropped_frames, and zero/backward
  * deltas are fatal. The native K230 vvcam driver leaves public capture

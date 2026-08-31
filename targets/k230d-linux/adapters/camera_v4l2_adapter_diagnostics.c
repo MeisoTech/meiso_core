@@ -55,7 +55,8 @@ bool meiso_camera_v4l2_private_syscall_table_valid(
 {
     return syscalls != NULL && syscalls->open_device != NULL &&
         syscalls->device_ioctl != NULL && syscalls->map_buffer != NULL &&
-        syscalls->unmap_buffer != NULL && syscalls->close_device != NULL;
+        syscalls->unmap_buffer != NULL && syscalls->close_device != NULL &&
+        syscalls->monotonic_now != NULL;
 }
 
 bool meiso_camera_v4l2_private_mapping_ranges_valid(
@@ -129,10 +130,12 @@ bool meiso_camera_v4l2_private_adapter_valid(
          adapter->phase != MEISO_CAMERA_V4L2_PHASE_TERMINAL) ||
         adapter->last_sequence_provenance >
             MEISO_CAMERA_V4L2_SEQUENCE_ADAPTER_SYNTHETIC ||
+        adapter->last_timestamp_provenance >
+            MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC ||
         adapter->primary_failure_stage >
-            MEISO_CAMERA_V4L2_FAILURE_CLOSE ||
+            MEISO_CAMERA_V4L2_FAILURE_TIMESTAMP_CLOCK ||
         adapter->cleanup_failure_stage >
-            MEISO_CAMERA_V4L2_FAILURE_CLOSE ||
+            MEISO_CAMERA_V4L2_FAILURE_TIMESTAMP_CLOCK ||
         ((adapter->primary_failure_stage ==
               MEISO_CAMERA_V4L2_FAILURE_NONE) !=
          (adapter->primary_error == 0)) ||
@@ -145,6 +148,19 @@ bool meiso_camera_v4l2_private_adapter_valid(
         (adapter->last_sequence_provenance ==
              MEISO_CAMERA_V4L2_SEQUENCE_NONE &&
          adapter->last_sequence != 0U) ||
+        ((adapter->last_timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_NONE) !=
+         (adapter->last_timestamp_monotonic_ns == 0U)) ||
+        ((adapter->last_sequence_provenance ==
+              MEISO_CAMERA_V4L2_SEQUENCE_NONE) !=
+         (adapter->last_timestamp_provenance ==
+              MEISO_CAMERA_V4L2_TIMESTAMP_NONE)) ||
+        adapter->last_dequeue.timestamp_provenance >
+            MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC ||
+        adapter->last_dequeue.reject_reason >
+            MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_CLOCK ||
+        (!adapter->last_dequeue.timestamp_candidate_present &&
+         adapter->last_dequeue.timestamp_candidate_monotonic_ns != 0U) ||
         !meiso_camera_v4l2_private_mapping_ranges_valid(adapter)) {
         return false;
     }
@@ -281,6 +297,7 @@ bool meiso_camera_v4l2_snapshot(
     value.last_sequence_provenance = adapter->last_sequence_provenance;
     value.last_timestamp_monotonic_ns =
         adapter->last_timestamp_monotonic_ns;
+    value.last_timestamp_provenance = adapter->last_timestamp_provenance;
     value.last_dequeue = adapter->last_dequeue;
     value.primary_failure_stage = adapter->primary_failure_stage;
     value.primary_error = adapter->primary_error;

@@ -47,6 +47,19 @@ static void record_dequeue(
     adapter->last_dequeue = diagnostic;
 }
 
+static void record_timestamp_candidate(
+    MeisoCameraV4l2Adapter *adapter,
+    MeisoCameraV4l2TimestampProvenance provenance,
+    bool present,
+    uint64_t value
+)
+{
+    adapter->last_dequeue.timestamp_provenance = provenance;
+    adapter->last_dequeue.timestamp_candidate_present = present;
+    adapter->last_dequeue.timestamp_candidate_monotonic_ns =
+        present ? value : 0U;
+}
+
 static bool frame_ref_equal(
     MeisoCameraV4l2FrameRef lhs,
     MeisoCameraV4l2FrameRef rhs
@@ -111,6 +124,7 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
     uint32_t sequence;
     uint32_t synthetic_high_water;
     MeisoCameraV4l2SequenceProvenance sequence_provenance;
+    MeisoCameraV4l2TimestampProvenance timestamp_provenance;
     int result;
 
     if (!meiso_camera_v4l2_private_adapter_valid(adapter) ||
@@ -233,27 +247,51 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
         );
         return MEISO_CAMERA_V4L2_POLL_TERMINAL;
     }
-    mapping = &adapter->mappings[argument.buffer.index];
-    if (!mapping->owned || !mapping->queued ||
-        mapping->length < MEISO_CAMERA_V4L2_SIZE_IMAGE) {
-        record_dequeue(
-            adapter,
-            &argument.buffer,
-            MEISO_CAMERA_V4L2_FRAME_REJECT_MAPPING
+    if (timestamp == 0U) {
+        timestamp_provenance =
+            MEISO_CAMERA_V4L2_TIMESTAMP_ADAPTER_DEQUEUE_MONOTONIC;
+        record_timestamp_candidate(
+            adapter, timestamp_provenance, false, 0U
         );
+        result = meiso_camera_v4l2_private_call_monotonic_now(
+            adapter, &timestamp
+        );
+        if (result != 0) {
+            adapter->last_dequeue.reject_reason =
+                MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_CLOCK;
+            terminal_failure(
+                adapter,
+                MEISO_CAMERA_V4L2_FAILURE_TIMESTAMP_CLOCK,
+                result
+            );
+            return MEISO_CAMERA_V4L2_POLL_TERMINAL;
+        }
+        record_timestamp_candidate(
+            adapter, timestamp_provenance, true, timestamp
+        );
+    } else {
+        timestamp_provenance =
+            MEISO_CAMERA_V4L2_TIMESTAMP_DRIVER_MONOTONIC;
+        record_timestamp_candidate(
+            adapter, timestamp_provenance, true, timestamp
+        );
+    }
+    if (timestamp == 0U ||
+        (adapter->last_timestamp_provenance !=
+             MEISO_CAMERA_V4L2_TIMESTAMP_NONE &&
+         timestamp <= adapter->last_timestamp_monotonic_ns)) {
+        adapter->last_dequeue.reject_reason =
+            MEISO_CAMERA_V4L2_FRAME_REJECT_EFFECTIVE_TIMESTAMP;
         terminal_failure(
             adapter, MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO
         );
         return MEISO_CAMERA_V4L2_POLL_TERMINAL;
     }
-    if (adapter->last_sequence_provenance !=
-            MEISO_CAMERA_V4L2_SEQUENCE_NONE &&
-        timestamp < adapter->last_timestamp_monotonic_ns) {
-        record_dequeue(
-            adapter,
-            &argument.buffer,
-            MEISO_CAMERA_V4L2_FRAME_REJECT_TIMESTAMP_REGRESSION
-        );
+    mapping = &adapter->mappings[argument.buffer.index];
+    if (!mapping->owned || !mapping->queued ||
+        mapping->length < MEISO_CAMERA_V4L2_SIZE_IMAGE) {
+        adapter->last_dequeue.reject_reason =
+            MEISO_CAMERA_V4L2_FRAME_REJECT_MAPPING;
         terminal_failure(
             adapter, MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO
         );
@@ -265,11 +303,8 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
     if (adapter->last_sequence_provenance !=
             MEISO_CAMERA_V4L2_SEQUENCE_NONE &&
         adapter->last_sequence_provenance != sequence_provenance) {
-        record_dequeue(
-            adapter,
-            &argument.buffer,
-            MEISO_CAMERA_V4L2_FRAME_REJECT_SEQUENCE
-        );
+        adapter->last_dequeue.reject_reason =
+            MEISO_CAMERA_V4L2_FRAME_REJECT_SEQUENCE;
         terminal_failure(
             adapter, MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO
         );
@@ -280,11 +315,8 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
         sequence = argument.buffer.driver_sequence;
     } else {
         if (synthetic_high_water == UINT32_MAX) {
-            record_dequeue(
-                adapter,
-                &argument.buffer,
-                MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED
-            );
+            adapter->last_dequeue.reject_reason =
+                MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED;
             terminal_failure(
                 adapter,
                 MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT,
@@ -300,11 +332,8 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
         delta = argument.buffer.driver_sequence -
             adapter->last_driver_sequence;
         if (delta == 0U || delta > UINT32_C(0x7fffffff)) {
-            record_dequeue(
-                adapter,
-                &argument.buffer,
-                MEISO_CAMERA_V4L2_FRAME_REJECT_SEQUENCE
-            );
+            adapter->last_dequeue.reject_reason =
+                MEISO_CAMERA_V4L2_FRAME_REJECT_SEQUENCE;
             terminal_failure(
                 adapter, MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EPROTO
             );
@@ -313,11 +342,8 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
         dropped = (uint64_t)delta - 1U;
     }
     if (adapter->producer_dropped_frames > UINT64_MAX - dropped) {
-        record_dequeue(
-            adapter,
-            &argument.buffer,
-            MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED
-        );
+        adapter->last_dequeue.reject_reason =
+            MEISO_CAMERA_V4L2_FRAME_REJECT_COUNTER_EXHAUSTED;
         terminal_failure(
             adapter, MEISO_CAMERA_V4L2_FAILURE_FRAME_CONTRACT, EOVERFLOW
         );
@@ -337,6 +363,7 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
     frame.producer_dropped_frames = dropped_total;
     frame.field_provenance = argument.buffer.field_provenance;
     frame.sequence_provenance = sequence_provenance;
+    frame.timestamp_provenance = timestamp_provenance;
     frame.pixel_format = MEISO_COMPOSITION_MEDIA_PIXEL_NV12;
     frame.width = MEISO_CAMERA_V4L2_WIDTH;
     frame.height = MEISO_CAMERA_V4L2_HEIGHT;
@@ -359,6 +386,7 @@ MeisoCameraV4l2PollStatus meiso_camera_v4l2_poll_frame(
     adapter->last_driver_sequence = adapter->driver_sequence_present ?
         argument.buffer.driver_sequence : 0U;
     adapter->last_timestamp_monotonic_ns = timestamp;
+    adapter->last_timestamp_provenance = timestamp_provenance;
     *out_frame = frame;
     return MEISO_CAMERA_V4L2_POLL_FRAME;
 }

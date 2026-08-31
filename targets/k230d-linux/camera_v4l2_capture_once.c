@@ -4,6 +4,8 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -16,7 +18,7 @@ enum {
     CAPTURE_SHA256_BYTES = 32U,
     CAPTURE_SHA256_BLOCK_BYTES = 64U,
     CAPTURE_FRAME_COUNT = 3U,
-    CAPTURE_LINE_BYTES = 2048U
+    CAPTURE_LINE_BYTES = 4096U
 };
 
 #define CAPTURE_DEADLINE_NS UINT64_C(8000000000)
@@ -38,7 +40,7 @@ typedef struct {
 
 typedef struct {
     uint64_t source_clock_epoch;
-    uint64_t monotonic_ns;
+    uint64_t effective_monotonic_ns;
     uint64_t producer_dropped_frames;
     uint64_t fnv1a64;
     uint32_t effective_sequence;
@@ -47,7 +49,11 @@ typedef struct {
     uint32_t bytes_used;
     MeisoCameraV4l2FieldProvenance field_provenance;
     MeisoCameraV4l2SequenceProvenance sequence_provenance;
+    MeisoCameraV4l2TimestampProvenance timestamp_provenance;
+    int64_t raw_timestamp_seconds;
+    int32_t raw_timestamp_microseconds;
     bool driver_sequence_present;
+    bool raw_timestamp_monotonic;
     uint8_t sha256[CAPTURE_SHA256_BYTES];
 } CaptureFrameReceipt;
 
@@ -60,8 +66,16 @@ typedef struct {
     uint32_t mapped_buffer_count;
     uint32_t queued_buffers_running;
     uint64_t mapped_bytes;
+    MeisoCameraV4l2Snapshot final_snapshot;
     CaptureFrameReceipt frames[CAPTURE_FRAME_COUNT];
 } CaptureReceipt;
+
+typedef struct {
+    char *bytes;
+    size_t capacity;
+    size_t size;
+    bool valid;
+} CaptureLine;
 
 int meiso_camera_v4l2_capture_once_run(
     FILE *output,
@@ -320,7 +334,13 @@ static void poll_error(
         "\"dq_index\":%u,\"length\":%u,\"bytes_used\":%u,"
         "\"raw_field\":%u,\"field_provenance\":%u,"
         "\"raw_driver_sequence\":%u,"
-        "\"driver_sequence_present\":%s}\n",
+        "\"driver_sequence_present\":%s,"
+        "\"raw_timestamp_seconds\":%" PRId64 ","
+        "\"raw_timestamp_microseconds\":%" PRId32 ","
+        "\"raw_timestamp_monotonic\":%s,"
+        "\"timestamp_candidate_present\":%s,"
+        "\"timestamp_candidate_monotonic_ns\":%" PRIu64 ","
+        "\"timestamp_provenance\":%u}\n",
         (unsigned)status,
         (unsigned)snapshot.primary_failure_stage,
         snapshot.primary_error,
@@ -333,9 +353,40 @@ static void poll_error(
         (unsigned)snapshot.last_dequeue.raw_field,
         (unsigned)snapshot.last_dequeue.field_provenance,
         (unsigned)snapshot.last_dequeue.raw_driver_sequence,
-        snapshot.last_dequeue.driver_sequence_present ? "true" : "false"
+        snapshot.last_dequeue.driver_sequence_present ? "true" : "false",
+        snapshot.last_dequeue.timestamp_seconds,
+        snapshot.last_dequeue.timestamp_microseconds,
+        snapshot.last_dequeue.timestamp_monotonic ? "true" : "false",
+        snapshot.last_dequeue.timestamp_candidate_present ? "true" : "false",
+        snapshot.last_dequeue.timestamp_candidate_monotonic_ns,
+        (unsigned)snapshot.last_dequeue.timestamp_provenance
     );
     (void)fflush(error_output);
+}
+
+static bool capture_line_append(CaptureLine *line, const char *format, ...)
+{
+    va_list arguments;
+    int written;
+
+    if (line == NULL || !line->valid || format == NULL ||
+        line->size >= line->capacity) {
+        return false;
+    }
+    va_start(arguments, format);
+    written = vsnprintf(
+        line->bytes + line->size,
+        line->capacity - line->size,
+        format,
+        arguments
+    );
+    va_end(arguments);
+    if (written < 0 || (size_t)written >= line->capacity - line->size) {
+        line->valid = false;
+        return false;
+    }
+    line->size += (size_t)written;
+    return true;
 }
 
 static bool write_receipt(
@@ -344,48 +395,29 @@ static bool write_receipt(
 )
 {
     char digest_text[CAPTURE_FRAME_COUNT][65];
-    char line[CAPTURE_LINE_BYTES];
-    int written;
-
+    char bytes[CAPTURE_LINE_BYTES];
+    CaptureLine line = {bytes, sizeof(bytes), 0U, true};
+    const MeisoCameraV4l2Snapshot *final;
     uint32_t index;
 
+    if (output == NULL || receipt == NULL) {
+        return false;
+    }
     for (index = 0U; index < CAPTURE_FRAME_COUNT; ++index) {
         digest_hex(receipt->frames[index].sha256, digest_text[index]);
     }
-    written = snprintf(
-        line, sizeof(line),
+    final = &receipt->final_snapshot;
+    if (!capture_line_append(
+            &line,
         "{\"type\":\"camera_capture_probe\","
-        "\"schema\":\"meiso.camera_v4l2_capture_probe.v1\","
+        "\"schema\":\"meiso.camera_v4l2_capture_probe.v2\","
         "\"verification\":\"THREE_FRAME_CAPTURE_RECEIPT\","
         "\"build_target\":\"%s\",\"pixel_format\":\"NV12\","
         "\"width\":%u,\"height\":%u,\"bytes_per_line\":%u,"
         "\"size_image\":%u,\"driver_buffer_count\":%u,"
         "\"mapped_buffer_count\":%u,\"mapped_bytes\":%" PRIu64
         ",\"queued_buffers_running\":%u,"
-        "\"frame_count\":3,\"final_phase\":\"STOPPED\","
-        "\"final_mapped_count\":0,\"final_queued_count\":0,"
-        "\"frames\":["
-        "{\"ordinal\":1,\"source_clock_epoch\":%" PRIu64
-        ",\"monotonic_ns\":%" PRIu64 ",\"raw_field\":%u,"
-        "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
-        "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
-        "\"sequence_provenance\":%u,\"producer_dropped_frames\":%" PRIu64
-        ",\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
-        "\",\"sha256\":\"%s\"},"
-        "{\"ordinal\":2,\"source_clock_epoch\":%" PRIu64
-        ",\"monotonic_ns\":%" PRIu64 ",\"raw_field\":%u,"
-        "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
-        "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
-        "\"sequence_provenance\":%u,\"producer_dropped_frames\":%" PRIu64
-        ",\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
-        "\",\"sha256\":\"%s\"},"
-        "{\"ordinal\":3,\"source_clock_epoch\":%" PRIu64
-        ",\"monotonic_ns\":%" PRIu64 ",\"raw_field\":%u,"
-        "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
-        "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
-        "\"sequence_provenance\":%u,\"producer_dropped_frames\":%" PRIu64
-        ",\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
-        "\",\"sha256\":\"%s\"}]}",
+        "\"frame_count\":3,\"frames\":[",
         CAPTURE_BUILD_TARGET,
         (unsigned)receipt->width,
         (unsigned)receipt->height,
@@ -394,46 +426,90 @@ static bool write_receipt(
         (unsigned)receipt->driver_buffer_count,
         (unsigned)receipt->mapped_buffer_count,
         receipt->mapped_bytes,
-        (unsigned)receipt->queued_buffers_running,
-        receipt->frames[0].source_clock_epoch,
-        receipt->frames[0].monotonic_ns,
-        (unsigned)receipt->frames[0].raw_field,
-        (unsigned)receipt->frames[0].field_provenance,
-        (unsigned)receipt->frames[0].raw_driver_sequence,
-        receipt->frames[0].driver_sequence_present ? "true" : "false",
-        (unsigned)receipt->frames[0].effective_sequence,
-        (unsigned)receipt->frames[0].sequence_provenance,
-        receipt->frames[0].producer_dropped_frames,
-        (unsigned)receipt->frames[0].bytes_used,
-        receipt->frames[0].fnv1a64,
-        digest_text[0],
-        receipt->frames[1].source_clock_epoch,
-        receipt->frames[1].monotonic_ns,
-        (unsigned)receipt->frames[1].raw_field,
-        (unsigned)receipt->frames[1].field_provenance,
-        (unsigned)receipt->frames[1].raw_driver_sequence,
-        receipt->frames[1].driver_sequence_present ? "true" : "false",
-        (unsigned)receipt->frames[1].effective_sequence,
-        (unsigned)receipt->frames[1].sequence_provenance,
-        receipt->frames[1].producer_dropped_frames,
-        (unsigned)receipt->frames[1].bytes_used,
-        receipt->frames[1].fnv1a64,
-        digest_text[1],
-        receipt->frames[2].source_clock_epoch,
-        receipt->frames[2].monotonic_ns,
-        (unsigned)receipt->frames[2].raw_field,
-        (unsigned)receipt->frames[2].field_provenance,
-        (unsigned)receipt->frames[2].raw_driver_sequence,
-        receipt->frames[2].driver_sequence_present ? "true" : "false",
-        (unsigned)receipt->frames[2].effective_sequence,
-        (unsigned)receipt->frames[2].sequence_provenance,
-        receipt->frames[2].producer_dropped_frames,
-        (unsigned)receipt->frames[2].bytes_used,
-        receipt->frames[2].fnv1a64,
-        digest_text[2]
-    );
-    return written >= 0 && (size_t)written < sizeof(line) &&
-        fputs(line, output) >= 0 && fputc('\n', output) != EOF &&
+        (unsigned)receipt->queued_buffers_running
+        )) {
+        return false;
+    }
+    for (index = 0U; index < CAPTURE_FRAME_COUNT; ++index) {
+        const CaptureFrameReceipt *frame = &receipt->frames[index];
+        if (!capture_line_append(
+                &line,
+                "%s{\"ordinal\":%u,\"source_clock_epoch\":%" PRIu64
+                ",\"raw_timestamp_seconds\":%" PRId64
+                ",\"raw_timestamp_microseconds\":%" PRId32
+                ",\"raw_timestamp_monotonic\":%s,"
+                "\"effective_monotonic_ns\":%" PRIu64 ","
+                "\"timestamp_provenance\":%u,\"raw_field\":%u,"
+                "\"field_provenance\":%u,\"raw_driver_sequence\":%u,"
+                "\"driver_sequence_present\":%s,\"effective_sequence\":%u,"
+                "\"sequence_provenance\":%u,"
+                "\"producer_dropped_frames\":%" PRIu64 ","
+                "\"bytes_used\":%u,\"fnv1a64\":\"%016" PRIx64
+                "\",\"sha256\":\"%s\"}",
+                index == 0U ? "" : ",",
+                (unsigned)(index + 1U),
+                frame->source_clock_epoch,
+                frame->raw_timestamp_seconds,
+                frame->raw_timestamp_microseconds,
+                frame->raw_timestamp_monotonic ? "true" : "false",
+                frame->effective_monotonic_ns,
+                (unsigned)frame->timestamp_provenance,
+                (unsigned)frame->raw_field,
+                (unsigned)frame->field_provenance,
+                (unsigned)frame->raw_driver_sequence,
+                frame->driver_sequence_present ? "true" : "false",
+                (unsigned)frame->effective_sequence,
+                (unsigned)frame->sequence_provenance,
+                frame->producer_dropped_frames,
+                (unsigned)frame->bytes_used,
+                frame->fnv1a64,
+                digest_text[index]
+            )) {
+            return false;
+        }
+    }
+    if (!capture_line_append(
+            &line,
+            "],\"final_cleanup\":{\"phase\":%u,"
+            "\"run_generation\":%" PRIu64 ","
+            "\"source_clock_epoch\":%" PRIu64 ","
+            "\"driver_buffer_count\":%u,\"mapped_buffer_count\":%u,"
+            "\"queued_buffer_count\":%u,\"stream_on\":%s,"
+            "\"frame_borrowed\":%s,\"producer_dropped_frames\":%" PRIu64
+            ",\"driver_sequence_present\":%s,"
+            "\"last_driver_sequence\":%u,\"last_sequence\":%u,"
+            "\"last_sequence_provenance\":%u,"
+            "\"last_effective_monotonic_ns\":%" PRIu64 ","
+            "\"last_timestamp_provenance\":%u,"
+            "\"primary_failure_stage\":%u,\"primary_error\":%d,"
+            "\"cleanup_failure_stage\":%u,\"cleanup_error\":%d,"
+            "\"arena_bytes\":%zu,\"mapped_bytes\":%" PRIu64 "}}",
+            (unsigned)final->phase,
+            final->run_generation,
+            final->source_clock_epoch,
+            (unsigned)final->driver_buffer_count,
+            (unsigned)final->mapped_buffer_count,
+            (unsigned)final->queued_buffer_count,
+            final->stream_on ? "true" : "false",
+            final->frame_borrowed ? "true" : "false",
+            final->producer_dropped_frames,
+            final->driver_sequence_present ? "true" : "false",
+            (unsigned)final->last_driver_sequence,
+            (unsigned)final->last_sequence,
+            (unsigned)final->last_sequence_provenance,
+            final->last_timestamp_monotonic_ns,
+            (unsigned)final->last_timestamp_provenance,
+            (unsigned)final->primary_failure_stage,
+            final->primary_error,
+            (unsigned)final->cleanup_failure_stage,
+            final->cleanup_error,
+            final->arena_bytes,
+            final->mapped_bytes
+        )) {
+        return false;
+    }
+    return line.valid && fputs(line.bytes, output) >= 0 &&
+        fputc('\n', output) != EOF &&
         fflush(output) == 0;
 }
 
@@ -592,7 +668,16 @@ int meiso_camera_v4l2_capture_once_run(
                 MEISO_CAMERA_V4L2_REQUIRED_BUFFER_COUNT ||
             !snapshot.last_dequeue.present ||
             snapshot.last_dequeue.reject_reason !=
-                MEISO_CAMERA_V4L2_FRAME_REJECT_NONE) {
+                MEISO_CAMERA_V4L2_FRAME_REJECT_NONE ||
+            !snapshot.last_dequeue.timestamp_candidate_present ||
+            snapshot.last_dequeue.timestamp_candidate_monotonic_ns !=
+                frame.source_time.monotonic_ns ||
+            snapshot.last_dequeue.timestamp_provenance !=
+                frame.timestamp_provenance ||
+            snapshot.last_timestamp_monotonic_ns !=
+                frame.source_time.monotonic_ns ||
+            snapshot.last_timestamp_provenance !=
+                frame.timestamp_provenance) {
             fixed_error(error_output, "E_SNAPSHOT", 2U);
             goto cleanup;
         }
@@ -609,12 +694,15 @@ int meiso_camera_v4l2_capture_once_run(
             goto cleanup;
         }
         frame_receipt->source_clock_epoch = frame.source_time.clock_epoch;
-        frame_receipt->monotonic_ns = frame.source_time.monotonic_ns;
+        frame_receipt->effective_monotonic_ns =
+            frame.source_time.monotonic_ns;
         frame_receipt->producer_dropped_frames =
             frame.producer_dropped_frames;
         frame_receipt->effective_sequence = frame.ref.driver_sequence;
         frame_receipt->sequence_provenance =
             frame.ref.sequence_provenance;
+        frame_receipt->timestamp_provenance =
+            frame.timestamp_provenance;
         frame_receipt->raw_driver_sequence =
             snapshot.last_dequeue.raw_driver_sequence;
         frame_receipt->driver_sequence_present =
@@ -622,6 +710,12 @@ int meiso_camera_v4l2_capture_once_run(
         frame_receipt->raw_field = snapshot.last_dequeue.raw_field;
         frame_receipt->field_provenance =
             snapshot.last_dequeue.field_provenance;
+        frame_receipt->raw_timestamp_seconds =
+            snapshot.last_dequeue.timestamp_seconds;
+        frame_receipt->raw_timestamp_microseconds =
+            snapshot.last_dequeue.timestamp_microseconds;
+        frame_receipt->raw_timestamp_monotonic =
+            snapshot.last_dequeue.timestamp_monotonic;
         frame_receipt->bytes_used = snapshot.last_dequeue.bytes_used;
         frame_receipt->fnv1a64 = fnv1a64(frame.bytes);
         sha256_init(&sha);
@@ -658,12 +752,14 @@ int meiso_camera_v4l2_capture_once_run(
         }
         stopped = true;
     }
-    if (!cleanup_ledger_clear(adapter, true)) {
+    if (!cleanup_ledger_clear(adapter, true) ||
+        !meiso_camera_v4l2_snapshot(adapter, &snapshot)) {
         cleanup_error = true;
         stopped = false;
         result = 5;
         goto cleanup;
     }
+    receipt.final_snapshot = snapshot;
     if (!write_receipt(output, &receipt)) {
         fixed_error(error_output, "E_WRITE", 0U);
         result = 4;
@@ -733,7 +829,7 @@ int meiso_camera_v4l2_capture_once_test_write_max_receipt(FILE *output)
     receipt.mapped_bytes = UINT64_MAX;
     for (index = 0U; index < CAPTURE_FRAME_COUNT; ++index) {
         receipt.frames[index].source_clock_epoch = UINT64_MAX;
-        receipt.frames[index].monotonic_ns = UINT64_MAX;
+        receipt.frames[index].effective_monotonic_ns = UINT64_MAX;
         receipt.frames[index].producer_dropped_frames = UINT64_MAX;
         receipt.frames[index].fnv1a64 = UINT64_MAX;
         receipt.frames[index].effective_sequence = UINT32_MAX;
@@ -742,13 +838,38 @@ int meiso_camera_v4l2_capture_once_test_write_max_receipt(FILE *output)
         receipt.frames[index].bytes_used = UINT32_MAX;
         receipt.frames[index].field_provenance = UINT8_MAX;
         receipt.frames[index].sequence_provenance = UINT8_MAX;
+        receipt.frames[index].timestamp_provenance = UINT8_MAX;
+        receipt.frames[index].raw_timestamp_seconds = INT64_MAX;
+        receipt.frames[index].raw_timestamp_microseconds = INT32_MAX;
         receipt.frames[index].driver_sequence_present = true;
+        receipt.frames[index].raw_timestamp_monotonic = true;
         memset(
             receipt.frames[index].sha256,
             UINT8_MAX,
             sizeof(receipt.frames[index].sha256)
         );
     }
+    receipt.final_snapshot.phase = UINT8_MAX;
+    receipt.final_snapshot.run_generation = UINT64_MAX;
+    receipt.final_snapshot.source_clock_epoch = UINT64_MAX;
+    receipt.final_snapshot.driver_buffer_count = UINT32_MAX;
+    receipt.final_snapshot.mapped_buffer_count = UINT32_MAX;
+    receipt.final_snapshot.queued_buffer_count = UINT32_MAX;
+    receipt.final_snapshot.stream_on = true;
+    receipt.final_snapshot.frame_borrowed = true;
+    receipt.final_snapshot.producer_dropped_frames = UINT64_MAX;
+    receipt.final_snapshot.driver_sequence_present = true;
+    receipt.final_snapshot.last_driver_sequence = UINT32_MAX;
+    receipt.final_snapshot.last_sequence = UINT32_MAX;
+    receipt.final_snapshot.last_sequence_provenance = UINT8_MAX;
+    receipt.final_snapshot.last_timestamp_monotonic_ns = UINT64_MAX;
+    receipt.final_snapshot.last_timestamp_provenance = UINT8_MAX;
+    receipt.final_snapshot.primary_failure_stage = UINT8_MAX;
+    receipt.final_snapshot.primary_error = INT_MAX;
+    receipt.final_snapshot.cleanup_failure_stage = UINT8_MAX;
+    receipt.final_snapshot.cleanup_error = INT_MAX;
+    receipt.final_snapshot.arena_bytes = SIZE_MAX;
+    receipt.final_snapshot.mapped_bytes = UINT64_MAX;
     return write_receipt(output, &receipt) ? 0 : 1;
 }
 #endif
