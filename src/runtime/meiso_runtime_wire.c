@@ -308,7 +308,7 @@ void meiso_runtime_private_encode_content_id(uint8_t *output, const MeisoContent
 }
 
 bool meiso_runtime_private_decode_content_id(
-    const uint8_t input[MEISO_RUNTIME_CONTENT_ID_WIRE_SIZE],
+    const uint8_t *input,
     MeisoContentId *out_value
 )
 {
