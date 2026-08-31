@@ -61,8 +61,8 @@ test("object and camera commands contain no protocol identity", () => {
 });
 
 test("intent commands are fixed local desired shapes", () => {
-  assert.deepEqual(renderIntentCommand({enabled: input(0, true), rate: input(24)}), {
-    command: "intent.render.set", enabled: true, max_hz: 24,
+  assert.deepEqual(renderIntentCommand({enabled: input(0, true), rate: input(10)}), {
+    command: "intent.render.set", enabled: true, max_hz: 10,
   });
   assert.deepEqual(cameraIntentCommand({enabled: input(0, false), rate: input(30)}), {
     command: "intent.camera.set", enabled: false, fps: 30,

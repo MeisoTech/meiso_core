@@ -19,8 +19,15 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from native_bridge import (
+    CAMERA_MAX_FPS,
+    COMPOSITION_MAX_RESULT_HZ,
+    DEVICE_FIELD_MASK_ALL,
     NativeBridge,
     NativeBridgeError,
+    TELEMETRY_MAX_PERIOD_MS,
+    TELEMETRY_MIN_PERIOD_MS,
+    TELEMETRY_PERIOD_STEP_MS,
+    WIFI_FIELD_MASK_ALL,
     bootstrap_commands,
     commands_for_mutation,
 )
@@ -63,6 +70,16 @@ def _uint(value: Any, minimum: int, maximum: int) -> int:
     if value < minimum or value > maximum:
         raise CommandError("INTEGER_OUT_OF_RANGE")
     return value
+
+
+def _telemetry_period(value: Any) -> int:
+    result = _uint(
+        value, TELEMETRY_MIN_PERIOD_MS, TELEMETRY_MAX_PERIOD_MS
+    )
+    if ((result - TELEMETRY_MIN_PERIOD_MS) %
+            TELEMETRY_PERIOD_STEP_MS != 0):
+        raise CommandError("INTEGER_STEP")
+    return result
 
 
 def _boolean(value: Any) -> bool:
@@ -466,13 +483,15 @@ class CompositionEditorState:
                 _exact_keys(command, {"command", "enabled", "max_hz"})
                 self._snapshot["intents"]["render"].update(
                     enabled=_boolean(command["enabled"]),
-                    max_hz=_uint(command["max_hz"], 1, 120),
+                    max_hz=_uint(
+                        command["max_hz"], 1, COMPOSITION_MAX_RESULT_HZ
+                    ),
                 )
             elif name == "intent.camera.set":
                 _exact_keys(command, {"command", "enabled", "fps"})
                 self._snapshot["intents"]["camera"].update(
                     enabled=_boolean(command["enabled"]),
-                    fps=_uint(command["fps"], 1, 120),
+                    fps=_uint(command["fps"], 1, CAMERA_MAX_FPS),
                 )
             elif name == "intent.telemetry.set":
                 _exact_keys(
@@ -486,10 +505,12 @@ class CompositionEditorState:
                 )
                 self._snapshot["intents"]["telemetry"].update(
                     enabled=_boolean(command["enabled"]),
-                    sample_period_ms=_uint(
-                        command["sample_period_ms"], 100, 10000
+                    sample_period_ms=_telemetry_period(
+                        command["sample_period_ms"]
                     ),
-                    selected_fields=_uint(command["selected_fields"], 1, 1023),
+                    selected_fields=_uint(
+                        command["selected_fields"], 1, WIFI_FIELD_MASK_ALL
+                    ),
                 )
             elif name == "intent.device.set":
                 _exact_keys(
@@ -503,10 +524,12 @@ class CompositionEditorState:
                 )
                 self._snapshot["intents"]["device"].update(
                     enabled=_boolean(command["enabled"]),
-                    sample_period_ms=_uint(
-                        command["sample_period_ms"], 100, 10000
+                    sample_period_ms=_telemetry_period(
+                        command["sample_period_ms"]
                     ),
-                    selected_fields=_uint(command["selected_fields"], 1, 1023),
+                    selected_fields=_uint(
+                        command["selected_fields"], 1, DEVICE_FIELD_MASK_ALL
+                    ),
                 )
             else:
                 raise CommandError("UNKNOWN_COMMAND")

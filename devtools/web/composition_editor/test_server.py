@@ -124,7 +124,7 @@ class CompositionEditorTests(unittest.TestCase):
                     "near": 0.2,
                     "far": 240,
                 },
-                {"command": "intent.render.set", "enabled": False, "max_hz": 24},
+                {"command": "intent.render.set", "enabled": False, "max_hz": 1},
                 {"command": "intent.camera.set", "enabled": True, "fps": 30},
                 {
                     "command": "intent.telemetry.set",
@@ -151,7 +151,7 @@ class CompositionEditorTests(unittest.TestCase):
             self.assertEqual(object_value["rotation_deg"], [10.0, 20.0, 30.0])
             self.assertEqual(object_value["scale"], [0.5, 2.0, 1.0])
             self.assertEqual(snapshot["scene"]["camera"]["vertical_fov_deg"], 63.0)
-            self.assertEqual(snapshot["intents"]["render"]["max_hz"], 24)
+            self.assertEqual(snapshot["intents"]["render"]["max_hz"], 1)
             self.assertEqual(snapshot["intents"]["camera"]["status"], "MEDIA_ROUTE_UNSUPPORTED")
             self.assertEqual(snapshot["intents"]["telemetry"]["selected_fields"], 63)
             self.assertFalse(snapshot["backend"]["device_connected"])
@@ -179,6 +179,37 @@ class CompositionEditorTests(unittest.TestCase):
                 self.assertEqual(snapshot["revision"], 1)
             self.assertEqual(editor.state.event_count(), before_events)
 
+    def test_disabled_intents_save_valid_profile_boundaries(self):
+        with RunningCompositionEditor() as editor:
+            commands = [
+                {"command": "intent.render.set", "enabled": False, "max_hz": 10},
+                {"command": "intent.camera.set", "enabled": False, "fps": 30},
+                {
+                    "command": "intent.telemetry.set",
+                    "enabled": False,
+                    "sample_period_ms": 10000,
+                    "selected_fields": 1023,
+                },
+                {
+                    "command": "intent.device.set",
+                    "enabled": False,
+                    "sample_period_ms": 100,
+                    "selected_fields": 15,
+                },
+            ]
+            for command in commands:
+                status, _, _ = editor.post(command)
+                self.assertEqual(status, 202)
+
+            intents = editor.state.snapshot()["intents"]
+            self.assertEqual(intents["render"]["max_hz"], 10)
+            self.assertEqual(intents["camera"]["fps"], 30)
+            self.assertEqual(intents["telemetry"]["sample_period_ms"], 10000)
+            self.assertEqual(intents["telemetry"]["selected_fields"], 1023)
+            self.assertEqual(intents["device"]["sample_period_ms"], 100)
+            self.assertEqual(intents["device"]["selected_fields"], 15)
+            self.assertTrue(all(not intent["enabled"] for intent in intents.values()))
+
     def test_invalid_commands_have_no_partial_mutation(self):
         with RunningCompositionEditor() as editor:
             before = editor.state.snapshot()
@@ -196,7 +227,32 @@ class CompositionEditorTests(unittest.TestCase):
                     "rotation_deg": [0, 0, 0], "vertical_fov_deg": 50,
                     "near": 10, "far": 1,
                 }, 422),
+                ({
+                    "command": "intent.render.set", "enabled": False,
+                    "max_hz": 0,
+                }, 422),
+                ({
+                    "command": "intent.render.set", "enabled": False,
+                    "max_hz": 11,
+                }, 422),
                 ({"command": "intent.camera.set", "enabled": True, "fps": 0}, 422),
+                ({"command": "intent.camera.set", "enabled": False, "fps": 31}, 422),
+                ({
+                    "command": "intent.telemetry.set", "enabled": False,
+                    "sample_period_ms": 150, "selected_fields": 1,
+                }, 422),
+                ({
+                    "command": "intent.telemetry.set", "enabled": False,
+                    "sample_period_ms": 100, "selected_fields": 1024,
+                }, 422),
+                ({
+                    "command": "intent.device.set", "enabled": False,
+                    "sample_period_ms": 150, "selected_fields": 1,
+                }, 422),
+                ({
+                    "command": "intent.device.set", "enabled": False,
+                    "sample_period_ms": 100, "selected_fields": 16,
+                }, 422),
                 ({"command": "unknown"}, 422),
             ]
             for command, expected_status in invalid:
@@ -281,6 +337,30 @@ class CompositionEditorTests(unittest.TestCase):
             self.assertIn(b'name="meiso-csrf"', index)
             self.assertIn(b'min="0.001" step="0.001" aria-label="scale x"', index)
             self.assertIn(b'id="camera-far" type="number" min="0.002" step="0.001"', index)
+            form_expectations = {
+                b'render-intent': (
+                    b'name="rate" type="number" min="1" max="10" step="1"',
+                ),
+                b'camera-intent': (
+                    b'name="rate" type="number" min="1" max="30" step="1"',
+                ),
+                b'telemetry-intent': (
+                    b'name="period" type="number" min="100" max="10000" '
+                    b'step="100"',
+                    b'name="fields" type="number" min="1" max="1023"',
+                ),
+                b'device-intent': (
+                    b'name="period" type="number" min="100" max="10000" '
+                    b'step="100"',
+                    b'name="fields" type="number" min="1" max="15"',
+                ),
+            }
+            for form_id, expected_fields in form_expectations.items():
+                form_start = index.index(b'<form id="' + form_id + b'"')
+                form_end = index.index(b'</form>', form_start)
+                form = index[form_start:form_end]
+                for expected_field in expected_fields:
+                    self.assertIn(expected_field, form)
             self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
             for path in ["/static/app.js", "/static/model.mjs", "/static/style.css"]:
                 status, _, body = editor.request("GET", path)

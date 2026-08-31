@@ -590,6 +590,7 @@ static bool test_presentation_plan_codec(void)
 {
     static const size_t reserved[] = {86U, 87U, 92U, 93U, 94U, 95U};
     uint8_t wire[129];
+    uint8_t wire_before[129];
     uint8_t mutated[128];
     MeisoCompositionScenePresentationPlan value = example_plan();
     MeisoCompositionScenePresentationPlan decoded;
@@ -640,6 +641,65 @@ static bool test_presentation_plan_codec(void)
           MEISO_COMPOSITION_SCENE_CODEC_MALFORMED);
     CHECK(memcmp(&decoded, &before, sizeof(decoded)) == 0);
 
+    value = example_plan();
+    value.max_result_hz = 1U;
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+              &value, (MeisoMutableBuffer){wire, sizeof(wire)}, &size) ==
+          MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(wire[84] == 0U && wire[85] == 1U);
+    CHECK(meiso_composition_scene_presentation_plan_decode(
+              (MeisoByteView){wire, size}, &decoded) ==
+          MEISO_COMPOSITION_SCENE_CODEC_OK);
+    CHECK(decoded.max_result_hz == 1U);
+    value.max_result_hz = 0U;
+    size = 999U;
+    memset(wire, 0xa5, sizeof(wire));
+    memcpy(wire_before, wire, sizeof(wire));
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+              &value, (MeisoMutableBuffer){wire, sizeof(wire)}, &size) ==
+          MEISO_COMPOSITION_SCENE_CODEC_INVALID_VALUE);
+    CHECK(size == 0U &&
+          memcmp(wire, wire_before, sizeof(wire)) == 0);
+    value.max_result_hz = MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ + 1U;
+    size = 999U;
+    memset(wire, 0xa5, sizeof(wire));
+    memcpy(wire_before, wire, sizeof(wire));
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+              &value, (MeisoMutableBuffer){wire, sizeof(wire)}, &size) ==
+          MEISO_COMPOSITION_SCENE_CODEC_INVALID_VALUE);
+    CHECK(size == 0U &&
+          memcmp(wire, wire_before, sizeof(wire)) == 0);
+    value.max_result_hz = UINT16_MAX;
+    size = 999U;
+    memset(wire, 0xa5, sizeof(wire));
+    memcpy(wire_before, wire, sizeof(wire));
+    CHECK(meiso_composition_scene_presentation_plan_encode(
+              &value, (MeisoMutableBuffer){wire, sizeof(wire)}, &size) ==
+          MEISO_COMPOSITION_SCENE_CODEC_INVALID_VALUE);
+    CHECK(size == 0U &&
+          memcmp(wire, wire_before, sizeof(wire)) == 0);
+    memcpy(mutated, PLAN_GOLDEN, sizeof(mutated));
+    mutated[84] = 0U;
+    mutated[85] = 0U;
+    memset(&decoded, 0xa5, sizeof(decoded));
+    before = decoded;
+    CHECK(meiso_composition_scene_presentation_plan_decode(
+              (MeisoByteView){mutated, sizeof(mutated)}, &decoded) ==
+          MEISO_COMPOSITION_SCENE_CODEC_MALFORMED);
+    CHECK(memcmp(&decoded, &before, sizeof(decoded)) == 0);
+    mutated[85] = (uint8_t)(MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ + 1U);
+    CHECK(meiso_composition_scene_presentation_plan_decode(
+              (MeisoByteView){mutated, sizeof(mutated)}, &decoded) ==
+          MEISO_COMPOSITION_SCENE_CODEC_MALFORMED);
+    CHECK(memcmp(&decoded, &before, sizeof(decoded)) == 0);
+    mutated[84] = UINT8_MAX;
+    mutated[85] = UINT8_MAX;
+    CHECK(meiso_composition_scene_presentation_plan_decode(
+              (MeisoByteView){mutated, sizeof(mutated)}, &decoded) ==
+          MEISO_COMPOSITION_SCENE_CODEC_MALFORMED);
+    CHECK(memcmp(&decoded, &before, sizeof(decoded)) == 0);
+
+    value = example_plan();
     size = 999U;
     memset(wire, 0xa5, sizeof(wire));
     CHECK(meiso_composition_scene_presentation_plan_encode(

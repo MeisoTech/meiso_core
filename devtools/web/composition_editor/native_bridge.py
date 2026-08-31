@@ -30,12 +30,38 @@ MAX_RENDER_FRAME_BYTES = 320 * 240 * 4
 MAX_CAMERA_FRAME_BYTES = 640 * 480 * 3 // 2
 MAX_CMFB_RECORD_BYTES = CMFB_HEADER_BYTES + MAX_CAMERA_FRAME_BYTES
 
+# Fixed COMPOSE_/_PROFILE:v1 editor envelope. A connected catalog may expose
+# a smaller dynamic subset; the native Host Runtime remains final authority.
+COMPOSITION_MAX_RESULT_HZ = 10
+CAMERA_MAX_FPS = 30
+TELEMETRY_MIN_PERIOD_MS = 100
+TELEMETRY_MAX_PERIOD_MS = 10000
+TELEMETRY_PERIOD_STEP_MS = 100
+WIFI_FIELD_MASK_ALL = 0x03FF
+DEVICE_FIELD_MASK_ALL = 0x000F
+
 SOURCE_NAMES = {1: "render", 2: "camera"}
 PIXEL_FORMAT_NAMES = {1: "rgba8888", 2: "rgb565", 3: "nv12", 4: "yuyv"}
 
 
 class NativeBridgeError(RuntimeError):
     """The explicit native bridge cannot accept or continue an operation."""
+
+
+def _profile_boolean(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise NativeBridgeError("INVALID_PROFILE_INTENT")
+    return value
+
+
+def _profile_uint(
+    value: Any, minimum: int, maximum: int, *, step: int = 1
+) -> int:
+    if (isinstance(value, bool) or not isinstance(value, int) or
+            value < minimum or value > maximum or
+            (value - minimum) % step != 0):
+        raise NativeBridgeError("INVALID_PROFILE_INTENT")
+    return value
 
 
 def _multiply_quaternion(
@@ -112,14 +138,26 @@ def full_scene_command(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _enabled_periodic(command: str, intent: dict[str, Any]) -> dict[str, Any]:
+def _enabled_periodic(
+    command: str, intent: dict[str, Any], field_mask_all: int
+) -> dict[str, Any]:
+    enabled = _profile_boolean(intent.get("enabled"))
+    selected_fields = _profile_uint(
+        intent.get("selected_fields"), 1, field_mask_all
+    )
+    sample_period_ms = _profile_uint(
+        intent.get("sample_period_ms"),
+        TELEMETRY_MIN_PERIOD_MS,
+        TELEMETRY_MAX_PERIOD_MS,
+        step=TELEMETRY_PERIOD_STEP_MS,
+    )
     result: dict[str, Any] = {
         "command": command,
-        "enabled": intent["enabled"],
+        "enabled": enabled,
     }
-    if intent["enabled"]:
-        result["selected_fields"] = intent["selected_fields"]
-        result["sample_period_ms"] = intent["sample_period_ms"]
+    if enabled:
+        result["selected_fields"] = selected_fields
+        result["sample_period_ms"] = sample_period_ms
     return result
 
 
@@ -159,36 +197,47 @@ def commands_for_mutation(
         return []
     if command_name == "intent.render.set":
         intent = snapshot["intents"]["render"]
+        enabled = _profile_boolean(intent.get("enabled"))
+        max_hz = _profile_uint(
+            intent.get("max_hz"), 1, COMPOSITION_MAX_RESULT_HZ
+        )
         presentation: dict[str, Any] = {
-            "command": "set_presentation", "enabled": intent["enabled"]
+            "command": "set_presentation", "enabled": enabled
         }
-        if intent["enabled"]:
+        if enabled:
             presentation.update({
                 "use_safety_frame": False,
                 "target_width": 320,
                 "target_height": 240,
                 "color_format": "rgba8888",
                 "depth_format": "implementation32",
-                "max_result_hz": intent["max_hz"],
+                "max_result_hz": max_hz,
                 "offline_lease_ms": 1000,
             })
         return [
             presentation,
             _media_command(
-                "set_render_media", intent["enabled"], "rgba8888",
-                320, 240, intent["max_hz"]
+                "set_render_media", enabled, "rgba8888",
+                320, 240, max_hz
             ),
         ]
     if command_name == "intent.camera.set":
         intent = snapshot["intents"]["camera"]
+        enabled = _profile_boolean(intent.get("enabled"))
+        fps = _profile_uint(intent.get("fps"), 1, CAMERA_MAX_FPS)
         return [_media_command(
-            "set_camera_media", intent["enabled"], "nv12", 320, 240,
-            intent["fps"]
+            "set_camera_media", enabled, "nv12", 320, 240, fps
         )]
     if command_name == "intent.telemetry.set":
-        return [_enabled_periodic("set_wifi", snapshot["intents"]["telemetry"])]
+        return [_enabled_periodic(
+            "set_wifi", snapshot["intents"]["telemetry"],
+            WIFI_FIELD_MASK_ALL,
+        )]
     if command_name == "intent.device.set":
-        return [_enabled_periodic("set_device", snapshot["intents"]["device"])]
+        return [_enabled_periodic(
+            "set_device", snapshot["intents"]["device"],
+            DEVICE_FIELD_MASK_ALL,
+        )]
     raise NativeBridgeError("UNKNOWN_COMMAND")
 
 

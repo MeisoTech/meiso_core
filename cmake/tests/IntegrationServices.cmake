@@ -203,6 +203,14 @@ if(TARGET meiso_k230d_composition_edge_runtime)
         integration
         meiso_k230d_composition_edge_runtime
     )
+    target_sources(
+        meiso_k230d_composition_edge_runtime_test
+        PRIVATE tests/k230d_composition_edge_cadence_fixture.c
+    )
+    target_include_directories(
+        meiso_k230d_composition_edge_runtime_test
+        PRIVATE targets/k230d-linux
+    )
 
     find_package(Threads REQUIRED)
     add_executable(

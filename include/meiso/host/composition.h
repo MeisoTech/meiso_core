@@ -83,6 +83,7 @@ typedef struct {
     uint16_t target_height;
     MeisoCompositionSceneColorFormat color_format;
     MeisoCompositionSceneDepthFormat depth_format;
+    /* PresentationPlan request: 1..MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ. */
     uint16_t max_result_hz;
     uint32_t offline_lease_ms;
 } MeisoCompositionEdgePresentationSettings;

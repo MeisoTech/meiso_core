@@ -189,7 +189,8 @@ bool meiso_composition_coordinator_private_selected_config_valid(
            plan->color_format == MEISO_COMPOSITION_SCENE_COLOR_RGBA8888 &&
            plan->depth_format ==
                MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32 &&
-           plan->max_result_hz == MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ &&
+           plan->max_result_hz != 0U &&
+           plan->max_result_hz <= MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ &&
            plan->offline_lease_ms <=
                MEISO_COMPOSITION_SCENE_MAX_OFFLINE_LEASE_MS;
 }

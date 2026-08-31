@@ -648,7 +648,7 @@ static bool queue_pre_ready_commands(HostRuntimeFixture *fixture)
         MEISO_COMPOSITION_SCENE_TARGET_HEIGHT,
         MEISO_COMPOSITION_SCENE_COLOR_RGBA8888,
         MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32,
-        MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ,
+        1U,
         1000U
     };
     uint8_t cube[512];
@@ -660,6 +660,7 @@ static bool queue_pre_ready_commands(HostRuntimeFixture *fixture)
     MeisoCompositionHostRuntimeCommandReceipt mesh_receipt;
     MeisoCompositionHostRuntimeCommandReceipt wifi_receipt;
     MeisoCompositionHostRuntimeCommandReceipt replacement_receipt;
+    MeisoCompositionHostRuntimePresentationSettings invalid_presentation;
     MeisoCompositionHostRuntimeStatus replacement_status;
     MeisoCompositionSceneDesired scene;
     MeisoCompositionHostRuntimeSnapshot snapshot_value;
@@ -729,6 +730,30 @@ static bool queue_pre_ready_commands(HostRuntimeFixture *fixture)
                    MEISO_COMPOSITION_HOST_RUNTIME_COMMAND_SET_WIFI,
                    MEISO_COMPOSITION_HOST_RUNTIME_DESIRED_WIFI, 1U
                ), cleanup);
+    invalid_presentation = presentation;
+    invalid_presentation.max_result_hz = 0U;
+    memcpy(arena_before, fixture->app_arena, fixture->app_bytes);
+    memset(&receipt, 0xa5, sizeof(receipt));
+    receipt_before = receipt;
+    CHECK_GOTO(meiso_composition_host_runtime_set_presentation(
+                   fixture->app, true, &invalid_presentation, &receipt
+               ) == MEISO_COMPOSITION_HOST_RUNTIME_CONFLICT &&
+               memcmp(fixture->app_arena, arena_before,
+                      fixture->app_bytes) == 0 &&
+               memcmp(&receipt, &receipt_before, sizeof(receipt)) == 0,
+               cleanup);
+    invalid_presentation.max_result_hz =
+        MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ + 1U;
+    memcpy(arena_before, fixture->app_arena, fixture->app_bytes);
+    memset(&receipt, 0xa5, sizeof(receipt));
+    receipt_before = receipt;
+    CHECK_GOTO(meiso_composition_host_runtime_set_presentation(
+                   fixture->app, true, &invalid_presentation, &receipt
+               ) == MEISO_COMPOSITION_HOST_RUNTIME_CONFLICT &&
+               memcmp(fixture->app_arena, arena_before,
+                      fixture->app_bytes) == 0 &&
+               memcmp(&receipt, &receipt_before, sizeof(receipt)) == 0,
+               cleanup);
     CHECK_GOTO(meiso_composition_host_runtime_set_presentation(
                    fixture->app, true, &presentation, &receipt
                ) == MEISO_COMPOSITION_HOST_RUNTIME_OK &&

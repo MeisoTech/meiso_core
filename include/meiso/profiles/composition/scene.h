@@ -33,6 +33,7 @@ extern "C" {
 #define MEISO_COMPOSITION_SCENE_TARGET_SET_COUNT 2U
 #define MEISO_COMPOSITION_SCENE_MAX_RENDER_JOBS 2U
 #define MEISO_COMPOSITION_SCENE_RESULT_QUEUE_SLOTS 4U
+/* PCAP upper bound; PresentationPlan selects an integer rate in [1, 10]. */
 #define MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ 10U
 #define MEISO_COMPOSITION_SCENE_MAX_OFFLINE_LEASE_MS 5000U
 
@@ -152,6 +153,7 @@ typedef struct {
     uint16_t target_height;
     MeisoCompositionSceneColorFormat color_format;
     MeisoCompositionSceneDepthFormat depth_format;
+    /* Requested result cadence, from 1 through the PCAP upper bound. */
     uint16_t max_result_hz;
     uint32_t offline_lease_ms;
     bool prepared_token_echo_present;

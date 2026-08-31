@@ -2033,7 +2033,7 @@ static bool test_offline_simulator_editor_flow(void)
         "\"target_width\":320,\"target_height\":240,"
         "\"color_format\":\"rgba8888\","
         "\"depth_format\":\"implementation32\","
-        "\"max_result_hz\":10,\"offline_lease_ms\":1000}\n"
+        "\"max_result_hz\":1,\"offline_lease_ms\":1000}\n"
         "{\"command\":\"set_render_media\",\"request_id\":4,"
         "\"enabled\":true,\"pixel_format\":\"rgba8888\","
         "\"codec\":\"raw\",\"width\":320,\"height\":240,"
@@ -2089,6 +2089,56 @@ static bool test_offline_simulator_editor_flow(void)
     CHECK(strstr(result.output, "\"type\":\"media.connected\"") == NULL);
     CHECK(strstr(result.output, "\"type\":\"closing\",\"request_id\":17") !=
           NULL);
+    CHECK(output_is_closed_ndjson(result.output));
+    return true;
+}
+
+static bool test_presentation_rate_bounds(void)
+{
+    static const char input[] =
+        "{\"command\":\"set_presentation\",\"request_id\":1,"
+        "\"enabled\":true,\"use_safety_frame\":false,"
+        "\"target_width\":320,\"target_height\":240,"
+        "\"color_format\":\"rgba8888\","
+        "\"depth_format\":\"implementation32\","
+        "\"max_result_hz\":0,\"offline_lease_ms\":1000}\n"
+        "{\"command\":\"set_presentation\",\"request_id\":2,"
+        "\"enabled\":true,\"use_safety_frame\":false,"
+        "\"target_width\":320,\"target_height\":240,"
+        "\"color_format\":\"rgba8888\","
+        "\"depth_format\":\"implementation32\","
+        "\"max_result_hz\":11,\"offline_lease_ms\":1000}\n"
+        "{\"command\":\"set_presentation\",\"request_id\":3,"
+        "\"enabled\":true,\"use_safety_frame\":false,"
+        "\"target_width\":320,\"target_height\":240,"
+        "\"color_format\":\"rgba8888\","
+        "\"depth_format\":\"implementation32\","
+        "\"max_result_hz\":1,\"offline_lease_ms\":1000}\n"
+        "{\"command\":\"snapshot\",\"request_id\":4}\n"
+        "{\"command\":\"close\",\"request_id\":5}\n";
+    RunResult result;
+
+    CHECK(run_simulator_service(input, sizeof(input) - 1U, &result));
+    CHECK(result.exit_code == 0 && result.writer_error == 0 &&
+          result.error_size == 0U);
+    CHECK(strstr(
+        result.output,
+        "{\"type\":\"error\",\"request_id\":1,"
+        "\"code\":\"CONFLICT\"}\n"
+    ) != NULL);
+    CHECK(strstr(
+        result.output,
+        "{\"type\":\"error\",\"request_id\":2,"
+        "\"code\":\"CONFLICT\"}\n"
+    ) != NULL);
+    CHECK(strstr(result.output, "\"request_id\":3,\"command_id\":") !=
+          NULL);
+    CHECK(strstr(result.output, "\"kind\":\"set_presentation\"") != NULL);
+    CHECK(strstr(result.output, "\"type\":\"snapshot\",\"request_id\":4") !=
+          NULL);
+    CHECK(strstr(result.output, "\"type\":\"closing\",\"request_id\":5") !=
+          NULL);
+    CHECK(occurrence_count(result.output, "\"code\":\"CONFLICT\"") == 2U);
     CHECK(output_is_closed_ndjson(result.output));
     return true;
 }
@@ -2185,6 +2235,7 @@ int main(void)
         !test_pre_ready_commands_and_redaction() ||
         !test_large_hup_drain() || !test_partial_line_eof() ||
         !test_sigpipe_restore() || !test_offline_simulator_editor_flow() ||
+        !test_presentation_rate_bounds() ||
         !test_media_reconnect_barrier_no_frame()) {
         return 1;
     }

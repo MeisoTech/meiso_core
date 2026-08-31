@@ -29,7 +29,12 @@ from native_bridge import (
     full_scene_command,
     sanitize_native_event,
 )
-from server import CompositionEditorState, _default_snapshot, create_server
+from server import (
+    CommandError,
+    CompositionEditorState,
+    _default_snapshot,
+    create_server,
+)
 
 
 FAKE_CHILD = r'''#!/usr/bin/env python3
@@ -770,6 +775,7 @@ class NativeBridgeTests(unittest.TestCase):
 
     def test_euler_complete_scene_and_intent_mapping(self) -> None:
         snapshot = _default_snapshot()
+        snapshot["intents"]["render"].update(enabled=True, max_hz=1)
         snapshot["scene"]["objects"].append({
             "draft_object": 9, "name": "Cube 9", "asset": "builtin:cube",
             "position": [1.0, 2.0, 3.0],
@@ -805,6 +811,25 @@ class NativeBridgeTests(unittest.TestCase):
             [{"command": "set_device", "enabled": False}],
         )
         self.assertEqual(
+            commands_for_mutation("intent.render.set", snapshot),
+            [
+                {
+                    "command": "set_presentation", "enabled": True,
+                    "use_safety_frame": False, "target_width": 320,
+                    "target_height": 240, "color_format": "rgba8888",
+                    "depth_format": "implementation32",
+                    "max_result_hz": 1, "offline_lease_ms": 1000,
+                },
+                {
+                    "command": "set_render_media", "enabled": True,
+                    "pixel_format": "rgba8888", "codec": "raw",
+                    "width": 320, "height": 240, "fps_millihz": 1000,
+                    "bitrate_bps": 0, "gop_frames": 1,
+                    "request_key": True,
+                },
+            ],
+        )
+        self.assertEqual(
             [command["command"] for command in bootstrap_commands(snapshot)],
             [
                 "asset.load_builtin", "set_scene", "set_presentation",
@@ -812,6 +837,121 @@ class NativeBridgeTests(unittest.TestCase):
                 "set_device", "snapshot",
             ],
         )
+
+    def test_profile_intent_mapping_defends_static_bounds(self) -> None:
+        snapshot = _default_snapshot()
+        snapshot["intents"]["render"].update(enabled=True, max_hz=10)
+        snapshot["intents"]["camera"].update(enabled=True, fps=30)
+        snapshot["intents"]["telemetry"].update(
+            enabled=True, sample_period_ms=10000, selected_fields=1023
+        )
+        snapshot["intents"]["device"].update(
+            enabled=True, sample_period_ms=100, selected_fields=15
+        )
+        self.assertEqual(
+            commands_for_mutation("intent.render.set", snapshot)[0][
+                "max_result_hz"
+            ],
+            10,
+        )
+        self.assertEqual(
+            commands_for_mutation("intent.camera.set", snapshot)[0][
+                "fps_millihz"
+            ],
+            30000,
+        )
+        self.assertEqual(
+            commands_for_mutation("intent.telemetry.set", snapshot)[0],
+            {
+                "command": "set_wifi", "enabled": True,
+                "selected_fields": 1023, "sample_period_ms": 10000,
+            },
+        )
+        self.assertEqual(
+            commands_for_mutation("intent.device.set", snapshot)[0],
+            {
+                "command": "set_device", "enabled": True,
+                "selected_fields": 15, "sample_period_ms": 100,
+            },
+        )
+
+        invalid = (
+            ("intent.render.set", "render", {"enabled": False, "max_hz": 0}),
+            ("intent.render.set", "render", {"enabled": False, "max_hz": 11}),
+            ("intent.camera.set", "camera", {"enabled": False, "fps": 31}),
+            (
+                "intent.telemetry.set", "telemetry",
+                {"enabled": False, "sample_period_ms": 150,
+                 "selected_fields": 1},
+            ),
+            (
+                "intent.telemetry.set", "telemetry",
+                {"enabled": False, "sample_period_ms": 100,
+                 "selected_fields": 1024},
+            ),
+            (
+                "intent.device.set", "device",
+                {"enabled": False, "sample_period_ms": 150,
+                 "selected_fields": 1},
+            ),
+            (
+                "intent.device.set", "device",
+                {"enabled": False, "sample_period_ms": 100,
+                 "selected_fields": 16},
+            ),
+        )
+        for command_name, intent_name, values in invalid:
+            with self.subTest(command=command_name, values=values):
+                candidate = _default_snapshot()
+                candidate["intents"][intent_name].update(values)
+                with self.assertRaisesRegex(
+                    NativeBridgeError, "^INVALID_PROFILE_INTENT$"
+                ):
+                    commands_for_mutation(command_name, candidate)
+
+    def test_profile_rejection_keeps_bound_native_session_alive(self) -> None:
+        class BoundBridge:
+            def __init__(self) -> None:
+                self.calls: list[object] = []
+                self.closed = False
+
+            def submit_batch(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                return [1]
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = CompositionEditorState()
+        bridge = BoundBridge()
+        state._native_bridge = bridge
+        before = state.snapshot()
+        event_count = state.event_count()
+        invalid = (
+            {"command": "intent.render.set", "enabled": False, "max_hz": 11},
+            {"command": "intent.camera.set", "enabled": False, "fps": 31},
+            {
+                "command": "intent.telemetry.set", "enabled": False,
+                "sample_period_ms": 150, "selected_fields": 1,
+            },
+            {
+                "command": "intent.device.set", "enabled": False,
+                "sample_period_ms": 100, "selected_fields": 16,
+            },
+        )
+        for command in invalid:
+            with self.subTest(command=command):
+                with self.assertRaises(CommandError):
+                    state.apply(command)
+                self.assertEqual(state.snapshot(), before)
+                self.assertEqual(state.event_count(), event_count)
+                self.assertIs(state._native_bridge, bridge)
+                self.assertEqual(bridge.calls, [])
+                self.assertFalse(bridge.closed)
 
     def _run_frame_loop(
         self, chunks: list[bytes]

@@ -456,6 +456,7 @@ static bool test_plan_digest_independent_golden(void)
 {
     MeisoCompositionScenePresentationPlan plan;
     uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
+    uint8_t one_hz_digest[MEISO_SHA256_DIGEST_SIZE];
 
     memset(&plan, 0, sizeof(plan));
     plan.flags = MEISO_COMPOSITION_SCENE_PLAN_USE_SAFETY_FRAME;
@@ -473,6 +474,12 @@ static bool test_plan_digest_independent_golden(void)
     plan.offline_lease_ms = 1000U;
     CHECK(meiso_composition_scene_plan_digest(&plan, digest));
     CHECK(memcmp(digest, PLAN_DIGEST_GOLDEN, sizeof(digest)) == 0);
+
+    plan.max_result_hz = 1U;
+    CHECK(meiso_composition_scene_plan_digest(&plan, one_hz_digest));
+    CHECK(memcmp(one_hz_digest, PLAN_DIGEST_GOLDEN,
+                 sizeof(one_hz_digest)) != 0);
+    plan.max_result_hz = MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ;
 
     plan.prepared_token_echo_present = true;
     fill_nonce(plan.prepared_token_echo, 0x21U);
@@ -541,6 +548,67 @@ static bool publish_plan(
               out_received->state.version,
               &out_received->runtime,
               observed_at) == expected_observe);
+    return true;
+}
+
+static bool test_plan_rate_bounds(void)
+{
+    static const uint16_t accepted[] = {
+        1U, MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ
+    };
+    static const uint16_t rejected[] = {
+        0U, MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ + 1U
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(accepted) / sizeof(accepted[0]); ++index) {
+        Fixture fixture;
+        MeisoCompositionScenePresentationPlan plan = plan_value(1U, 1000U);
+        MeisoCompositionCoordinatorPlanView candidate;
+        ReceivedPlan received;
+        uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
+
+        CHECK(fixture_init(&fixture));
+        plan.max_result_hz = accepted[index];
+        CHECK(meiso_composition_scene_plan_digest(&plan, digest));
+        memcpy(plan.candidate_digest, digest, sizeof(digest));
+        CHECK(publish_plan(
+            &fixture, 1U, true, &plan, time_point(10U), &received,
+            MEISO_COMPOSITION_COORDINATOR_OBSERVE_PREPARING
+        ));
+        CHECK(meiso_composition_coordinator_candidate(
+            fixture.coordinator, &candidate
+        ));
+        CHECK(candidate.plan != NULL &&
+              candidate.plan->max_result_hz == accepted[index]);
+        fixture_destroy(&fixture);
+    }
+    for (index = 0U; index < sizeof(rejected) / sizeof(rejected[0]); ++index) {
+        Fixture fixture;
+        MeisoCompositionScenePresentationPlan plan = plan_value(1U, 1000U);
+        MeisoCompositionCoordinatorPlanView candidate;
+        MeisoRuntimeDesiredState desired;
+        uint8_t wire[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE];
+        size_t wire_size = 0U;
+
+        CHECK(fixture_init(&fixture));
+        CHECK(meiso_composition_scene_presentation_plan_encode(
+                  &plan, (MeisoMutableBuffer){wire, sizeof(wire)},
+                  &wire_size) == MEISO_COMPOSITION_SCENE_CODEC_OK);
+        wire[84] = (uint8_t)(rejected[index] >> 8U);
+        wire[85] = (uint8_t)rejected[index];
+        desired = (MeisoRuntimeDesiredState){
+            true, {wire, wire_size}
+        };
+        CHECK(meiso_composition_coordinator_observe_desired(
+                  fixture.coordinator, fixture.host_owner.incarnation, 1U,
+                  &desired, time_point(10U)) ==
+              MEISO_COMPOSITION_COORDINATOR_OBSERVE_INVALID_PLAN);
+        CHECK(!meiso_composition_coordinator_candidate(
+            fixture.coordinator, &candidate
+        ));
+        fixture_destroy(&fixture);
+    }
     return true;
 }
 
@@ -886,11 +954,15 @@ static bool test_runtime_shape_and_observation_order(void)
     MeisoCompositionCoordinatorPlanView candidate;
     MeisoRuntimeDesiredState desired;
     MeisoCompositionCoordinatorObservation observation;
+    uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
     uint8_t wire[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE + 1U];
     size_t wire_size = 0U;
 
     CHECK(fixture_init(&fixture));
     plan = plan_value(1U, MEISO_COMPOSITION_SCENE_MAX_OFFLINE_LEASE_MS);
+    plan.max_result_hz = 1U;
+    CHECK(meiso_composition_scene_plan_digest(&plan, digest));
+    memcpy(plan.candidate_digest, digest, sizeof(digest));
     CHECK(meiso_composition_scene_presentation_plan_encode(
               &plan, (MeisoMutableBuffer){wire, sizeof(wire)}, &wire_size) ==
           MEISO_COMPOSITION_SCENE_CODEC_OK);
@@ -956,6 +1028,7 @@ static bool test_runtime_shape_and_observation_order(void)
     CHECK(meiso_composition_coordinator_candidate(
         fixture.coordinator, &candidate
     ));
+    CHECK(candidate.plan != NULL && candidate.plan->max_result_hz == 1U);
     CHECK(candidate.offline_lease_ms ==
           MEISO_COMPOSITION_SCENE_MAX_OFFLINE_LEASE_MS);
     fixture_destroy(&fixture);
@@ -1968,7 +2041,7 @@ static bool test_success_swap_status_and_disable(void)
 
 int main(void)
 {
-    if (!test_plan_digest_independent_golden() ||
+    if (!test_plan_digest_independent_golden() || !test_plan_rate_bounds() ||
         !test_success_swap_status_and_disable() ||
         !test_runtime_shape_and_observation_order() ||
         !test_async_failures_and_late_completion() ||

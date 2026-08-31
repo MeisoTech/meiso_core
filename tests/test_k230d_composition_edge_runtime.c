@@ -21,6 +21,8 @@
 #include <time.h>
 #include <unistd.h>
 
+bool meiso_test_k230d_composition_edge_one_hz_cadence(void);
+
 /*
  * Source-checkpoint expansion matrix:
  *
@@ -4475,7 +4477,8 @@ static bool test_fixture_shape_checkpoint(void)
 
 int main(void)
 {
-    if (!test_fixture_shape_checkpoint() ||
+    if (!meiso_test_k230d_composition_edge_one_hz_cadence() ||
+        !test_fixture_shape_checkpoint() ||
         !test_camera_start_failure_recovery() ||
         !test_init_and_control_bootstrap()) {
         return 1;

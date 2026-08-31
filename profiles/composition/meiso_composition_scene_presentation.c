@@ -193,7 +193,8 @@ static bool plan_valid(const MeisoCompositionScenePresentationPlan *value)
         value->color_format != MEISO_COMPOSITION_SCENE_COLOR_RGBA8888 ||
         value->depth_format !=
             MEISO_COMPOSITION_SCENE_DEPTH_IMPLEMENTATION_32 ||
-        value->max_result_hz != MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ ||
+        value->max_result_hz == 0U ||
+        value->max_result_hz > MEISO_COMPOSITION_SCENE_MAX_RESULT_HZ ||
         value->offline_lease_ms >
             MEISO_COMPOSITION_SCENE_MAX_OFFLINE_LEASE_MS) {
         return false;

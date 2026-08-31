@@ -144,6 +144,16 @@ intent.telemetry.set    enabled, sample_period_ms, selected_fields
 intent.device.set       enabled, sample_period_ms, selected_fields
 ```
 
+Intent 参数只接受当前 Profile 的静态 envelope：render `max_hz=1..10`；camera
+`fps=1..30`；Wi-Fi telemetry 的 `sample_period_ms=100..10000`（100 ms 步长）、
+`selected_fields=1..1023`；Device telemetry 的 period 范围和步长相同，
+`selected_fields=1..15`。即使 `enabled=false`，参数也会先验证再保存，便于后续启用
+时保持同一份 intent。
+
+这些检查不代表 Editor 已投影当前连接 catalog 中可能更窄的
+`supported_fields` 子集；动态 capability 仍由 native runtime 的 actual/rejection
+truth 最终裁决。
+
 `scene.object.select` is editor-local. Every other scene edit queues the full
 current scene snapshot in native mode. The only asset import presently exposed
 is `builtin:cube`; adding OBJ or another editor import does not change Meiso

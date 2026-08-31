@@ -106,7 +106,7 @@
       <form id="render-intent" class="panel intent-card">
         <div class="intent-title"><span class="intent-icon render">R</span><div><h3>Render producer</h3><small>desired intent · result route unbound</small></div></div>
         <label class="switch-row">Enabled <input name="enabled" type="checkbox"></label>
-        <label>Requested max Hz<input name="rate" type="number" min="1" max="120"></label>
+        <label>Requested max Hz<input name="rate" type="number" min="1" max="10" step="1"></label>
         <button class="secondary" type="submit">Save render intent</button>
         <span id="render-binding" class="binding offline">UNBOUND</span>
       </form>
@@ -114,7 +114,7 @@
       <form id="camera-intent" class="panel intent-card">
         <div class="intent-title"><span class="intent-icon camera">C</span><div><h3>Camera stream</h3><small>desired intent · native actual is read-only</small></div></div>
         <label class="switch-row">Enabled <input name="enabled" type="checkbox"></label>
-        <label>Requested FPS<input name="rate" type="number" min="1" max="120"></label>
+        <label>Requested FPS<input name="rate" type="number" min="1" max="30" step="1"></label>
         <button class="secondary" type="submit">Save camera intent</button>
         <span id="camera-binding" class="binding offline">UNBOUND</span>
       </form>
@@ -132,7 +132,7 @@
         <div class="intent-title"><span class="intent-icon device">D</span><div><h3>Device telemetry</h3><small>temperature · CPU · memory intent</small></div></div>
         <label class="switch-row">Enabled <input name="enabled" type="checkbox"></label>
         <label>Period ms<input name="period" type="number" min="100" max="10000" step="100"></label>
-        <label>Field mask<input name="fields" type="number" min="1" max="1023"></label>
+        <label>Field mask<input name="fields" type="number" min="1" max="15"></label>
         <button class="secondary" type="submit">Save device intent</button>
         <span id="device-binding" class="binding offline">DEVICE UNBOUND</span>
       </form>

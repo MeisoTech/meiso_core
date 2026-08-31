@@ -54,6 +54,11 @@ Host 通过 immutable Mesh Blob、完整 `SceneDesired` snapshot 和
 - 2 MiB per-world 与 4 MiB active+prepared mesh budget；
 - 2 target sets、2 jobs、4 RenderResult slots，64×48 RGB565 thumbnail。
 
+这里的 10 Hz 是 PCAP capability 上限，不是 Plan 固定值。
+`PresentationPlan.max_result_hz` 的合法范围是 `1..10`；`0` 和大于 `10`
+的值必须整体拒绝。禁用由 Runtime desired 的 `enabled=false` 且 Plan absent
+表达，不以 `max_result_hz=0` 表达。
+
 Mesh、scene、plan、status 和 RenderResult 都是 canonical big-endian codec；不以
 `sizeof(C struct)` 决定 wire。数值、reserved byte、大小、ContentId 和
 owner/version 任一不合法都整体拒绝。
