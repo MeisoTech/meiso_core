@@ -17,6 +17,8 @@
 
 ## 当前实现
 
+- [系统认知图](system-runtime-map.md)：当前进程/通信拓扑、线程、内存与buffer、状态存放、
+  连接和断开生命周期、输出与外设边界；它是非规范工程地图；
 - [SDK指南](sdk-guide.md)：caller-owned adapter、opaque `EdgeHandle`、simulator/trace、conformance与工作单元；
 - [Resource Core v0](resource-core-v0.md)、[Session Core v0](session-core-v0.md)与
   [Runtime Core v0](runtime-core-v0.md)：portable C11 实现合同；Runtime Core 页中的
