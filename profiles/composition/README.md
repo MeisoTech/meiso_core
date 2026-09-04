@@ -67,6 +67,10 @@ SceneStore 只在 Blob 完整校验并对当前 owner scope 可见后准备新 w
 Coordinator 拥有 plan prepare、token echo 和 frame-boundary 激活；renderer 只能返回
 完整 render 结果或失败，不生成 token、不激活 plan、不声称物理 present。
 
+这是 `COMPOSE_/_PROFILE:v1` 对通用 Composition **prepared handoff** 模式的明确选择，
+不是所有后续 Profile 的必经流程。选择 **direct latest** 的窄 Profile 可以不使用 token/echo，
+但仍必须声明完整 layer 语义、在本地安全边界应用，并把激活状态与物理呈现证据分开。
+
 `RenderResult` 是 6304-byte inline Stream sample，包含 applied scene owner/version、
 plan/world generation、完整 target SHA-256 和 thumbnail。它不是 framebuffer 交付、
 fence、vblank 或 panel 证据。

@@ -34,7 +34,9 @@ Host 与 Edge 理解同一套 Composition contract，但只实现各自声明的
 
 ## Layer 模型
 
-`PresentationPlan` 是有序 layer 集合。每个 layer 声明 source、几何形式、空间绑定、依赖资源和允许的降级范围。
+呈现计划是有序 layer 集合。每个 layer 声明 source、几何形式、空间绑定、依赖资源和允许的降级范围。支持动态、多 layer 或 prepared handoff 的 Profile 使用显式
+`PresentationPlan` 与 plan generation；固定单 layer 的 direct-latest Profile 可以由 Profile
+identity 加完整配置 State 定义同一语义，不需要再造一个 plan generation。
 
 - `Projection` 表达有明确视锥和 render pose 的场景内容。
 - `Quad` 表达平面 HUD 或面板；其他曲面类型由 capability 扩展。
@@ -42,12 +44,17 @@ Host 与 Edge 理解同一套 Composition contract，但只实现各自声明的
 
 framebuffer 是 layer payload，不是 Composition 模型：结合视锥与 render pose 时可表达 `Projection`，结合平面元数据时可表达 `Quad`。通用 `Z distance` 不能表达透视、遮挡和深度相关视差；这些能力需要 depth、多个明确 layer，或 Edge-native scene。即使 `VIEW` layer 不做世界锁定，它仍经过设备光学校正和最终 scanout。
 
+声明 presentation capability 的 Profile 必须把每条 MediaStream 关联到明确的 layer
+source、几何形式和空间绑定。一个只支持单张固定全屏 `VIEW Quad` 的窄 Profile，可以把
+这组不变的 layer 语义写进 Profile identity，并让它的配置 Desired 成为该固定 layer 的
+完整当前计划；这不允许实现把任意 framebuffer 当作没有 Composition 含义的像素入口。
+
 ## Composition Resources
 
 | Resource | 真值方 | 形式 | 含义 |
 |---|---|---|---|
 | `CompositionCapabilities` | Edge | State | 支持的 layer、source、修正方式、格式与资源边界 |
-| `PresentationPlan` | Host | State | 完整期望内容、plan generation 与可接受范围 |
+| `PresentationPlan` | Host | State | 动态/多 layer Profile 的完整期望内容、plan generation 与可接受范围 |
 | `PresentationStatus` | Edge | State | 实际选择、准备或激活状态及失败原因 |
 | application native state | Host | State | Edge-native application layer 的当前 truth |
 | immutable asset | Host | Blob | 按 content identity 校验的模型、字体或其他资源 |
@@ -77,16 +84,44 @@ route 在同一原子 catalog。Control 仍使用 State/Blob/小 Stream；持续
 
 ## 代际与激活
 
-- Edge 的 capability generation 变化后，Host 必须针对新能力重新声明 plan。
-- State version 负责 snapshot 新旧关系，plan generation 标识不可变候选；两者不能混用。
-- `PresentationPlan` 是完整候选状态。required、preferred 与允许降级的范围必须显式，Edge 不得静默改变语义。
-- Edge 准备新 generation 时继续显示旧 generation。capability 只声明静态边界，当前资源是否允许准备或双代持由 `PresentationStatus` 明确接受或拒绝。
-- `prepared_token` 绑定 session、capability generation、plan generation、候选摘要和 Edge 选择的精确配置。同一 plan generation 不能更改候选，只能更新激活字段。
-- Edge 通过 `PresentationStatus` 返回 token；Host 在新的 plan version 中回显后，Edge 只在显示边界原子激活完整 snapshot。
-- Link ACK 只表示 plan 已送达；Edge-owned `PresentationStatus` 只能证明 generation 已准备或由 Edge 激活，不能证明像素已经实际显示。
+- Edge 的 capability generation 变化后，Host 必须针对新能力重新声明 Profile 所选的完整
+  plan 或固定 layer 配置。
+- State version 负责 snapshot 新旧关系；选择显式 `PresentationPlan` 的 Profile 另用 plan
+  generation 标识不可变候选，两者不能混用。固定 direct-latest layer 只使用其配置 State
+  owner/version，不制造无对应对象的 plan generation。
+- 动态 `PresentationPlan` 或固定 layer 配置都必须是自己的完整候选状态。required、
+  preferred 与允许降级的范围必须显式，Edge 不得静默改变语义。
+- Edge 验证新候选或新配置时继续显示旧的已应用内容。capability 只声明静态边界，当前
+  资源是否允许准备、双代持或 latest 替换由 `PresentationStatus` 明确接受或拒绝。
 
-offline lease 是 duration；Edge 首次接受对应 plan version 时转换为本地 monotonic deadline，
-同版本重传不能续期。短暂 transport/Session 中断时，Remote Projection 只可在有界时间内
-修正最后可用帧，随后进入本地安全层；Edge Native 只在 lease 内继续运行。
+Profile 必须从下列两种激活模式中作出精确选择；不能让实现自行猜测：
 
-新 session 会使旧 status 副本与 `prepared_token` 失效，Host 必须重新声明 plan。若 Edge incarnation 与 monotonic epoch 未变、active generation 仍驻留内存且 lease 未到期，Edge 可以暂时保留内容，并在新 session 重新发布实际状态；Edge 重启后一律不能从缓存复活。缓存资源可以按 content hash 复用，但不是当前 truth 或授权；Remote Projection 从新的 stream epoch 与 recovery point 恢复。
+- **direct latest**：适合单一、可整体替换且允许跳过中间版本的 layer。Host 发布完整的
+  plan/configuration State；Edge 验证后保留旧显示，直到本地安全显示边界直接应用最新
+  合法值。它没有 `prepared_token` 或 Host echo。fresh Session 或新的 media production
+  epoch 仍遵守 Runtime 的 RUNNING Actual 数据门；门打开后的普通帧不再等待逐帧或普通
+  配置 Actual。未应用的旧配置 State 可以被更新配置取代；门内 MediaStream frame 使用
+  自己的 epoch/sequence/deadline 和有界 latest 规则，在本地显示边界选择最新完整帧。配置
+  State 与 frame 的版本/序号不能互相替代。
+- **prepared handoff**：适合必须跨多个资源保持原子一致、且 Profile 明确需要 Host 再确认
+  Edge 精确选择的候选。`prepared_token` 绑定 session、capability generation、plan
+  generation、候选摘要和 Edge 选择的配置；Host 在新的 plan version 中回显后，Edge 才在
+  显示边界激活。选择本模式的 Profile 必须定义 token 失效、重放、替换和断线行为。
+
+当前 `COMPOSE_/_PROFILE:v1` 选择 prepared handoff；其他 Profile 不因复用 Composition
+语义而自动继承 token/echo。两种模式下，Link ACK 都只表示 plan 已送达；Edge-owned
+`PresentationStatus` 只能证明已准备或已激活，不能证明像素已经实际显示。物理呈现仍需
+独立的 fence/page-flip/vblank 类证据。
+
+若 Profile 明确允许断线后继续 Remote Projection 或 Edge Native，它必须选择有界 offline
+lease。lease 是 duration；Edge 首次接受对应 plan version 时转换为本地 monotonic deadline，
+同版本重传不能续期。短暂 transport/Session 中断时，只可在该本地 deadline 前继续，随后
+进入 Profile 声明的本地安全层。没有选择 offline continuation 的 Profile 在 Session 终止时
+立即使旧 remote production binding 失效，不能凭缓存自行恢复授权。
+
+新 session 会使旧 status 副本以及 prepared handoff 模式中的 `prepared_token` 失效，Host
+必须重新声明 plan 或固定 layer 配置。对选择 offline lease 的 Profile，若 Edge incarnation
+与 monotonic epoch 未变、active plan generation 或 fixed-layer config owner/version 仍驻留
+内存且 lease 未到期，Edge 可以暂时保留内容，并在新 session 重新发布实际状态；Edge
+重启后一律不能从缓存复活。缓存资源可以按 content hash 复用，但不是当前 truth 或授权；
+Remote Projection 从新的 stream epoch 与 recovery point 恢复。
