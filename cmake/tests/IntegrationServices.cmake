@@ -47,6 +47,19 @@ if(TARGET meiso_camera_v4l2_adapter)
     )
 endif()
 
+if(TARGET meiso_k230d_drm_scanout)
+    meiso_add_c_test(
+        meiso_k230d_drm_scanout_test
+        tests/test_k230d_drm_scanout.c
+        adapter
+        meiso_k230d_drm_scanout
+    )
+    target_include_directories(
+        meiso_k230d_drm_scanout_test
+        PRIVATE targets/k230d-linux/adapters
+    )
+endif()
+
 if(TARGET meiso_composition_control_session)
     meiso_add_c_test(
         meiso_composition_control_session_test

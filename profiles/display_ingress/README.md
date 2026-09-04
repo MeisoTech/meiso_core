@@ -1,7 +1,8 @@
 # Display Ingress Profile
 
-> 状态：`MEDIA TRANSPORT IMPLEMENTED / CATALOG+STATE+EVIDENCE PENDING /
-> PHYSICAL E2E PENDING`。
+> 状态：媒体传输已实现；Linux 显示选择与资源状态逻辑已通过主机测试；Catalog、State、
+> 呈现证据、真实设备接入和物理端到端验收仍待完成。DRM/KMS 指 Linux 内核的显示管理
+> 和模式设置接口。
 > 本页固定 Host 到 Edge 实屏链路的最小产品合同。当前只实现并测试了 DATA route 的
 > Profile-local 媒体对象；完整 Catalog、State codec、呈现证据、carrier 和实机路径尚未完成。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
@@ -227,6 +228,62 @@ Looking Glass 的 PRESENTED 历史。证据丢失不阻塞后续帧；最终 E2E
 所有可重试容量/暂时不可写返回都必须在失败时保持对象、caller 输入和输出字节不变。
 会终止对象的协议错误必须显式报告 terminal reason，不能伪装成普通 backpressure。
 
+## K230D 本机 DRM probe 的当前实现边界
+
+本节补充术语：libdrm 是用户态调用库；connector 是物理输出口，CRTC 是当前扫描输出的
+显示时序，plane 是可叠加的图层，zpos 是图层上下顺序。下文保留这些内核字段名，便于
+与驱动枚举结果逐项核对。
+
+当前仓库已有一层**与 libdrm 无关的设备选择和资源状态逻辑**。主机测试会注入一组
+假设备操作（测试代码模拟打开、提交和事件，不会打开真实 `/dev/dri`），但还没有把这些
+操作接到 K230D 的 libdrm，也没有板端可执行程序或板端结果。因此它不能生成真实 DRM
+证据。收据固定写 `INJECTED_OPS_UNVERIFIED`（表示“由测试注入，未经物理设备验证”）和
+`physical_evidence=false`。即使模拟事件让状态进入 `KMS_LATCHED`，也只证明状态逻辑按
+合同推进，不证明 K230D、HDMI/DSI 链路或屏幕发生过任何事。
+
+该策略内核固定以下安全选择，未来 native translation 只能如实提供事实，不能放宽：
+
+- 在最多 8 个 connector、8 个 CRTC、16 个 plane 的完整快照中，只接受唯一一条有效
+  显示路径：connector 已连接、已有 encoder/CRTC 绑定，并且该 CRTC 明确处于 `ACTIVE`
+  且带 current mode。另一个已连接但未指向 active CRTC 的 connector 不算有效路径；
+  所有对象按 ID 严格排序；
+- `possible_crtcs` 的 bit 明确定义为排序后的 canonical CRTC 数组下标。libdrm 原始数组若
+  顺序不同，native translation 必须先重映射，不能把原始 mask 直接交给策略层；
+- 只选择兼容该 CRTC、支持 DRM `RGB565/RG16`、当前 `FB_ID=0 && CRTC_ID=0` 的
+  immutable `OVERLAY` plane；primary、cursor 和 unknown type 一律不用；
+- 目标 CRTC 上每个 active plane 和候选 overlay 的 type、zpos 都必须是 immutable truth，
+  且候选当前 zpos 严格高于所有 active plane。驱动没有 zpos 或不能证明时直接
+  `ADMISSION_BLOCKED`，不按数组位置、plane ID 或 K230 示例布局猜测；
+- 不写 connector 或 CRTC property，不建 mode blob，不改变 current mode，不调用
+  `vo_init`，也没有 `ALLOW_MODESET` 的表达入口；唯一写入对象是上述 unused overlay；
+- 输入仍是完整 opaque RGBA8888 或 canonical RGB565 big-endian。策略层同步转换成 DRM
+  RGB565 little-endian，以 CPU 最近邻等比缩放并在 current mode 内居中补黑；每边最大
+  4096 像素，输入与 dumb buffer 各有公开 64 MiB 硬上限；
+- plane-only `TEST_ONLY` 接受后才允许 real `NONBLOCK | PAGE_FLIP_EVENT`。real commit
+  明确区分 accepted、definitely-not-applied 和 outcome-unknown；只有 exact cookie + CRTC
+  的 monotonic event 才成为 `KMS_LATCHED`。无关 event 被消费但不改变 pending；
+- event deadline 由未来 runner 有界管理。持续 would-block/interrupt 必须显式声明
+  present 或 restore outcome unknown；unknown 时 fd、master、FB、mapping 和 dumb handle
+  全部保留，不能猜测“应该没显示”后释放；
+- cleanup 先用原值恢复候选 plane 的十个可写字段：`FB_ID`、`CRTC_ID`、
+  `SRC_X/Y/W/H`、`CRTC_X/Y/W/H`。先做 `TEST_ONLY`，再提交带 event 的真实恢复；
+  `type` 和 `zpos` 只读校验，绝不改写。匹配恢复事件后还要重读这十个字段和只读的
+  immutable type/zpos，逐项相同才按
+  `rmFB -> unmap -> destroy dumb -> drop master -> close` 释放。
+
+收据绑定规范化 topology SHA-256、driver name/version、connector type/id、CRTC/current
+mode、plane/zpos、FB/handle/pitch/size、输入格式/尺寸/SHA-256、缩放 viewport、test/commit/
+event 和资源清理账本；不包含 `/dev/dri/*` 路径、设备序列号或私有日志。Topology hash
+输入的前 8 byte 固定为 `KDT0 00 00 00 01`：`KDT0` 在这里首次定义为
+“K230D DRM topology”的哈希域标签，末尾的 `1` 只表示后续字段排列的第一种布局；当前
+没有第二种布局，它也不是网络 wire 版本。其后字段按公开 topology 数组的 ID 排序结果，
+整数用 big-endian，定长字符串空余 byte 补零。这个 hash 只防止验收时混淆输入，不提供
+认证、签名或传输完整性保护。
+
+由于当前开发环境没有可用的 K230 Xuantie compiler、xf86drm header 或 libdrm artifact，
+native translation、runner、cross/link 和 board page-flip 都明确为 `PENDING`。在这些门关闭
+以前，Display Actual 不得因本策略内核存在而报告 RUNNING。
+
 ## 明确不在第一版里
 
 - carrier 选择及弱网无队头阻塞证明；TCP 只可作受控 bring-up；
@@ -245,7 +302,9 @@ Looking Glass 的 PRESENTED 历史。证据丢失不阻塞后续帧；最终 E2E
 
 1. **已完成：** DATA route 的 Profile-local `DIFR` codec、两槽媒体状态机和故障矩阵；
 2. 冻结其余三个 schema，实现完整 Catalog、Desired/Actual 和 evidence codec；
-3. K230D 本机 exact connector/mode/CRTC/plane/fourcc TEST_ONLY + page-flip 单帧验证；
+3. **部分完成：** K230D 本机 probe 的 portable policy/state machine 与 fake failure matrix
+   已在 Host 验证；native libdrm translation、runner、cross/link 和 exact board page-flip
+   仍待独立切片；
 4. integrity-protecting carrier adapter 与 Edge receiver；
 5. LG Host latest slot 到 Profile sender 的映射；
 6. 真实 Host 输入 SHA-256 与 KMS page-flip evidence 对齐；
