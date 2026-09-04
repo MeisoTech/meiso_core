@@ -12,6 +12,12 @@ meiso_add_c_test(
     profile
     meiso_composition_media_transport
 )
+meiso_add_c_test(
+    meiso_display_ingress_media_transport_test
+    tests/test_display_ingress_media_transport.c
+    profile
+    meiso_display_ingress_media_transport
+)
 
 if(UNIX)
     add_executable(

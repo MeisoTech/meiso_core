@@ -82,6 +82,7 @@ install(
         meiso_composition_scene_schema
         meiso_composition_profile
         meiso_composition_media_transport
+        meiso_display_ingress_media_transport
     EXPORT MeisoProfilesTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Profiles
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Profiles
@@ -108,6 +109,12 @@ install(
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/composition/profile.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/composition/media_transport.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/profiles/composition"
+    COMPONENT Profiles
+)
+install(
+    FILES
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/media_transport.h"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/profiles/display_ingress"
     COMPONENT Profiles
 )
 

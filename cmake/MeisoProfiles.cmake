@@ -118,6 +118,31 @@ add_library(
 )
 
 add_library(
+    meiso_display_ingress_media_transport
+    profiles/display_ingress/display_ingress_media_transport.c
+    profiles/display_ingress/display_ingress_media_transport_codec.c
+    profiles/display_ingress/display_ingress_media_transport_outbound.c
+    profiles/display_ingress/display_ingress_media_transport_receive.c
+    profiles/display_ingress/display_ingress_media_transport_private.c
+)
+meiso_configure_public_target(
+    meiso_display_ingress_media_transport
+    DisplayIngressMediaTransport
+)
+target_link_libraries(
+    meiso_display_ingress_media_transport
+    PUBLIC meiso_runtime
+)
+meiso_enable_warnings(meiso_display_ingress_media_transport)
+meiso_set_target_folder(
+    meiso_display_ingress_media_transport "Meiso/Profiles"
+)
+add_library(
+    Meiso::DisplayIngressMediaTransport
+    ALIAS meiso_display_ingress_media_transport
+)
+
+add_library(
     meiso_four_kind_lab_protocol
     profiles/internal/four_kind/lab_protocol.c
     profiles/internal/four_kind/lab_protocol_message.c
