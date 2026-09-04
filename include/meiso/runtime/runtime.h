@@ -469,8 +469,9 @@ MeisoRuntimeInitStatus meiso_runtime_v3_init(
  * catalog uses 80-byte route records: the old 72 bytes are unchanged,
  * delivery is byte 72, and bytes 73..79 are zero. INLINE routes retain every
  * existing Runtime payload limit. EXTERNAL_MEDIA is legal only for a nonzero
- * maximum-unit Edge-owned Stream/DATA route and never authorizes inline
- * STREAM_SAMPLE carriage.
+ * maximum-unit Stream/DATA route. Its Resource owner selects the producer;
+ * both Host-owned and Edge-owned data are legal. External delivery never
+ * authorizes inline STREAM_SAMPLE carriage.
  */
 MeisoRuntimeInitStatus meiso_runtime_v4_init(
     void *arena,
@@ -563,6 +564,9 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
     const MeisoStreamSample *sample
 );
 /*
+ * On v4, the active DATA route's Resource owner must match the local Session
+ * role and sample producer role; the opposite peer is the only legal
+ * receiver. The v2/v3 compatibility handles remain Edge-producer only.
  * On a v4 EXTERNAL_MEDIA route this returns DELIVERY_MISMATCH and leaves the
  * complete Runtime arena, bound Session arena, sample, and every caller output
  * byte unchanged; the SDK media adapter uses external_media_binding instead.
@@ -749,8 +753,9 @@ MeisoRuntimeStatus meiso_runtime_v4_find_route(
 );
 
 /*
- * Returns only an active EXTERNAL_MEDIA Edge-owned Stream/DATA route whose
- * endpoint production gate is active. INLINE routes return
+ * Returns only an active EXTERNAL_MEDIA Stream/DATA route whose endpoint
+ * production gate is active. The returned Resource owner identifies whether
+ * Host or Edge is the producer. INLINE routes return
  * DELIVERY_MISMATCH; inactive/stale routes fail without partial output.
  * Catalog replacement or Session terminal makes the old query fail.
  */

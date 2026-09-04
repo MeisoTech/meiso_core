@@ -171,7 +171,8 @@ static MeisoRuntimeStatus route_input_validate(
         if (route->resource.kind != MEISO_RESOURCE_KIND_STREAM) {
             return MEISO_RUNTIME_UNSUPPORTED_KIND;
         }
-        if (route->resource.owner != MEISO_OWNER_ROLE_EDGE) {
+        if (runtime->wire_version != MEISO_RUNTIME_WIRE_VERSION_V4 &&
+            route->resource.owner != MEISO_OWNER_ROLE_EDGE) {
             return MEISO_RUNTIME_OWNER_MISMATCH;
         }
         minimum_wire = MEISO_RUNTIME_WIRE_HEADER_SIZE +
@@ -227,9 +228,6 @@ static MeisoRuntimeStatus route_input_validate_delivery(
     }
     if (route->resource.kind != MEISO_RESOURCE_KIND_STREAM) {
         return MEISO_RUNTIME_UNSUPPORTED_KIND;
-    }
-    if (route->resource.owner != MEISO_OWNER_ROLE_EDGE) {
-        return MEISO_RUNTIME_OWNER_MISMATCH;
     }
     return route->resource.max_payload_size == 0U ?
         MEISO_RUNTIME_PAYLOAD_CAPACITY : MEISO_RUNTIME_OK;

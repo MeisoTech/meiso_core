@@ -14,9 +14,10 @@ MeisoRuntimeStatus meiso_runtime_receive(
     uint8_t type;
 
     /*
-     * EXTERNAL_MEDIA is never legal in MRT0. Reject a structurally canonical
-     * hostile STREAM_SAMPLE through the const path before the ordinary receive
-     * boundary can clear a pending State/Blob obligation or caller output.
+     * Reject a structurally canonical STREAM_SAMPLE with an impossible
+     * delivery or producer direction through the const path, before the
+     * ordinary receive boundary can clear a pending State/Blob obligation or
+     * caller output.
      */
     if (meiso_runtime_private_layout_valid(runtime) &&
         runtime->wire_version == MEISO_RUNTIME_WIRE_VERSION_V4 &&
@@ -37,7 +38,9 @@ MeisoRuntimeStatus meiso_runtime_receive(
         status = meiso_runtime_private_receive_stream_sample(
             runtime, message->payload, &ignored_event
         );
-        if (status == MEISO_RUNTIME_DELIVERY_MISMATCH) {
+        if (status == MEISO_RUNTIME_DELIVERY_MISMATCH ||
+            status == MEISO_RUNTIME_WRONG_ROLE ||
+            status == MEISO_RUNTIME_OWNER_MISMATCH) {
             return status;
         }
     }

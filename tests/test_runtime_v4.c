@@ -632,13 +632,238 @@ static void patch_route_key(
     memset(body + 49U, 0, 7U);
 }
 
-static bool test_v2_v3_layout_regression(RuntimePair *pair)
+static bool test_host_owned_data_direction(
+    RuntimePair *pair,
+    Catalog *catalog,
+    Replicas *replicas
+)
+{
+    const uint8_t payload[] = {0x71U, 0x72U, 0x73U};
+    MeisoRuntimeEvent event = {0};
+    MeisoSessionRuntimeMessage message = {0};
+    MeisoRuntimeV4ExternalMediaBinding host_binding;
+    MeisoRuntimeV4ExternalMediaBinding edge_binding;
+    MeisoStreamSample stream = sample(41U, 1U, payload, sizeof(payload));
+    const MeisoRuntimeRouteKey wifi_key = route_key(
+        catalog, WIFI_DATA_ROUTE, 1U
+    );
+    const MeisoRuntimeRouteKey render_key = route_key(
+        catalog, RENDER_DATA_ROUTE, 1U
+    );
+    uint8_t hostile[512];
+    uint8_t runtime_before[300000];
+    uint8_t session_before[65536];
+
+    /*
+     * This deliberately tests generic Runtime v4, not Composition Profile
+     * conformance. The Composition builder supplies stable descriptors and
+     * the fixture changes only DATA ownership to exercise Runtime's accepted
+     * set without inventing a second catalog builder in this unit test.
+     */
+    catalog->routes[WIFI_DATA_ROUTE].route.resource.owner =
+        MEISO_OWNER_ROLE_HOST;
+    catalog->routes[RENDER_DATA_ROUTE].route.resource.owner =
+        MEISO_OWNER_ROLE_HOST;
+    CHECK(meiso_runtime_v4_offer_catalog(
+        pair->edge_runtime, 1U, catalog->endpoints,
+        MEISO_COMPOSITION_PROFILE_ENDPOINT_COUNT, catalog->routes,
+        MEISO_COMPOSITION_PROFILE_ROUTE_COUNT
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->edge_session, pair->host_session, pair->host_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED &&
+          event.catalog_generation == 1U);
+    CHECK(meiso_runtime_accept_catalog(pair->host_runtime) ==
+          MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->host_session, pair->edge_session, pair->edge_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED &&
+          event.catalog_generation == 1U);
+
+    memset(&host_binding, 0xa5, sizeof(host_binding));
+    CHECK(meiso_runtime_v4_external_media_binding(
+        pair->host_runtime,
+        catalog->routes[RENDER_DATA_ROUTE].route.resource.id,
+        &host_binding
+    ) == MEISO_RUNTIME_ROUTE_NOT_ACTIVE);
+    CHECK(bytes_are(
+        (const uint8_t *)&host_binding, 0xa5, sizeof(host_binding)
+    ));
+    memset(&edge_binding, 0x5a, sizeof(edge_binding));
+    CHECK(meiso_runtime_v4_external_media_binding(
+        pair->edge_runtime,
+        catalog->routes[RENDER_DATA_ROUTE].route.resource.id,
+        &edge_binding
+    ) == MEISO_RUNTIME_ROUTE_NOT_ACTIVE);
+    CHECK(bytes_are(
+        (const uint8_t *)&edge_binding, 0x5a, sizeof(edge_binding)
+    ));
+    CHECK(init_replicas(replicas, catalog));
+    CHECK(enable_endpoint(
+        pair, catalog, replicas->render_desired, replicas->render_actual,
+        RENDER_DESIRED_ROUTE, RENDER_ACTUAL_ROUTE, 1U, 1U, 1U, 91U
+    ));
+    CHECK(enable_endpoint(
+        pair, catalog, replicas->wifi_desired, replicas->wifi_actual,
+        WIFI_DESIRED_ROUTE, WIFI_ACTUAL_ROUTE, 1U, 1U, 1U, 92U
+    ));
+
+    CHECK(meiso_runtime_v4_external_media_binding(
+        pair->host_runtime,
+        catalog->routes[RENDER_DATA_ROUTE].route.resource.id,
+        &host_binding
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_v4_external_media_binding(
+        pair->edge_runtime,
+        catalog->routes[RENDER_DATA_ROUTE].route.resource.id,
+        &edge_binding
+    ) == MEISO_RUNTIME_OK);
+    CHECK(host_binding.resource.owner == MEISO_OWNER_ROLE_HOST &&
+          edge_binding.resource.owner == MEISO_OWNER_ROLE_HOST &&
+          route_key_equal(host_binding.route, render_key) &&
+          route_key_equal(edge_binding.route, render_key) &&
+          host_binding.production_epoch == 91U &&
+          edge_binding.production_epoch == 91U);
+
+    stream.key.producer = HOST_OWNER;
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->host_runtime, wifi_key, 92U, &stream
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->host_session, pair->edge_session, pair->edge_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE &&
+          route_key_equal(event.route, wifi_key) &&
+          event.production_epoch == 92U &&
+          owner_equal(event.stream_sample.key.producer, HOST_OWNER) &&
+          event.stream_sample.payload.size == sizeof(payload) &&
+          memcmp(event.stream_sample.payload.data, payload,
+                 sizeof(payload)) == 0);
+
+    stream.key.sequence = 2U;
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->host_runtime, wifi_key, 92U, &stream
+    ) == MEISO_RUNTIME_OK);
+    CHECK(pull_message(
+        pair, pair->host_session, pair->edge_session, &message
+    ));
+    CHECK(message.payload.size <= sizeof(hostile));
+    memmove(hostile, message.payload.data, message.payload.size);
+    CHECK(meiso_session_submit_runtime(
+        pair->edge_session, (MeisoByteView){hostile, message.payload.size}
+    ) == MEISO_SESSION_SUBMIT_QUEUED);
+    CHECK(pull_message(
+        pair, pair->edge_session, pair->host_session, &message
+    ));
+    memmove(runtime_before, pair->host_runtime_arena.bytes,
+            pair->host_runtime_size);
+    memset(&event, 0xa5, sizeof(event));
+    CHECK(meiso_runtime_receive(
+        pair->host_runtime, &message, &event
+    ) == MEISO_RUNTIME_WRONG_ROLE);
+    CHECK(memcmp(runtime_before, pair->host_runtime_arena.bytes,
+                 pair->host_runtime_size) == 0 &&
+          bytes_are((const uint8_t *)&event, 0xa5, sizeof(event)));
+    stream.key.sequence = 3U;
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->host_runtime, wifi_key, 92U, &stream
+    ) == MEISO_RUNTIME_OK);
+    CHECK(pull_message(
+        pair, pair->host_session, pair->edge_session, &message
+    ));
+    CHECK(message.payload.size <= sizeof(hostile));
+    memmove(hostile, message.payload.data, message.payload.size);
+    hostile[MEISO_RUNTIME_WIRE_HEADER_SIZE + 64U] =
+        MEISO_OWNER_ROLE_EDGE;
+    message.payload = (MeisoByteView){hostile, message.payload.size};
+    memmove(runtime_before, pair->edge_runtime_arena.bytes,
+            pair->edge_runtime_size);
+    memset(&event, 0x5a, sizeof(event));
+    CHECK(meiso_runtime_receive(
+        pair->edge_runtime, &message, &event
+    ) == MEISO_RUNTIME_OWNER_MISMATCH);
+    CHECK(memcmp(runtime_before, pair->edge_runtime_arena.bytes,
+                 pair->edge_runtime_size) == 0 &&
+          bytes_are((const uint8_t *)&event, 0x5a, sizeof(event)));
+
+    stream.key.producer = HOST_OWNER;
+    stream.key.sequence = 4U;
+    memmove(runtime_before, pair->edge_runtime_arena.bytes,
+            pair->edge_runtime_size);
+    memmove(session_before, pair->edge_session_arena.bytes,
+            pair->edge_session_size);
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->edge_runtime, wifi_key, 92U, &stream
+    ) == MEISO_RUNTIME_WRONG_ROLE);
+    CHECK(memcmp(runtime_before, pair->edge_runtime_arena.bytes,
+                 pair->edge_runtime_size) == 0 &&
+          memcmp(session_before, pair->edge_session_arena.bytes,
+                 pair->edge_session_size) == 0);
+
+    stream.key.producer = EDGE_OWNER;
+    memmove(runtime_before, pair->host_runtime_arena.bytes,
+            pair->host_runtime_size);
+    memmove(session_before, pair->host_session_arena.bytes,
+            pair->host_session_size);
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->host_runtime, wifi_key, 92U, &stream
+    ) == MEISO_RUNTIME_OWNER_MISMATCH);
+    CHECK(memcmp(runtime_before, pair->host_runtime_arena.bytes,
+                 pair->host_runtime_size) == 0 &&
+          memcmp(session_before, pair->host_session_arena.bytes,
+                 pair->host_session_size) == 0);
+    stream.key.producer = HOST_OWNER;
+    memmove(runtime_before, pair->host_runtime_arena.bytes,
+            pair->host_runtime_size);
+    memmove(session_before, pair->host_session_arena.bytes,
+            pair->host_session_size);
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->host_runtime, render_key, 91U, &stream
+    ) == MEISO_RUNTIME_DELIVERY_MISMATCH);
+    CHECK(memcmp(runtime_before, pair->host_runtime_arena.bytes,
+                 pair->host_runtime_size) == 0 &&
+          memcmp(session_before, pair->host_session_arena.bytes,
+                 pair->host_session_size) == 0);
+
+    CHECK(meiso_runtime_send_stream_sample(
+        pair->host_runtime, wifi_key, 92U, &stream
+    ) == MEISO_RUNTIME_OK);
+    CHECK(pull_message(
+        pair, pair->host_session, pair->edge_session, &message
+    ));
+    CHECK(message.payload.size <= sizeof(hostile));
+    memmove(hostile, message.payload.data, message.payload.size);
+    patch_route_key(hostile, &render_key);
+    message.payload = (MeisoByteView){hostile, message.payload.size};
+    memmove(runtime_before, pair->edge_runtime_arena.bytes,
+            pair->edge_runtime_size);
+    memset(&event, 0x5a, sizeof(event));
+    CHECK(meiso_runtime_receive(
+        pair->edge_runtime, &message, &event
+    ) == MEISO_RUNTIME_DELIVERY_MISMATCH);
+    CHECK(memcmp(runtime_before, pair->edge_runtime_arena.bytes,
+                 pair->edge_runtime_size) == 0 &&
+          bytes_are((const uint8_t *)&event, 0x5a, sizeof(event)));
+    return true;
+}
+
+static bool test_v2_v3_layout_regression(
+    RuntimePair *pair,
+    const Catalog *catalog
+)
 {
     RuntimeArena v2_arena;
     RuntimeArena v3_arena;
     RuntimeArena short_arena;
     MeisoRuntimeConfig v2;
+    MeisoRuntimeConfig edge_v2;
     MeisoRuntimeV3Config v3;
+    MeisoRuntimeV3Config edge_v3;
     MeisoRuntimeV4Config v4;
     MeisoRuntime *runtime = NULL;
     MeisoRuntime *sentinel = (MeisoRuntime *)(uintptr_t)1U;
@@ -646,9 +871,13 @@ static bool test_v2_v3_layout_regression(RuntimePair *pair)
     MeisoRuntimeV4RouteDescriptor v4_route;
     MeisoRuntimeV4ExternalMediaBinding binding;
     MeisoRuntimeBlobSnapshot blob_snapshot;
+    MeisoRuntimeRouteDescriptor legacy_routes[3];
+    uint8_t session_before[65536];
     size_t v2_required;
     size_t v3_required;
     size_t v4_required;
+    size_t edge_v2_required;
+    size_t edge_v3_required;
 
     v4 = runtime_config(pair->host_session);
     v2 = v4.base;
@@ -675,7 +904,6 @@ static bool test_v2_v3_layout_regression(RuntimePair *pair)
         v2_arena.bytes + v2_required, 0xa5,
         sizeof(v2_arena.bytes) - v2_required
     ));
-
     memset(v3_arena.bytes, 0xa5, sizeof(v3_arena.bytes));
     CHECK(meiso_runtime_v3_init(
         v3_arena.bytes, v3_required, &v3, &runtime
@@ -696,6 +924,48 @@ static bool test_v2_v3_layout_regression(RuntimePair *pair)
         runtime, (MeisoResourceId){1U, 1U}, &binding
     ) == MEISO_RUNTIME_WIRE_VERSION_MISMATCH);
     CHECK(bytes_are((const uint8_t *)&binding, 0x5a, sizeof(binding)));
+
+    legacy_routes[0] = catalog->routes[WIFI_DESIRED_ROUTE].route;
+    legacy_routes[1] = catalog->routes[WIFI_ACTUAL_ROUTE].route;
+    legacy_routes[2] = catalog->routes[WIFI_DATA_ROUTE].route;
+    legacy_routes[2].resource.owner = MEISO_OWNER_ROLE_HOST;
+    edge_v2 = v2;
+    edge_v2.session = pair->edge_session;
+    edge_v3 = v3;
+    edge_v3.base.session = pair->edge_session;
+    edge_v2_required = meiso_runtime_memory_required(&edge_v2);
+    edge_v3_required = meiso_runtime_v3_memory_required(&edge_v3);
+    CHECK(edge_v2_required != 0U && edge_v3_required != 0U &&
+          edge_v2_required <= sizeof(v2_arena.bytes) &&
+          edge_v3_required <= sizeof(v3_arena.bytes));
+
+    memset(v2_arena.bytes, 0xa5, sizeof(v2_arena.bytes));
+    CHECK(meiso_runtime_init(
+        v2_arena.bytes, edge_v2_required, &edge_v2, &runtime
+    ) == MEISO_RUNTIME_INIT_OK);
+    memmove(short_arena.bytes, v2_arena.bytes, edge_v2_required);
+    memmove(session_before, pair->edge_session_arena.bytes,
+            pair->edge_session_size);
+    CHECK(meiso_runtime_offer_catalog(
+        runtime, 1U, catalog->endpoints, 1U, legacy_routes, 3U
+    ) == MEISO_RUNTIME_OWNER_MISMATCH);
+    CHECK(memcmp(short_arena.bytes, v2_arena.bytes, edge_v2_required) == 0 &&
+          memcmp(session_before, pair->edge_session_arena.bytes,
+                 pair->edge_session_size) == 0);
+
+    memset(v3_arena.bytes, 0xa5, sizeof(v3_arena.bytes));
+    CHECK(meiso_runtime_v3_init(
+        v3_arena.bytes, edge_v3_required, &edge_v3, &runtime
+    ) == MEISO_RUNTIME_INIT_OK);
+    memmove(short_arena.bytes, v3_arena.bytes, edge_v3_required);
+    memmove(session_before, pair->edge_session_arena.bytes,
+            pair->edge_session_size);
+    CHECK(meiso_runtime_offer_catalog(
+        runtime, 1U, catalog->endpoints, 1U, legacy_routes, 3U
+    ) == MEISO_RUNTIME_OWNER_MISMATCH);
+    CHECK(memcmp(short_arena.bytes, v3_arena.bytes, edge_v3_required) == 0 &&
+          memcmp(session_before, pair->edge_session_arena.bytes,
+                 pair->edge_session_size) == 0);
 
     memset(short_arena.bytes, 0x3c, sizeof(short_arena.bytes));
     runtime = sentinel;
@@ -788,14 +1058,6 @@ static bool test_offer_delivery_constraints(
     routes[WIFI_DATA_ROUTE].route.resource.kind = MEISO_RESOURCE_KIND_BLOB;
     CHECK(rejected_offer_is_atomic(
         pair, catalog, routes, MEISO_RUNTIME_UNSUPPORTED_KIND
-    ));
-
-    memmove(routes, catalog->routes, sizeof(routes));
-    routes[WIFI_DATA_ROUTE].delivery =
-        MEISO_RUNTIME_DELIVERY_EXTERNAL_MEDIA;
-    routes[WIFI_DATA_ROUTE].route.resource.owner = MEISO_OWNER_ROLE_HOST;
-    CHECK(rejected_offer_is_atomic(
-        pair, catalog, routes, MEISO_RUNTIME_OWNER_MISMATCH
     ));
 
     memmove(routes, catalog->routes, sizeof(routes));
@@ -1400,8 +1662,10 @@ int main(void)
     Replicas replicas;
     uint8_t catalog_wire[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
 
-    if (!init_pair(&pair, 100U) || !build_catalog(&catalog) ||
-        !test_v2_v3_layout_regression(&pair) ||
+    if (!init_pair(&pair, 90U) || !build_catalog(&catalog) ||
+        !test_host_owned_data_direction(&pair, &catalog, &replicas) ||
+        !init_pair(&pair, 100U) || !build_catalog(&catalog) ||
+        !test_v2_v3_layout_regression(&pair, &catalog) ||
         !test_offer_delivery_constraints(&pair, &catalog) ||
         !test_catalog_wire_and_views(&pair, &catalog, catalog_wire) ||
         !init_replicas(&replicas, &catalog) ||

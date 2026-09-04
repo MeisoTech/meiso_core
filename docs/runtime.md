@@ -86,6 +86,12 @@ Route 显式声明 delivery class：
 - `EXTERNAL_MEDIA`：只用于 MediaStream。完整 unit 可超过 Runtime frame，但必须有
   Profile 固定的 unit/fragment/buffer/backpressure 上限和 Session-bound binding。
 
+MRT0 v4 `DATA` route 的 Resource owner 就是 data producer。Host-owned 与 Edge-owned
+data 都可由 Profile 选择；只有 owner 一侧可以发送，另一侧只能接收。方向不是由
+endpoint 名称、socket 发起方或历史 Profile 猜测出来的。v2/v3 compatibility fixture
+仍只接受 Edge-owned data。production gate 仍由 Edge-owned actual State 建立，因为
+是否真正可生产或消费数据属于 Edge 设备 truth。
+
 External media 仍校验 exact SessionId、catalog generation、route、endpoint incarnation、
 production/media epoch 和 nonce。任一 scope 变化先使旧 bind 失效；partial unit
 不得对 SDK 可见。Media failure 通过 control actual/failure 可观测；control
@@ -149,7 +155,8 @@ admission/apply failure；payload capacity、backpressure 和 protocol error。
 任一失败不得部分激活 catalog、desired、actual、Blob 或 production。
 正式实现必须证明：READY 前零 Runtime mutation；原子 catalog；desired/actual
 分层；actual 前零新 epoch data；disable/reconfigure cut；wrong scope 全拒绝；
-queue/payload 过载有界可观测；Blob 完整验证；new Session 不恢复旧对象。
+wrong data owner/direction 全拒绝；queue/payload 过载有界可观测；Blob 完整验证；
+new Session 不恢复旧对象。
 
 ## 层级责任
 

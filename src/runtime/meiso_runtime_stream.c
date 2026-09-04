@@ -34,6 +34,7 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
     MeisoRuntimeStatus status;
     MeisoRuntimeRouteSlot *route;
     MeisoRuntimeEndpointSlot *endpoint;
+    MeisoOwnerRole producer_role;
     uint8_t *output;
     size_t size;
 
@@ -69,7 +70,10 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
         route->value.resource.kind != MEISO_RESOURCE_KIND_STREAM) {
         return MEISO_RUNTIME_UNSUPPORTED_KIND;
     }
-    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+    producer_role = runtime->wire_version == MEISO_RUNTIME_WIRE_VERSION_V4 ?
+        route->value.resource.owner : MEISO_OWNER_ROLE_EDGE;
+    if (meiso_runtime_private_owner_role_for_session(runtime->local_role) !=
+            producer_role) {
         return MEISO_RUNTIME_WRONG_ROLE;
     }
     if (!stream_sample_valid(sample, &route->value.resource)) {
@@ -88,7 +92,7 @@ MeisoRuntimeStatus meiso_runtime_send_stream_sample(
         )) {
         return MEISO_RUNTIME_INVALID_ARGUMENT;
     }
-    if (sample->key.producer.role != MEISO_OWNER_ROLE_EDGE) {
+    if (sample->key.producer.role != producer_role) {
         return MEISO_RUNTIME_OWNER_MISMATCH;
     }
     if (!endpoint->production.data_active) {
@@ -191,6 +195,7 @@ MeisoRuntimeStatus meiso_runtime_private_receive_stream_sample(
     MeisoRuntimeRouteSlot *route;
     MeisoRuntimeEndpointSlot *endpoint;
     MeisoRuntimeStatus status;
+    MeisoOwnerRole producer_role;
 
     if (frame.size <
             MEISO_RUNTIME_WIRE_HEADER_SIZE + MEISO_RUNTIME_STREAM_SAMPLE_PREFIX_SIZE ||
@@ -242,13 +247,16 @@ MeisoRuntimeStatus meiso_runtime_private_receive_stream_sample(
         route->value.resource.kind != MEISO_RESOURCE_KIND_STREAM) {
         return MEISO_RUNTIME_UNSUPPORTED_KIND;
     }
-    if (runtime->local_role != MEISO_SESSION_ROLE_HOST) {
+    producer_role = runtime->wire_version == MEISO_RUNTIME_WIRE_VERSION_V4 ?
+        route->value.resource.owner : MEISO_OWNER_ROLE_EDGE;
+    if (meiso_runtime_private_owner_role_for_session(runtime->local_role) ==
+            producer_role) {
         return MEISO_RUNTIME_WRONG_ROLE;
     }
     if (!stream_sample_valid(&sample, &route->value.resource)) {
         return MEISO_RUNTIME_STREAM_INVALID;
     }
-    if (sample.key.producer.role != MEISO_OWNER_ROLE_EDGE) {
+    if (sample.key.producer.role != producer_role) {
         return MEISO_RUNTIME_OWNER_MISMATCH;
     }
     if (!endpoint->production.data_active) {
