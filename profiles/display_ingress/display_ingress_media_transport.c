@@ -7,24 +7,6 @@
 #include <stdint.h>
 #include <string.h>
 
-static const MeisoEndpointId DISPLAY_INGRESS_ENDPOINT = {
-    UINT64_C(0x444953504c41595f), /* DISPLAY_ */
-    UINT64_C(0x494e47525f454e44)  /* INGR_END */
-};
-
-static const MeisoResourceId DISPLAY_INGRESS_MEDIA_RESOURCE = {
-    UINT64_C(0x444953504c41595f), /* DISPLAY_ */
-    UINT64_C(0x444154415f4d4544)  /* DATA_MED */
-};
-
-static const MeisoSchemaRef DISPLAY_INGRESS_MEDIA_SCHEMA = {
-    {
-        UINT64_C(0x444953505f534348), /* DISP_SCH */
-        UINT64_C(0x4652414d455f5f5f)  /* FRAME___ */
-    },
-    1U
-};
-
 static bool endpoint_equal(MeisoEndpointId lhs, MeisoEndpointId rhs)
 {
     return lhs.high == rhs.high && lhs.low == rhs.low;
@@ -69,6 +51,9 @@ static bool config_valid(
 )
 {
     const MeisoDisplayIngressMediaBinding *binding;
+    const MeisoEndpointId *expected_endpoint;
+    const MeisoResourceId *expected_resource;
+    const MeisoSchemaRef *expected_schema;
     uint32_t frame_bytes = 0U;
 
     if (config == NULL || out_frame_bytes == NULL ||
@@ -88,15 +73,24 @@ static bool config_valid(
     }
 
     binding = &config->binding;
+    expected_endpoint = meiso_display_ingress_endpoint();
+    expected_resource = meiso_display_ingress_resource_id(
+        MEISO_DISPLAY_INGRESS_ROUTE_MEDIA
+    );
+    expected_schema = meiso_display_ingress_resource_schema(
+        MEISO_DISPLAY_INGRESS_ROUTE_MEDIA
+    );
     if (!session_id_valid(binding->runtime.session_id) ||
+        expected_endpoint == NULL || expected_resource == NULL ||
+        expected_schema == NULL ||
         binding->runtime.route.catalog_generation == 0U ||
         !endpoint_equal(
-            binding->runtime.route.endpoint_id, DISPLAY_INGRESS_ENDPOINT
+            binding->runtime.route.endpoint_id, *expected_endpoint
         ) ||
         binding->runtime.route.endpoint_incarnation == 0U ||
         !resource_equal(
             binding->runtime.route.resource_id,
-            DISPLAY_INGRESS_MEDIA_RESOURCE
+            *expected_resource
         ) ||
         binding->runtime.route.facet != MEISO_RUNTIME_FACET_DATA ||
         binding->runtime.production_epoch == 0U ||
@@ -110,10 +104,11 @@ static bool config_valid(
         binding->runtime.resource.owner != MEISO_OWNER_ROLE_HOST ||
         !meiso_schema_ref_equal(
             binding->runtime.resource.schema,
-            DISPLAY_INGRESS_MEDIA_SCHEMA
+            *expected_schema
         ) ||
         binding->runtime.resource.max_payload_size < frame_bytes ||
         binding->media_stream_epoch == 0U ||
+        binding->media_stream_epoch != binding->runtime.production_epoch ||
         !meiso_session_nonce_valid(binding->channel_nonce) ||
         !meiso_owner_scope_valid(binding->producer) ||
         binding->producer.role != MEISO_OWNER_ROLE_HOST) {

@@ -39,8 +39,9 @@
 - [Composition Profile](../profiles/composition/README.md)与
   [direct-IP MediaStream](media-stream-direct-ip.md)；
 - [Display Ingress Profile](../profiles/display_ingress/README.md)：Host 到 Edge 实屏链路的
-  单 endpoint、完整帧和异步呈现证据合同；当前已选择，DATA route 的有界媒体 transport
-  已实现并通过本机测试，Catalog、Desired/Actual、呈现证据、carrier 与物理 E2E 尚未完成；
+  单 endpoint、完整帧和异步呈现证据合同；四 route Catalog、Desired/Actual、呈现证据
+  codec、一次 RUNNING 数据门与 DATA route 的有界媒体 transport 已实现并通过纯内存合同
+  测试，carrier、Host/Edge service 接线与物理 E2E 尚未完成；
 - [K230D Linux Edge基线](k230d-linux-edge-development-baseline.md)与
   [target入口](../targets/k230d-linux/README.md)；
 - [Edge local compositor](edge-local-compositor-v0.md)：已验CPU offscreen合成与尚未验物理present的分界。

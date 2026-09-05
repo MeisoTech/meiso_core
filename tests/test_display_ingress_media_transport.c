@@ -184,7 +184,7 @@ static MeisoDisplayIngressMediaTransportConfig transport_config(
     value.binding.runtime.resource.owner = MEISO_OWNER_ROLE_HOST;
     value.binding.runtime.resource.max_payload_size = frame_bytes;
     value.binding.runtime.production_epoch = 23U;
-    value.binding.media_stream_epoch = 29U;
+    value.binding.media_stream_epoch = 23U;
     value.binding.channel_nonce = (MeisoSessionNonce){31U, 37U};
     value.binding.producer = (MeisoOwnerScope){MEISO_OWNER_ROLE_HOST, 41U};
     return value;
@@ -419,6 +419,9 @@ static bool test_memory_init_exact_profile_and_alias_contract(void)
     invalid.binding.media_stream_epoch = 0U;
     CHECK(memory_rejects(&invalid));
     invalid = config;
+    ++invalid.binding.media_stream_epoch;
+    CHECK(memory_rejects(&invalid));
+    invalid = config;
     invalid.binding.channel_nonce = (MeisoSessionNonce){0U, 0U};
     CHECK(memory_rejects(&invalid));
     invalid = config;
@@ -527,7 +530,7 @@ static bool test_golden_packet_idempotence_and_exact_refs(void)
     put_u64(expected + 80U, UINT64_C(0x444953504c41595f));
     put_u64(expected + 88U, UINT64_C(0x444154415f4d4544));
     put_u64(expected + 96U, 23U);
-    put_u64(expected + 104U, 29U);
+    put_u64(expected + 104U, 23U);
     put_u64(expected + 112U, 31U);
     put_u64(expected + 120U, 37U);
     expected[128U] = MEISO_OWNER_ROLE_HOST;
@@ -589,6 +592,7 @@ static bool test_golden_packet_idempotence_and_exact_refs(void)
         MEISO_STREAM_DEADLINE_REQUIRE_COMPARABLE
     );
     ++new_config.binding.runtime.production_epoch;
+    ++new_config.binding.media_stream_epoch;
     CHECK(meiso_display_ingress_media_transport_memory_required(
               &new_config, &new_required, &new_alignment
           ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);

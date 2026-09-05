@@ -1,10 +1,9 @@
 # Display Ingress Profile
 
-> 状态：媒体传输已实现；Linux 显示选择与资源状态逻辑已通过主机测试；Catalog、State、
-> 呈现证据、真实设备接入和物理端到端验收仍待完成。DRM/KMS 指 Linux 内核的显示管理
-> 和模式设置接口。
-> 本页固定 Host 到 Edge 实屏链路的最小产品合同。当前只实现并测试了 DATA route 的
-> Profile-local 媒体对象；完整 Catalog、State codec、呈现证据、carrier 和实机路径尚未完成。
+> 状态：媒体传输已经实现；本切片先冻结并随同实现 Profile Catalog、State 与呈现证据
+> 合同。Linux 显示选择与资源状态逻辑已通过主机测试，但 carrier、Host/Edge service
+> 接线、真实设备和物理端到端路径尚未完成。DRM/KMS 指 Linux 内核的显示管理和模式
+> 设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
 
@@ -42,54 +41,120 @@ DIFR packet layout 也是两个版本轴：前者定义“帧是什么”，后�
 ## 精确 Resource Graph
 
 Profile 只有一个逻辑 endpoint，英文人话名为 **projection display ingress**，稳定
-EndpointId 是 `DISPLAY_/INGR_END`。它有四条 route：
+EndpointId 是 `DISPLAY_/INGR_END`。Catalog 顺序固定为以下一个 endpoint 和四条 route：
 
 | 人话名 | 精确 ResourceId | owner / kind / facet | delivery | SchemaRef | 含义 |
 |---|---|---|---|---|---|
-| 输入配置 Desired | `DISPLAY_/DES_STAT` | Host / State / DESIRED | inline Runtime | 下一切片冻结 | 开关、输入宽高和目标最大帧率 |
-| 输入状态 Actual | `DISPLAY_/ACT_STAT` | Edge / State / ACTUAL | inline Runtime | 下一切片冻结 | 是否可用、是否已应用、有效配置和媒体代际 |
+| 输入配置 Desired | `DISPLAY_/DES_STAT` | Host / State / DESIRED | inline Runtime | `DISP_SCH/DESIRED_:v1` | 开关、输入宽高和目标最大帧率 |
+| 输入状态 Actual | `DISPLAY_/ACT_STAT` | Edge / State / ACTUAL | inline Runtime | `DISP_SCH/ACTUAL__:v1` | 是否可用、是否已应用、有效配置和媒体绑定 nonce |
 | 完整画面 MediaStream | `DISPLAY_/DATA_MED` | Host / Stream / DATA | external media | `DISP_SCH/FRAME___:v1` | Host 到 Edge 的完整 RGBA8888 画面 |
-| 呈现证据 Stream | `DISPLAY_/PRES_EVT` | Edge / Stream / DATA | inline Runtime | 下一切片冻结 | 已发生的真实或模拟呈现事实；不作为下一帧门槛 |
+| 呈现证据 Stream | `DISPLAY_/PRES_EVT` | Edge / Stream / DATA | inline Runtime | `DISP_SCH/PRES_EVT:v1` | 已发生的真实或模拟呈现事实；不作为下一帧门槛 |
 
-四个 ResourceId、owner、kind、facet 和 delivery 已选择；本提交只冻结并实现 DATA route 的
-`DISP_SCH/FRAME___:v1`。其 `max_payload_size` 必须非零且不小于已应用的
-`input_width * input_height * 4`。Desired、Actual、evidence 的精确 schema 和完整 Catalog
-builder 仍待下一切片，因此现在不能声称四条 route 的 Catalog 已可构造或已通过 conformance。
-未来 builder 必须把一个 endpoint、四条 route 作为完整原子快照；任何缺项、多项、schema、
-delivery class 或 endpoint incarnation 不匹配都拒绝整个 catalog，不暴露子集。
+四个 ResourceId、owner、kind、facet 和 delivery 构成不可拆分的一个 endpoint、四 route
+Catalog。媒体 route 的 `max_payload_size` 精确等于 capability 的 `max_frame_bytes`，并且不得
+小于已应用的 `input_width * input_height * 4`。任何缺项、多项、顺序、schema、delivery
+class 或 endpoint incarnation 不匹配都拒绝整个 catalog，不暴露子集。
+
+Capability payload 是 32 bytes，完整 MRT0 Catalog 是 428 bytes。Session 限额不能只按
+Catalog 大小设置：当前 MRT0 v4 仍继承 4096-byte Blob chunk carriage 的 wire 下限，因此
+`max_runtime_payload_bytes=4180`、`max_frame_bytes=4224`、`max_registry_entries=5`。本 Profile
+没有 Blob route；初始化 MRT0 v4 时使用最小非零 `max_blob_transfer_bytes=1` 只为满足当前
+Runtime v4 compatibility layout，这些值不表示新增 Blob 产品能力。Runtime 其余容量固定为
+1 endpoint、2 条 endpoint identity history、4 routes、32 capability bytes、每 endpoint
+12 Desired suffix bytes和 32 Actual suffix bytes。
 
 ## 配置与一次性数据门
 
-Capability 声明 Edge 当前能接收的最大输入宽高、最大帧率、最大完整帧字节数和最大
-fragment 字节数。Profile 第一版只接受 packed `RGBA8888` 和 `RAW`：每个像素依次是
+Capability 是 `DISP_SCH/CAPABIL_:v1` 的 32-byte canonical big-endian payload：
+
+```text
+0..3    max_input_width                 u32，1..4096
+4..7    max_input_height                u32，1..4096
+8..11   max_frame_rate_millihz          u32，1..240000（0.001 Hz）
+12..15  max_frame_bytes                 u32，4..67108864
+16..19  max_fragment_payload_bytes      u32，1..max_frame_bytes
+20..23  evidence_class_mask             u32
+24      deadline_policy                 u8
+25..31  reserved                        必须全零
+```
+
+`max_frame_bytes` 至少能容纳一个 1×1 RGBA8888 像素。`evidence_class_mask` 只允许 bit 0
+`SIMULATED` 和 bit 1 `DRM_KMS_PAGE_FLIP`，且至少一位非零。
+`deadline_policy` 只允许 Core 已定义的 1 `UNSUPPORTED` 或 2 `REQUIRE_COMPARABLE`。Profile
+第一版只接受 packed `RGBA8888` 和 `RAW`：每个像素依次是
 R、G、B、A 四个 8-bit byte，A 必须是 255；没有压缩、delta、
 色彩协商、镜片校正或物理 connector 选择。
 
-Desired 是该原子子域的完整值：
+Desired suffix 是 `DISP_SCH/DESIRED_:v1` 的 12-byte canonical big-endian payload，也是该
+媒体输入 envelope 原子子域的完整值：
 
-- Runtime prefix 中的 `enabled`；
-- `input_width` 与 `input_height`；
-- `maximum_frame_rate_millihz`。
+```text
+Runtime 公共 prefix 中的 enabled
+0..3    input_width                     u32，1..4096
+4..7    input_height                    u32，1..4096
+8..11   maximum_frame_rate_millihz      u32，1..240000（0.001 Hz）
+```
+
+因此 Desired Resource 的最大 payload 是 Runtime 8-byte prefix 加 12-byte suffix，共 20 bytes；
+Actual Resource 是 56-byte prefix 加 32-byte suffix，共 88 bytes。Evidence payload 固定 64
+bytes。disabled Desired 仍携带完整有效 envelope，方便 fresh Session 重发当前配置。
+
+宽、高和帧率共同决定帧校验、buffer budget 与生产代际，不能拆成三个会产生不完整中间
+组合的 State。亮度、光学、布局和其他普通显示调节不属于这个 State；未来应使用独立窄
+State，因此它们不能无故关闭媒体门。
 
 Actual 使用 Runtime 公共 prefix 报告 observed/applied Desired、apply result、availability、
-effective enabled、production status、reason 和 production epoch。Profile suffix 只补充：
+effective enabled、production status、reason 和 production epoch。Display Ingress v1 只把
+RUNNING 作为 active 状态；其 Profile suffix 是 `DISP_SCH/ACTUAL__:v1` 的 32-byte canonical
+big-endian payload，只补充：
 
 - 实际接受的输入宽高与最大帧率；
-- 非零 `media_stream_epoch`；
-- 当前媒体通道的随机 nonce；
-- 接收侧完整帧丢弃累计值。
+- 当前媒体通道的随机 nonce。
 
-每个 fresh Session、production epoch 或 media epoch 只支付一次
-`Desired -> Actual RUNNING -> Host accepts Actual` 数据门。门打开后，普通的后续完整帧
-不再等待 Actual。改变宽高或其他会改变帧 envelope 的配置必须建立新的 production/media
-epoch；未来独立的显示调节 State 不应无故重开媒体门。
+```text
+0..3    effective_input_width            u32
+4..7    effective_input_height           u32
+8..11   effective_max_frame_rate_millihz u32
+12..15  reserved                         必须全零
+16..23  channel_nonce.high               u64，nonce 整体非零
+24..31  channel_nonce.low                u64
+```
+
+第一版明确令媒体帧 header 中的 `media_stream_epoch` 等于 Runtime `production_epoch`；它是
+同一生产代际在外部媒体 packet 中的重复 scope 校验，不是新的独立代际。Actual suffix
+不重复携带 epoch，也不携带会在同一 epoch 内变化的丢帧计数。后者只属于本地媒体对象
+snapshot 和 E2E receipt；若将来需要远端持续观测，应使用独立 telemetry Stream。
+
+STOPPED、FAILED 和 STARTING Actual 的 Profile suffix 必须为空；虽然通用 Runtime 还能表达
+DEGRADED/STOPPING，本窄 Profile 第一版拒绝这两个状态。新 Desired 正在处理、被
+拒绝或处理失败，但旧 production 仍在运行时，Actual 可以报告 `observed=new / applied=old`，
+并继续携带旧 production 对应 byte-exact 不变的 32-byte suffix；这不会关门或改变 epoch。
+RUNNING 必须引用一个 `enabled=true` 的完整已应用 Runtime Desired State，不能只拿 12-byte
+envelope 猜测开关状态。因而新观察到的 disabled Desired 不会关闭仍引用旧 enabled Desired
+的 production；但 disabled Desired 一旦成为 `applied`，伪造的 RUNNING Actual 必须被拒绝。
+
+Edge 作为 Actual owner，必须在 `meiso_runtime_send_state_offer()` 前解码 Runtime prefix，再用
+本 Profile 校验 suffix、capability 和已应用 Desired。Host 收到 Actual 后也必须先做同一
+Profile 校验，成功才可调用 StateReplica，并把 `RECEIVE_NEW` 交给
+`meiso_runtime_commit_state_receive()`；校验失败时不得调用 StateReplica，应以
+`MEISO_STATE_RECEIVE_INVALID` 调用 Runtime commit 清理该次 pending，绝不能作为
+`RECEIVE_NEW` 提交。Runtime 本身把 suffix 当 opaque bytes，不能替代这一步。
+
+每个 fresh Session 或 production epoch 只支付一次
+`Desired -> Actual RUNNING -> Host 本地提交该 Actual` 数据门。Host 收到 Actual 后必须依次
+完成 Profile 校验、StateReplica `RECEIVE_NEW`，再让
+`meiso_runtime_commit_state_receive(..., MEISO_STATE_RECEIVE_NEW)` 成功；三步全部完成后即可
+发送媒体，不等待 Actual 的 State ACCEPT 再回到 Edge。门打开后，普通的后续完整帧不再
+等待 Actual。新 Desired 在 admission 期间不撤销旧 RUNNING；只有新 envelope 真正应用时
+才建立更高 production epoch 和新 nonce。未来独立的显示调节 State 不应无故重开媒体门。
 
 媒体对象的 Runtime binding 必须直接来自当前 handle 的
 `meiso_runtime_v4_external_media_binding()` 成功结果；该查询本身只会返回当前已激活的
 external-media production。媒体对象初始化还会硬校验 exact endpoint
 `DISPLAY_/INGR_END`、ResourceId `DISPLAY_/DATA_MED`、SchemaRef
 `DISP_SCH/FRAME___:v1`、Stream/DATA、Host owner，以及非零 endpoint、production/media
-epoch、nonce 和 Host producer incarnation。它不接受一个仅仅“也是 Host-owned”的任意 route。
+epoch、nonce 和 Host producer incarnation，并要求 media epoch 与 Runtime production epoch
+相等。它不接受一个仅仅“也是 Host-owned”的任意 route。
 
 ## 完整帧与 packet
 
@@ -199,16 +264,32 @@ uncertainty 可接受，才允许比较；证明不足明确返回 `DEADLINE_UNC
 未过期。只有 mapped `local_now > local_deadline` 才返回 `DROPPED_EXPIRED`；两者相等时仍然
 可接收。这与 Core Stream 的 admission 边界完全一致，不引入本 Profile 自己的第二套规则。
 
-呈现证据是小型、单向、无需业务 ACK 的 Stream sample。payload 至少包含：
+呈现证据是小型、单向、无需业务 ACK 的 Stream sample。`DISP_SCH/PRES_EVT:v1` payload
+固定为 64-byte canonical big-endian：
 
-- 被显示帧的 media epoch、sequence，以及需要验收时由 Edge 对完整输入计算的 SHA-256；
-- Edge 本地 page-flip 时间；
-- 实际输出宽高与 connector 类型；
-- evidence class：真实 DRM/KMS page-flip 或明确的 simulated。
+```text
+0       evidence_class                   u8
+1       connector_kind                   u8
+2..3    reserved                         必须全零
+4..7    output_width                     u32，1..4096
+8..11   output_height                    u32，1..4096
+12..15  reserved                         必须全零
+16..23  media_stream_epoch               u64，等于对应 production epoch
+24..31  displayed_frame_sequence         u64，非零
+32..63  完整 Host 输入 RGBA 的 SHA-256    32 bytes
+```
 
-只有真实 page-flip class 可被上层解释为物理呈现。simulated 只用于测试，不得关闭
-Looking Glass 的 PRESENTED 历史。证据丢失不阻塞后续帧；最终 E2E 只要求至少一条证据
-与 Host 输入的 sequence 精确相符；验收构建还要比较双方对该完整输入计算的 SHA-256。
+`evidence_class` 只允许 1 `SIMULATED` 或 2 `DRM_KMS_PAGE_FLIP`。`connector_kind` 只允许
+0 `UNSPECIFIED`、1 `HDMI` 或 2 `DSI`；simulated 必须使用 `UNSPECIFIED`，真实 page-flip
+必须使用 HDMI 或 DSI。Core `MeisoStreamSample.source_time` 就是 Edge 本地 page-flip 时间，
+不在 payload 重复；该 evidence Stream 自己的 Edge producer epoch/sequence 也不能代替
+payload 引用的 Host media epoch/frame sequence。
+
+`DRM_KMS_PAGE_FLIP` 只证明本地 KMS latch 事件与输入身份匹配，不单独证明人眼可见像素、
+面板、光学或最终 layer policy。只有上层验收合同明确接受该 evidence class 时，才可关闭
+对应的 KMS 呈现里程碑；`SIMULATED` 永远不得关闭 Looking Glass 的 PRESENTED 历史。证据
+丢失不阻塞后续帧。最终可见屏 E2E 还需要独立物理观察，并要求至少一条证据与 Host 输入
+sequence 和双方对完整输入计算的 SHA-256 精确相符。
 
 ## 失败矩阵
 
@@ -301,7 +382,8 @@ native translation、runner、cross/link 和 board page-flip 都明确为 `PENDI
 ## 实现和验收顺序
 
 1. **已完成：** DATA route 的 Profile-local `DIFR` codec、两槽媒体状态机和故障矩阵；
-2. 冻结其余三个 schema，实现完整 Catalog、Desired/Actual 和 evidence codec；
+2. **本切片实现：** 冻结其余三个 schema，实现完整 Catalog、Desired/Actual、evidence
+   codec 和只证明协议状态机的双 Runtime fixture；
 3. **部分完成：** K230D 本机 probe 的 portable policy/state machine 与 fake failure matrix
    已在 Host 验证；native libdrm translation、runner、cross/link 和 exact board page-flip
    仍待独立切片；

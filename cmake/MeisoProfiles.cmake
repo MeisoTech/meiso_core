@@ -118,6 +118,23 @@ add_library(
 )
 
 add_library(
+    meiso_display_ingress_profile
+    profiles/display_ingress/display_ingress_profile.c
+    profiles/display_ingress/display_ingress_profile_codec.c
+)
+meiso_configure_public_target(
+    meiso_display_ingress_profile
+    DisplayIngressProfile
+)
+target_link_libraries(meiso_display_ingress_profile PUBLIC meiso_runtime)
+meiso_enable_warnings(meiso_display_ingress_profile)
+meiso_set_target_folder(meiso_display_ingress_profile "Meiso/Profiles")
+add_library(
+    Meiso::DisplayIngressProfile
+    ALIAS meiso_display_ingress_profile
+)
+
+add_library(
     meiso_display_ingress_media_transport
     profiles/display_ingress/display_ingress_media_transport.c
     profiles/display_ingress/display_ingress_media_transport_codec.c
@@ -131,7 +148,7 @@ meiso_configure_public_target(
 )
 target_link_libraries(
     meiso_display_ingress_media_transport
-    PUBLIC meiso_runtime
+    PUBLIC meiso_display_ingress_profile
 )
 meiso_enable_warnings(meiso_display_ingress_media_transport)
 meiso_set_target_folder(

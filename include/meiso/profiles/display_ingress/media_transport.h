@@ -1,7 +1,7 @@
 #ifndef MEISO_PROFILES_DISPLAY_INGRESS_MEDIA_TRANSPORT_H
 #define MEISO_PROFILES_DISPLAY_INGRESS_MEDIA_TRANSPORT_H
 
-#include <meiso/runtime/runtime.h>
+#include <meiso/profiles/display_ingress/profile.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -78,14 +78,6 @@ enum {
     MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_PRODUCTION_CHANGED = 6,
     MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_PROTOCOL_BINDING = 7
 };
-
-/* Runtime supplies runtime; the accepted Profile Actual supplies the rest. */
-typedef struct {
-    MeisoRuntimeV4ExternalMediaBinding runtime;
-    uint64_t media_stream_epoch;
-    MeisoSessionNonce channel_nonce;
-    MeisoOwnerScope producer;
-} MeisoDisplayIngressMediaBinding;
 
 typedef struct {
     MeisoSessionRole local_role;
@@ -165,9 +157,9 @@ typedef struct {
 
 /*
  * Config must name exact DISPLAY_/INGR_END + DISPLAY_/DATA_MED,
- * Stream/DATA, Host owner, a nonzero production/media epoch, nonce and Host
- * producer incarnation. The frame envelope is exactly width*height*4 and may
- * not exceed the Runtime Resource maximum unit size.
+ * Stream/DATA, Host owner, equal nonzero production/media epochs, a nonzero
+ * nonce and Host producer incarnation. The frame envelope is exactly
+ * width*height*4 and may not exceed the Runtime Resource maximum unit size.
  *
  * For an aligned arena, the exact requirement is:
  *   2048 + 2 * frame_bytes + 224 + max_fragment_payload_bytes.

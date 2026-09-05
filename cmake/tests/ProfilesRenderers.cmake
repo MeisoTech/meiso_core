@@ -13,6 +13,12 @@ meiso_add_c_test(
     meiso_four_kind_lab_protocol
 )
 meiso_add_c_test(
+    meiso_display_ingress_profile_test
+    tests/test_display_ingress_profile.c
+    profile
+    meiso_display_ingress_profile
+)
+meiso_add_c_test(
     meiso_composition_scene_test
     tests/test_composition_scene.c
     profile
