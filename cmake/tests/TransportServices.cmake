@@ -45,6 +45,30 @@ if(UNIX)
     meiso_register_target_test(
         meiso_composition_media_posix_tcp_test "adapter"
     )
+
+    add_executable(
+        meiso_display_ingress_media_posix_udp_test
+        tests/test_display_ingress_media_posix_udp.c
+        adapters/posix/display_ingress_media_posix_udp.c
+    )
+    target_compile_definitions(
+        meiso_display_ingress_media_posix_udp_test
+        PRIVATE
+            send=meiso_test_send
+            recvmsg=meiso_test_recvmsg
+    )
+    target_link_libraries(
+        meiso_display_ingress_media_posix_udp_test
+        PRIVATE meiso_display_ingress_media_transport
+    )
+    meiso_enable_warnings(meiso_display_ingress_media_posix_udp_test)
+    meiso_set_target_folder(
+        meiso_display_ingress_media_posix_udp_test
+        "Meiso/Tests/adapter"
+    )
+    meiso_register_target_test(
+        meiso_display_ingress_media_posix_udp_test "adapter"
+    )
 endif()
 
 if(TARGET meiso_posix_tcp_adapter)

@@ -32,6 +32,28 @@ if(UNIX)
     )
 
     add_library(
+        meiso_display_ingress_media_posix_udp_adapter
+        adapters/posix/display_ingress_media_posix_udp.c
+    )
+    meiso_configure_public_target(
+        meiso_display_ingress_media_posix_udp_adapter
+        DisplayIngressMediaPosixUdpAdapter
+    )
+    target_link_libraries(
+        meiso_display_ingress_media_posix_udp_adapter
+        PUBLIC meiso_display_ingress_media_transport
+    )
+    meiso_enable_warnings(meiso_display_ingress_media_posix_udp_adapter)
+    meiso_set_target_folder(
+        meiso_display_ingress_media_posix_udp_adapter
+        "Meiso/Adapters"
+    )
+    add_library(
+        Meiso::DisplayIngressMediaPosixUdpAdapter
+        ALIAS meiso_display_ingress_media_posix_udp_adapter
+    )
+
+    add_library(
         meiso_wifi_linux_adapter
         targets/k230d-linux/adapters/wifi_linux_adapter.c
     )

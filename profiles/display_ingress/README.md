@@ -1,9 +1,9 @@
 # Display Ingress Profile
 
-> 状态：媒体传输已经实现；本切片先冻结并随同实现 Profile Catalog、State 与呈现证据
-> 合同。Linux 显示选择与资源状态逻辑已通过主机测试，但 carrier、Host/Edge service
-> 接线、真实设备和物理端到端路径尚未完成。DRM/KMS 指 Linux 内核的显示管理和模式
-> 设置接口。
+> 状态：Profile Catalog、State、呈现证据合同和媒体传输已经实现；本切片增加受控的、
+> 未认证且未加密的 UDP 搬运适配器。Linux 显示选择与资源状态逻辑已通过主机测试，但
+> 最终带身份认证、机密性与完整性保护的网络承载、Host/Edge service 接线、真实设备和
+> 物理端到端路径尚未完成。DRM/KMS 指 Linux 内核的显示管理和模式设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
 
@@ -220,6 +220,32 @@ OPEN/BIND 往返。Resource descriptor 本身不进入 DIFR；`catalog generatio
 字节；最终 carrier 必须满足 Link 规定的完整性和认证要求。当前切片尚未实现或证明该 carrier，
 不能把 E2E 中比较的 SHA-256 当成 wire 安全机制；那个 SHA-256 只用于验收时对齐两端输入。
 
+### 受控普通 UDP 行为路径
+
+这里的普通 UDP 指未加认证或加密的 UDP。本切片的 UDP 搬运适配器使用调用方已经创建、
+连接并设为非阻塞（暂时无数据时立即返回）的 IPv4/IPv6 UDP socket。
+一个完整 `DIFR` packet 精确对应一个 UDP datagram；不增加 OPEN/BIND、业务 ACK、重传、排序
+或第二个 Core Session。Host 媒体侧只发送，Edge 媒体侧只接收。一次成功的 `send` 只表示
+本机内核接受了整个 datagram，不表示 Edge 接收、frame 发布或实屏呈现。
+
+本受控路径把 UDP payload 硬限制为 1200 bytes，因此 `DIFR` 的 fragment 最多为
+`1200 - 224 = 976` bytes。超限 datagram 必须用 `MSG_TRUNC`（内核返回的“收到的
+datagram 大于接收缓冲”标志）检出并整包丢弃，不能把截断 prefix 送给媒体 receiver。
+丢失、重复和乱序只影响当前 partial frame；后续完整帧从新的 `RECOVERY|BEGIN` 恢复，
+不等待旧帧补传。
+
+当前自动测试只在同一进程内通过 IPv4/IPv6 本机回环地址搬运，尚未证明跨进程或真实网络。
+这个 UDP 适配器只用于受控行为验证和端到端初次打通。socket 固定对端地址不等于验证
+发送者身份；它不提供 Link 要求的身份认证、机密性、完整性或防重放，也不提供拥塞控制、
+自动存活检测、网络路径迁移或弱网性能保证。
+因此它不是最终产品 carrier，不能据此声称 Link 安全或完整 E2E 已关闭。
+
+每个 fresh Session 和媒体对象必须使用 fresh connected UDP 4-tuple（本地 IP/端口 +
+对端 IP/端口），并创建新的媒体 transport/adapter arena；不支持旧 4-tuple 复用、resume
+或跨 Session 残留队列继承。按本 Profile 已冻结的 fail-closed 规则，若旧 scope datagram
+仍到达新对象，Session/catalog/endpoint/epoch/nonce 任一不匹配都会终止该媒体对象；
+适配器不得把它静默降级成普通丢包。
+
 ## 固定内存与 latest 规则
 
 Host 发送侧固定拥有：
@@ -301,6 +327,8 @@ sequence 和双方对完整输入计算的 SHA-256 精确相符。
 | Host 提交 A 不是 255、重复或倒退 sequence | 同步拒绝且发送槽不变 | 保持 |
 | in-flight 存在又来新帧 | 写入或整体替换 latest；当前 packet 完成后抢占旧帧余下部分 | 保持到新帧完整 |
 | fragment 丢失、重复、重叠或乱序 | 丢弃当前 partial，记录 discontinuity | 保持 |
+| UDP 暂时不可读/写或系统调用被信号打断 | 不推进 packet、frame 或计数；交回事件循环稍后重试 | 保持 |
+| UDP 短发送或其他读写错误 | 媒体对象进入粘滞终态；socket 仍由调用方持有 | 按上层断线策略处理 |
 | 新完整帧到达而旧 latest 未消费 | 原子替换旧 latest并记 drop | 直到消费新 latest 前保持 |
 | packet binding 不属于当前对象 | fail closed；旧对象终止，caller 关闭该 carrier | 保持或按上层断线策略处理 |
 | control Session、catalog、endpoint 或 epoch 变化 | 旧媒体对象终止；新 scope 用新 arena 重建 | 本 Profile 不替产品选择 hold/fallback |
@@ -382,14 +410,16 @@ native translation、runner、cross/link 和 board page-flip 都明确为 `PENDI
 ## 实现和验收顺序
 
 1. **已完成：** DATA route 的 Profile-local `DIFR` codec、两槽媒体状态机和故障矩阵；
-2. **本切片实现：** 冻结其余三个 schema，实现完整 Catalog、Desired/Actual、evidence
+2. **已完成：** 冻结其余三个 schema，实现完整 Catalog、Desired/Actual、evidence
    codec 和只证明协议状态机的双 Runtime fixture；
 3. **部分完成：** K230D 本机 probe 的 portable policy/state machine 与 fake failure matrix
    已在 Host 验证；native libdrm translation、runner、cross/link 和 exact board page-flip
    仍待独立切片；
-4. integrity-protecting carrier adapter 与 Edge receiver；
-5. LG Host latest slot 到 Profile sender 的映射；
-6. 真实 Host 输入 SHA-256 与 KMS page-flip evidence 对齐；
-7. 可选左右眼 atlas。
+4. **本切片：** connected UDP 行为适配器；它只关闭有界 connected-datagram 搬运与
+   丢包恢复行为，并为后续跨进程/网络 bring-up 提供适配器，不关闭安全 carrier；
+5. integrity-protecting carrier 与 Edge receiver；
+6. LG Host latest slot 到 Profile sender 的映射；
+7. 真实 Host 输入 SHA-256 与 KMS page-flip evidence 对齐；
+8. 可选左右眼 atlas。
 
-第 6 步以前不得声称“Host 应用已经显示到 Edge 实屏”。
+第 7 步以前不得声称“Host 应用已经显示到 Edge 实屏”。

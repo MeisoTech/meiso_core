@@ -231,6 +231,7 @@ if(TARGET meiso_posix_tcp_adapter)
         TARGETS
             meiso_posix_tcp_adapter
             meiso_composition_media_posix_tcp_adapter
+            meiso_display_ingress_media_posix_udp_adapter
         EXPORT MeisoPosixTargets
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Posix
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Posix
@@ -248,6 +249,7 @@ if(TARGET meiso_posix_tcp_adapter)
         FILES
             "${PROJECT_SOURCE_DIR}/include/meiso/adapters/posix/tcp.h"
             "${PROJECT_SOURCE_DIR}/include/meiso/adapters/posix/composition_media_tcp.h"
+            "${PROJECT_SOURCE_DIR}/include/meiso/adapters/posix/display_ingress_media_udp.h"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/adapters/posix"
         COMPONENT Posix
     )
