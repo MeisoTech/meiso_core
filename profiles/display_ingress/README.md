@@ -418,7 +418,24 @@ RUNNING 或本 Profile 的 `DRM_KMS_PAGE_FLIP` 呈现证据。精确 CLI、收�
 默认关闭的 CMake locator 和禁止调用清单由
 [K230D target入口](../../targets/k230d-linux/README.md#drm-scanout-policy-core)拥有。
 
-该策略内核固定以下安全选择，未来 native translation 只能如实提供事实，不能放宽：
+仓内还新增了一份独立、无系统调用的 `single_plane_test_candidate` 判定器。它不改变上述
+拓扑探针或现有 scanout `begin()`：调用方必须给出期望 topology SHA-256 和精确的
+connector/CRTC/plane ID；snapshot 必须只有一条 active route、只有一个 active CRTC，
+其 legacy framebuffer 为零，并且完整枚举中的每个 plane 都处于
+`FB_ID=0 && CRTC_ID=0`。符合 immutable `OVERLAY`、RGB565 和 CRTC compatibility 的
+候选必须恰好一个，plane ID 只用于核对该唯一候选，不能用于二选一。zpos 不参与这个
+诊断候选判断，因为结果不声称画面叠放关系或可见性。
+
+`CANDIDATE_IDENTIFIED` 只表示未来 TEST_ONLY 的候选身份闭合；函数没有构造原子请求、尝试
+TEST_ONLY，也没有取得 master、创建 framebuffer 或改变显示状态。未来调用方仍须在同一个
+master fd 上重新枚举并重新判定，再构造请求并尝试 TEST_ONLY。结果不能授权 real commit、Display Actual
+RUNNING、呈现证据或物理输出，也不能证明未枚举硬件层上的独占。现有 real-commit 路径的
+immutable-zpos 门不因此放宽。既有板端观察记录了两个未使用且兼容 RGB565 的 overlay，
+所以目前没有证明唯一候选；具体的新判定原因尚未由未来同一 master fd 上的新鲜枚举与
+判定证据封印，不能提前写成某个精确结果，更不能按请求 ID 猜选其中之一。
+
+现有供 scanout `begin()` 和拓扑探针使用的 real-commit eligibility 判定器固定以下安全
+选择；未来 native translation 只能如实提供事实，不能放宽：
 
 - 在最多 8 个 connector、8 个 CRTC、16 个 plane 的完整规范化 observation 中，只接受唯一一条有效
   显示路径：connector 已连接、已有 encoder/CRTC 绑定，并且该 CRTC 明确处于 `ACTIVE`

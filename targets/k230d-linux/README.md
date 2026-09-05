@@ -50,11 +50,38 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
 page-flip 事件身份和恢复/释放账本。所有收据固定为
 `INJECTED_OPS_UNVERIFIED / physical_evidence=false`，明确不能作为实机证据。
 
-拓扑选择现在只有一份纯判定器：现有 scanout `begin()` 和板端拓扑探针都调用它。判定
+现有 scanout `begin()` 和板端拓扑探针共用一份纯判定器。判定
 顺序固定为 topology 容量、canonical 形式、page-flip 单调时钟、唯一 active route、
 可用 RGB565 overlay 与 immutable zpos、current mode 尺寸、最小 RGB565 buffer 大小。
 探针不调用 `begin()`，所以不会走后面的 master、dumb buffer、framebuffer、TEST_ONLY 或
 真实提交路径。
+
+另有一份彼此独立的 `single_plane_test_candidate` 纯判定器，专门回答一个更窄的问题：
+给定调用方钉住的 topology SHA-256、connector/CRTC/plane ID，这份同一 DRM fd 上得到的
+完整枚举结果，是否足以构造**未来一次诊断性 TEST_ONLY 的候选请求**。它先要求唯一 active
+route 与请求 ID 精确一致、全 topology 恰有一个 active CRTC 且该 CRTC 的 legacy
+`framebuffer_id=0`，再要求每个枚举 plane 的 `FB_ID=0 && CRTC_ID=0`。兼容该 CRTC、支持
+RGB565 且 type 为 immutable `OVERLAY` 的候选必须恰好一个；请求中的 plane ID 只能核对
+这个唯一候选，不能在多个候选里挑一个。最后才检查 current mode envelope，并计算最小
+RGB565 buffer byte 数。这个判定器不使用 zpos，因为它不判断叠放关系，也不授权真实提交。
+
+返回 `CANDIDATE_IDENTIFIED` 只表示候选身份闭合，可供未来调用方在持有同一 DRM master fd
+时重新枚举、重新判定并构造一次 TEST_ONLY 请求；当前函数本身不构造原子请求、不打开设备、
+不调用系统接口，也没有执行 TEST_ONLY。它不证明物理硬件层独占、画面可见、真实 commit、
+Display Actual RUNNING 或任何物理证据。完整枚举以外的内部硬件层仍不可见，所以即使所有枚举 plane 都未使用，
+`visibility/exclusivity` 仍是 unproven。现有 `begin()` 的 immutable-zpos 门完全不变，也
+不得消费这份结果来绕过 real-commit policy。既有受控板端观察记录了两个未使用且兼容
+RGB565 的 overlay，因此尚未证明“候选恰好一个”；具体的新判定原因还没有由未来同一
+master fd 上的新鲜枚举与判定证据封印，在那以前不得尝试 TEST_ONLY。
+
+这个私有 API 的结果状态只有 `CANDIDATE_IDENTIFIED`、`BLOCKED` 和
+`INVALID_ARGUMENT`。空指针、零 object ID 或输入/输出内存范围重叠属于参数错误，并保持
+输出逐字节不变。其余完整输入按以下顺序只报告第一个阻断原因：容量、canonical 形式、
+期望 topology hash、唯一 active route、route ID、active CRTC 数量、legacy framebuffer、
+任一枚举 plane 仍 active、零个或多个兼容候选、唯一候选 ID、mode envelope。
+`BLOCKED` 会返回已经完成的纯判断字段；这些字段不是 TEST_ONLY 状态或呈现收据。由于
+mode 每边先限制为 4096，计算出的 RGB565 最小 byte 数最大为 32 MiB，不另造一个当前
+不可到达的 buffer failure reason。
 
 原生 target 由 `MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER=ON` 单独开启；默认构建
 为 OFF。调用方必须同时给出绝对的 `MEISO_K230D_LIBDRM_INCLUDE_DIR` 和
@@ -102,8 +129,9 @@ open/enumeration/translation/master observation/close/receipt 失败退出 1；�
 写 `E_ARGUMENT` 并退出 2。即使 topology eligible，也只表示可以进入未来 TEST_ONLY，
 不表示 admitted、KMS latched、HDMI、屏幕像素或 Display Actual RUNNING。
 
-策略只接受运行时枚举出的唯一有效 active 显示路径，以及 unused、RGB565、immutable
-OVERLAY plane。这里“有效路径”指 connector 已连接、已有 encoder/CRTC 绑定，并且该
+现有供 scanout `begin()` 与拓扑探针使用的 real-commit eligibility 判定器只接受运行时
+枚举出的唯一有效 active 显示路径，以及 unused、RGB565、immutable OVERLAY plane。这里
+“有效路径”指 connector 已连接、已有 encoder/CRTC 绑定，并且该
 CRTC 明确 ACTIVE 且带 current mode；已连接但没有 active CRTC 的 connector 会被忽略。
 规范化 topology 按 object ID 排序；
 `possible_crtcs` 必须由原生 translation 从 libdrm resource 顺序重映射到 canonical

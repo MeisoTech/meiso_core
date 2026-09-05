@@ -44,6 +44,61 @@ typedef struct {
     uint64_t minimum_output_bytes;
 } MeisoK230dDrmTopologyAdmission;
 
+typedef uint8_t MeisoK230dDrmSinglePlaneTestCandidateStatus;
+enum {
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_IDENTIFIED = 0,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_BLOCKED = 1,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT = 2
+};
+
+typedef uint8_t MeisoK230dDrmSinglePlaneTestCandidateReason;
+enum {
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NONE = 0,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_CAPACITY = 1,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_NONCANONICAL = 2,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_IDENTITY_MISMATCH = 3,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NO_ACTIVE_ROUTE = 4,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_ACTIVE_ROUTES = 5,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ROUTE_IDENTITY_MISMATCH = 6,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ACTIVE_CRTC_COUNT = 7,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_LEGACY_FRAMEBUFFER_ACTIVE = 8,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ENUMERATED_PLANE_ACTIVE = 9,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NO_TEST_TARGET = 10,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_TEST_TARGETS = 11,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TEST_TARGET_IDENTITY_MISMATCH = 12,
+    MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MODE_ENVELOPE = 13
+};
+
+typedef struct {
+    uint8_t expected_topology_sha256[MEISO_K230D_DRM_SHA256_SIZE];
+    uint32_t connector_id;
+    uint32_t crtc_id;
+    uint32_t plane_id;
+} MeisoK230dDrmSinglePlaneTestCandidateRequest;
+
+/*
+ * Pure selector result for a future diagnostic TEST_ONLY call.
+ * IDENTIFIED means only that this exact snapshot and selector identify one
+ * compatible, currently inactive enumerated DRM plane. It does not construct
+ * an atomic request. No TEST_ONLY or real commit was attempted, and
+ * visibility, exclusivity beyond enumerated DRM planes, Display Actual
+ * RUNNING and physical evidence remain unproven.
+ */
+typedef struct {
+    bool topology_hash_valid;
+    bool topology_identity_matched;
+    bool route_selected;
+    bool enumerated_planes_inactive;
+    bool test_target_selected;
+    MeisoK230dDrmSinglePlaneTestCandidateReason reason;
+    uint8_t topology_sha256[MEISO_K230D_DRM_SHA256_SIZE];
+    uint32_t connector_index;
+    uint32_t crtc_index;
+    uint32_t plane_index;
+    uint32_t test_target_count;
+    uint64_t minimum_output_bytes;
+} MeisoK230dDrmSinglePlaneTestCandidate;
+
 struct MeisoK230dDrmScanout {
     size_t arena_size;
     MeisoK230dDrmOps ops;
@@ -123,6 +178,27 @@ MeisoK230dDrmTopologyAdmissionStatus
 meiso_k230d_drm_private_evaluate_topology(
     const MeisoK230dDrmTopology *topology,
     MeisoK230dDrmTopologyAdmission *out_admission
+);
+
+/*
+ * Evaluates only the supplied bytes. The three object ranges must be pairwise
+ * disjoint, request object ids must be nonzero, and INVALID_ARGUMENT leaves
+ * out_candidate byte-exact unchanged. BLOCKED writes the first reason in this
+ * order: capacity, canonical form, expected hash, unique active route, route
+ * ids, active-CRTC count, legacy framebuffer, enumerated plane activity,
+ * unique compatible target, target id, then mode envelope.
+ *
+ * A future consumer must fresh-read and re-evaluate on the same master-held fd
+ * immediately before its TEST_ONLY call. This function neither authorizes nor
+ * provides an API for a real commit. zpos is deliberately not a candidate
+ * gate here; the existing begin()/real-commit policy remains unchanged.
+ */
+MEISO_K230D_DRM_PRIVATE_API
+MeisoK230dDrmSinglePlaneTestCandidateStatus
+meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
+    const MeisoK230dDrmTopology *topology,
+    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
 );
 
 /*
