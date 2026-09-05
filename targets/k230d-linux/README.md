@@ -26,6 +26,7 @@ CMake 是 K230D Linux source/link graph 的唯一权威。各个 `build_*.sh` �
 | `build_wifi_runtime_edge.sh` | `meiso_k230d_wifi_runtime_edge` | 独立 Wi-Fi telemetry Runtime Edge |
 | `build_four_kind_lab.sh` | `meiso_four_kind_lab` | 不安装的内部 protocol fixture |
 | `build_drm_topology_admission_once.sh` | `meiso_k230d_drm_topology_admission_once` | 显式启用的 libdrm 拓扑观察与安全准入探针 |
+| `build_drm_single_plane_test_only_once.sh` | `meiso_k230d_drm_single_plane_test_only_once` | 显式启用、无像素的单 plane `TEST_ONLY` 诊断探针 |
 
 例：
 
@@ -143,8 +144,9 @@ API 调用状态与执行结果严格分开。调用状态只有 `RESULT_AVAILAB
 失败，则再升级为 `CLEANUP_FAILURE`，同时保留主操作首错、postcondition 首错和清理首错。
 接受 TEST_ONLY 仍不授权 real commit、page-flip 事件、Display Actual RUNNING、画面可见或
 物理证据；结果类型根本没有 real commit、unknown outcome、event/poll、restore、Actual 或
-physical 的可置真字段/枚举值，只保留 `pixel_payload_present=false` 这一条显式边界。本切片
-不接 native libdrm、命令行 runner 或板端收据，也不安装或 export 新 API。
+physical 的可置真字段/枚举值，只保留 `pixel_payload_present=false` 这一条显式边界。便携
+core 自身不链接 native libdrm、命令行 runner 或板端收据，也不安装或 export 新 API；
+下一节的独立 opt-in target 才把这份私有合同绑定到 libdrm。
 
 调用状态的分类与优先级固定如下，混合错误只返回先命中的一类：
 
@@ -180,6 +182,98 @@ callback 的正 errno（协议违约则为 `EPROTO`）；判定器返回内部�
 或与 #2 的 topology hash、route、target 语义不一致使用
 `POSTCONDITION_TOPOLOGY_CHANGED / ESTALE`。cleanup 再失败时，最终 outcome 继续升级为
 `CLEANUP_FAILURE`，三个错误轴仍分别保留。
+
+### 原生 TEST_ONLY-only adapter 与一次性探针
+
+`MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER=ON` 单独开启一个 K230D
+Linux/riscv64 原生 target；默认是 OFF，不进入普通 application aggregate，也不安装或
+export。它与只读拓扑探针共用调用方显式给出的
+`MEISO_K230D_LIBDRM_INCLUDE_DIR` 和 `MEISO_K230D_LIBDRM_LIBRARY`，不查 pkg-config、
+不回退到 Host 库，也不接受符号链接 library 路径。
+
+原生 adapter 只把上一节的窄 Ops 绑定到这些操作：以
+`O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW` 打开并核验 primary DRM character
+node；启用 universal-plane/atomic client cap；显式取得并核验 master；在同一 caller-owned
+fd 上最多三次调用一份共享的 libdrm topology translation；创建 16-bpp RGB565 dumb buffer，
+但不 map、不写像素；用 `drmModeAddFB2(..., DRM_FORMAT_RGB565, ..., flags=0)` 建立
+framebuffer；为选中 plane 精确加入便携 core 给出的十个 property，并仅以
+`DRM_MODE_ATOMIC_TEST_ONLY`、`user_data=NULL` 调用一次 `drmModeAtomicCommit`。它不传
+`DRM_MODE_ATOMIC_ALLOW_MODESET`、`DRM_MODE_PAGE_FLIP_EVENT` 或任何其他 flag。至多一次的
+commit API 调用只有 `EINVAL` 是“拒绝且未应用”；libdrm 最终返回给本程序的其他正 errno
+都是“操作失败且未应用”。本 one-shot 不发起
+第二次 libdrm API 调用；libdrm 内部的 syscall 尝试或重试不在这份 ledger 的观测范围内。
+两类都必须继续做 topology #3 和统一清理。
+
+native run result 同时携带 portable executor result 和一份独立的 libdrm call ledger，不能
+从前者反推后者。ledger 分别记录 primary-node 核验、两项 client cap、set/is/drop master、
+每次 topology read 的 libdrm object seen/released、dumb/FB 创建、进入 portable atomic
+callback、atomic request allocation、十个 plane property add、实际
+`drmModeAtomicCommit` API 调用与 exact flags/NULL user data、atomic request free，以及逆序清理
+与 terminal close。特别地，进入 callback 不等于已尝试内核 TEST_ONLY：request allocation
+或 AddProperty 先失败时，commit API 调用次数必须仍为零。该计数不声称底层 ioctl 恰好
+发生一次，因为 libdrm 包装层可能在内部处理或重试。ledger 还把 map/pixel write、
+connector/CRTC property、mode blob、legacy modeset、non-TEST_ONLY commit 和禁止的 atomic
+flags 计数固定为零。context 保存成功交给 portable core 的唯一 fd；其后每个 callback 都先
+核对同一数值，ledger 分开记录 same-fd 是否适用、核对次数和是否全部通过。若 open 已取得
+native fd，却在 fstat/primary-node 核验阶段失败，open callback 必须自己做一次 Linux
+terminal close；这次内部 close 的尝试、errno 与 ownership consumed 也单独记账，不能被
+portable `fd_was_opened=false` 掩盖。只有走到 TEST_ONLY callback 的分支才必须执行第三次
+读取。未尝试的 topology-read slot 由独立 attempted=false
+标识，不能因 read-status 的零值是 `COMPLETE` 而伪报完成。
+
+共享的 caller-owned-fd translation 不改变 client cap/master、不关闭 fd、不创建对象，也
+不提交 atomic request；每次调用只借用 fd，并在返回前释放该次取得的所有 libdrm object。
+容量超限以原始 count 交给便携 evaluator clean-block；无法忠实表达的原生 noncanonical
+结构以 `EPROTO` 作为读取操作失败，且 topology 输出保持不变。既有 path-owned 只读拓扑
+探针继续通过同一个 translation 实现，不改变其不取显式 master、不创建 buffer/FB 的合同。
+
+板端入口只有：
+
+```sh
+meiso_k230d_drm_single_plane_test_only_once \
+  --device /dev/dri/card0 \
+  --topology-sha256 LOWERCASE_SHA256 \
+  --connector-id CANONICAL_NONZERO_U32 \
+  --crtc-id CANONICAL_NONZERO_U32 \
+  --plane-id CANONICAL_NONZERO_U32
+```
+
+十进制 ID 必须是无前导零的 canonical 非零 `uint32_t`；SHA-256 必须是 64 个小写十六进制
+字符。参数错误只向 stderr 写 `E_ARGUMENT`、stdout 为空并退出 2。内部 provider/result
+违反私有合同只写 `E_PROVIDER_CONTRACT`、不输出半条收据并退出 1。合法
+`NOT_TESTED`、`TEST_REJECTED`、`TEST_ACCEPTED_NOT_APPLIED` 在清理无债时输出一条收据并
+退出 0；`OPERATION_FAILURE` 或 `CLEANUP_FAILURE` 也输出完整收据但退出 1。SIGPIPE 或
+stdout 写失败不能改写成成功。
+
+stdout 的唯一 JSON 行固定为
+`k230d_drm_single_plane_test_only_probe` /
+`meiso.k230d_drm_single_plane_test_only_probe.v1`。字段顺序固定为：
+
+1. type、schema、verification=`NATIVE_LIBDRM_TEST_ONLY_ONLY`、build target、
+   scope=`single_plane_test_only_no_pixels`；
+2. final outcome、primary outcome、test observation；
+3. 请求的 topology SHA-256、connector/CRTC/plane ID；
+4. initial/pretest/posttest candidate reason、三份 observed topology SHA-256、read/atomic
+   次数以及候选与前后不变标志；
+5. portable atomic callback 是否进入、callback 是否报告 accepted-not-applied、test errno；
+6. ordinary operation、postcondition、cleanup 三条独立的首错 stage/errno；
+7. 创建过的 dumb/FB 诊断值、最小输出 byte 数、portable cleanup/ownership 账本，以及上述
+   独立 native call/object/atomic flags ledger；
+8. `pixel_payload_present=false`、`real_commit_attempted=false`、
+   `framebuffer_mapped=false`、`presented=false`、
+   `visibility_exclusivity_unproven=true`、`allow_modeset_attempted=false`、
+   `page_flip_event_requested=false`、
+   `display_state_unchanged_unproven=true`、`display_actual_authorized=false`、
+   `physical_evidence=false`。
+
+收据不含 device path，也不声称源码 commit、artifact 身份、像素、可见性或物理呈现。
+即使三份枚举 hash 相同，open/set/drop/close 与驱动内部副作用仍不由本程序证明为零，所以
+`display_state_unchanged_unproven` 恒为 true。当前已封存的板端 topology 只证明有
+两个兼容的未使用 RGB565 overlay；它没有封存新 evaluator 的其余候选门，
+也不能预先声称会得到“多候选”或任何其他精确 reason。只有同一 master fd 上
+的新鲜三次枚举与该 runner 的新收据，才可能说明此次是否真的到达
+`TEST_ONLY`。Host 单元测试只注入 execute result 验证 CLI/收据，不冒充 libdrm；原生代码
+必须另经显式 target cross compile/link 门。
 
 原生 target 由 `MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER=ON` 单独开启；默认构建
 为 OFF。调用方必须同时给出绝对的 `MEISO_K230D_LIBDRM_INCLUDE_DIR` 和

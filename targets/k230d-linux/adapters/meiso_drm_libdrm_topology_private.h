@@ -71,6 +71,44 @@ typedef MeisoK230dDrmNativeReadStatus (*MeisoK230dDrmNativeObserveFn)(
     MeisoK230dDrmNativeObservation *out_observation
 );
 
+/*
+ * Translate a fresh topology snapshot from a caller-owned primary DRM fd.
+ * The caller has already selected the client-capability view it needs; DRM
+ * master is neither required nor changed here. This function does not change
+ * client capabilities, acquire/drop master, close the fd, create KMS objects,
+ * or submit an atomic request. Every temporary libdrm object is released
+ * before return.
+ *
+ * COMPLETE means that topology contains either a complete snapshot or
+ * explicit over-capacity counts for the portable evaluator to reject.
+ * PRECLASSIFIED records native noncanonical data that cannot safely be
+ * projected as a usable snapshot. OPERATION_FAILED records the first libdrm
+ * operation error. fd may be zero. INVALID_ARGUMENT leaves out_read
+ * byte-exact unchanged; every other status writes a complete read ledger.
+ */
+typedef struct {
+    MeisoK230dDrmNativeReadStatus status;
+    MeisoK230dDrmNativeStage operation_stage;
+    int error;
+    MeisoK230dDrmAdmissionReason preclassified_reason;
+    bool topology_ready_for_evaluation;
+    bool topology_complete;
+    bool all_plane_properties_complete;
+    uint32_t raw_connector_count;
+    uint32_t raw_crtc_count;
+    uint32_t raw_plane_count;
+    uint32_t libdrm_objects_seen;
+    uint32_t libdrm_objects_released_count;
+    bool libdrm_objects_released;
+    MeisoK230dDrmTopology topology;
+} MeisoK230dDrmNativeTopologyFdRead;
+
+MEISO_K230D_DRM_PRIVATE_API
+MeisoK230dDrmNativeReadStatus meiso_k230d_drm_libdrm_read_topology_fd(
+    int fd,
+    MeisoK230dDrmNativeTopologyFdRead *out_read
+);
+
 MEISO_K230D_DRM_PRIVATE_API
 MeisoK230dDrmNativeReadStatus meiso_k230d_drm_libdrm_observe(
     const char *device_path,

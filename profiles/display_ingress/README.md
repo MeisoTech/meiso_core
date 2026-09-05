@@ -443,10 +443,21 @@ immutable-zpos 门不因此放宽。既有板端观察记录了两个未使用�
 cookie 参数。
 
 这一层仍只是“可构造并诊断检查单 plane 全屏 KMS 配置”的合同，不是画面路径。它不携带
-frame，不输出像素，不接 native libdrm/runner/板端收据；假设备失败矩阵完成前也不能声称
-已经执行。即使最终得到 `TEST_ACCEPTED_NOT_APPLIED`，也只表示受信的 injected
-`atomic_test_only` 回调按合同报告 accepted-not-applied；只有未来 native 运行证据才能把
-这个判断归因给内核。它不能授权 Display Actual RUNNING、真实提交、可见画面或物理呈现证据。
+frame，也不输出像素。独立、默认关闭的 K230D native runner 现在把这份私有 Ops 绑定到
+libdrm：同一 fd 上最多三次复用 caller-owned-fd topology translation，创建但不 map/不写的
+RGB565 dumb/FB，并只用十个 plane property 与 `DRM_MODE_ATOMIC_TEST_ONLY` 做一次检查；
+它没有 `ALLOW_MODESET`、page-flip/event、restore 或 real commit 入口。native result 另有
+一份独立 ledger，区分“进入 portable callback”与“调用 `drmModeAtomicCommit` API”，并逐次记录
+topology read 的 libdrm object 释放、exact atomic flags 与 cleanup；只有走到 TEST_ONLY
+callback 的分支才必须执行第三次读取，未尝试的 slot 不能冒充 COMPLETE。不能从
+portable result 硬推这些事实。该调用计数不观测 libdrm 内部的 syscall 尝试或重试。
+精确 CLI、收据和 cross-link 门由
+[K230D target 入口](../../targets/k230d-linux/README.md#原生-test_only-only-adapter-与一次性探针)
+拥有。只有这份 native 运行收据中的 accepted-not-applied 才能归因于该次 libdrm/内核
+调用；注入 Ops 的 Host test 仍不能。两者都不能授权 Display Actual RUNNING、真实提交、
+可见画面或物理呈现证据；native receipt 还固定声明 framebuffer 未 map、
+`presented=false`、`visibility_exclusivity_unproven=true` 与
+`display_state_unchanged_unproven=true`。
 所有成功打开的 fd 都必须经过一次终止性 close；这是新 TEST_ONLY Ops 对未来 Linux DRM
 native adapter 的专用合同，不改变现有 scanout Ops。remove/destroy/drop/close 的任一清理
 债务都会成为 `CLEANUP_FAILURE`，不得留下调用方不可达的对象所有权。

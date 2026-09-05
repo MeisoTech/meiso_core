@@ -13,6 +13,11 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+_Static_assert(
+    MEISO_K230D_DRM_RGB565_FOURCC == DRM_FORMAT_RGB565,
+    "Meiso RGB565 fourcc must match libdrm"
+);
+
 static const char *const PLANE_PROPERTY_NAMES[
     MEISO_K230D_DRM_PLANE_PROPERTY_COUNT
 ] = {
@@ -822,20 +827,225 @@ static bool translate_planes(
     return true;
 }
 
+static void read_topology_on_fd(
+    int fd,
+    LibdrmObjects *objects,
+    MeisoK230dDrmNativeObservation *observation
+)
+{
+    uint64_t monotonic_cap = 0U;
+    uint32_t index;
+    int result;
+
+    errno = 0;
+    objects->version = drmGetVersion(fd);
+    if (objects->version == NULL) {
+        set_operation_failure(
+            observation, MEISO_K230D_DRM_NATIVE_STAGE_DRIVER_VERSION,
+            positive_error(-1)
+        );
+        return;
+    }
+    object_seen(observation);
+    if (objects->version->name == NULL ||
+        objects->version->name_len <= 0 ||
+        (size_t)objects->version->name_len >=
+            sizeof(observation->topology.driver_name) ||
+        memchr(
+            objects->version->name, '\0', objects->version->name_len
+        ) != NULL ||
+        objects->version->version_major < 0 ||
+        objects->version->version_minor < 0 ||
+        objects->version->version_patchlevel < 0) {
+        set_preclassified(
+            observation, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
+        );
+        return;
+    }
+    memcpy(
+        observation->topology.driver_name,
+        objects->version->name,
+        objects->version->name_len
+    );
+    observation->topology.driver_version_major =
+        (uint32_t)objects->version->version_major;
+    observation->topology.driver_version_minor =
+        (uint32_t)objects->version->version_minor;
+    observation->topology.driver_version_patch =
+        (uint32_t)objects->version->version_patchlevel;
+    release_all(objects, observation);
+
+    errno = 0;
+    result = drmGetCap(fd, DRM_CAP_TIMESTAMP_MONOTONIC, &monotonic_cap);
+    if (result != 0) {
+        set_operation_failure(
+            observation, MEISO_K230D_DRM_NATIVE_STAGE_TIMESTAMP_CAP,
+            positive_error(result)
+        );
+        return;
+    }
+    observation->topology.page_flip_timestamps_monotonic =
+        monotonic_cap != 0U;
+
+    errno = 0;
+    objects->resources = drmModeGetResources(fd);
+    if (objects->resources == NULL) {
+        set_operation_failure(
+            observation, MEISO_K230D_DRM_NATIVE_STAGE_RESOURCES,
+            positive_error(-1)
+        );
+        return;
+    }
+    object_seen(observation);
+    errno = 0;
+    objects->plane_resources = drmModeGetPlaneResources(fd);
+    if (objects->plane_resources == NULL) {
+        set_operation_failure(
+            observation, MEISO_K230D_DRM_NATIVE_STAGE_PLANE_RESOURCES,
+            positive_error(-1)
+        );
+        return;
+    }
+    object_seen(observation);
+    if (objects->resources->count_connectors < 0 ||
+        objects->resources->count_crtcs < 0) {
+        set_preclassified(
+            observation, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
+        );
+        return;
+    }
+    observation->raw_connector_count =
+        (uint32_t)objects->resources->count_connectors;
+    observation->raw_crtc_count =
+        (uint32_t)objects->resources->count_crtcs;
+    observation->raw_plane_count = objects->plane_resources->count_planes;
+    observation->topology.connector_count = observation->raw_connector_count;
+    observation->topology.crtc_count = observation->raw_crtc_count;
+    observation->topology.plane_count = observation->raw_plane_count;
+    if (observation->raw_connector_count > MEISO_K230D_DRM_MAX_CONNECTORS ||
+        observation->raw_crtc_count > MEISO_K230D_DRM_MAX_CRTCS ||
+        observation->raw_crtc_count > 32U ||
+        observation->raw_plane_count > MEISO_K230D_DRM_MAX_PLANES) {
+        observation->status = MEISO_K230D_DRM_NATIVE_READ_COMPLETE;
+        observation->topology_ready_for_evaluation = true;
+        return;
+    }
+    if ((observation->raw_connector_count != 0U &&
+         objects->resources->connectors == NULL) ||
+        (observation->raw_crtc_count != 0U &&
+         objects->resources->crtcs == NULL) ||
+        (observation->raw_plane_count != 0U &&
+         objects->plane_resources->planes == NULL)) {
+        set_preclassified(
+            observation, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
+        );
+        return;
+    }
+    for (index = 0U; index < observation->raw_crtc_count; ++index) {
+        uint32_t other;
+        if (objects->resources->crtcs[index] == 0U) {
+            set_preclassified(
+                observation,
+                MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
+            );
+            return;
+        }
+        for (other = 0U; other < index; ++other) {
+            if (objects->resources->crtcs[other] ==
+                objects->resources->crtcs[index]) {
+                set_preclassified(
+                    observation,
+                    MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
+                );
+                return;
+            }
+        }
+    }
+    if (!translate_crtcs(fd, objects, observation) ||
+        !translate_connectors(fd, objects, observation) ||
+        !translate_planes(fd, objects, observation)) {
+        return;
+    }
+    if (!meiso_k230d_drm_private_topology_valid(&observation->topology)) {
+        set_preclassified(
+            observation, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
+        );
+        return;
+    }
+    observation->topology_complete = true;
+    observation->topology_ready_for_evaluation = true;
+    observation->status = MEISO_K230D_DRM_NATIVE_READ_COMPLETE;
+}
+
+static void finish_topology_objects(
+    LibdrmObjects *objects,
+    MeisoK230dDrmNativeObservation *observation
+)
+{
+    release_all(objects, observation);
+    observation->libdrm_objects_released =
+        observation->libdrm_objects_seen ==
+        observation->libdrm_objects_released_count;
+    if (!observation->libdrm_objects_released) {
+        set_operation_failure(
+            observation, MEISO_K230D_DRM_NATIVE_STAGE_TRANSLATION, EBUSY
+        );
+    }
+}
+
+MeisoK230dDrmNativeReadStatus meiso_k230d_drm_libdrm_read_topology_fd(
+    int fd,
+    MeisoK230dDrmNativeTopologyFdRead *out_read
+)
+{
+    MeisoK230dDrmNativeObservation observation;
+    MeisoK230dDrmNativeTopologyFdRead candidate;
+    LibdrmObjects objects;
+
+    if (fd < 0 || out_read == NULL) {
+        return MEISO_K230D_DRM_NATIVE_READ_INVALID_ARGUMENT;
+    }
+    memset(&observation, 0, sizeof(observation));
+    memset(&candidate, 0, sizeof(candidate));
+    memset(&objects, 0, sizeof(objects));
+    observation.status = MEISO_K230D_DRM_NATIVE_READ_OPERATION_FAILED;
+
+    read_topology_on_fd(fd, &objects, &observation);
+    finish_topology_objects(&objects, &observation);
+
+    candidate.status = observation.status;
+    candidate.operation_stage = observation.operation_stage;
+    candidate.error = observation.error;
+    candidate.preclassified_reason = observation.preclassified_reason;
+    candidate.topology_ready_for_evaluation =
+        observation.topology_ready_for_evaluation;
+    candidate.topology_complete = observation.topology_complete;
+    candidate.all_plane_properties_complete =
+        observation.all_plane_properties_complete;
+    candidate.raw_connector_count = observation.raw_connector_count;
+    candidate.raw_crtc_count = observation.raw_crtc_count;
+    candidate.raw_plane_count = observation.raw_plane_count;
+    candidate.libdrm_objects_seen = observation.libdrm_objects_seen;
+    candidate.libdrm_objects_released_count =
+        observation.libdrm_objects_released_count;
+    candidate.libdrm_objects_released =
+        observation.libdrm_objects_released;
+    memcpy(
+        &candidate.topology, &observation.topology,
+        sizeof(candidate.topology)
+    );
+    memcpy(out_read, &candidate, sizeof(candidate));
+    return candidate.status;
+}
+
 MeisoK230dDrmNativeReadStatus meiso_k230d_drm_libdrm_observe(
     const char *device_path,
     MeisoK230dDrmNativeObservation *out_observation
 )
 {
-    _Static_assert(
-        MEISO_K230D_DRM_RGB565_FOURCC == DRM_FORMAT_RGB565,
-        "Meiso RGB565 fourcc must match libdrm"
-    );
     MeisoK230dDrmNativeObservation candidate;
     LibdrmObjects objects;
     struct stat descriptor_stat;
-    uint64_t monotonic_cap = 0U;
-    uint32_t index;
     size_t path_size;
     int fd = -1;
     int result;
@@ -929,150 +1139,10 @@ MeisoK230dDrmNativeReadStatus meiso_k230d_drm_libdrm_observe(
         goto done;
     }
     candidate.atomic_client_cap_set = true;
-
-    errno = 0;
-    objects.version = drmGetVersion(fd);
-    if (objects.version == NULL) {
-        set_operation_failure(
-            &candidate, MEISO_K230D_DRM_NATIVE_STAGE_DRIVER_VERSION,
-            positive_error(-1)
-        );
-        goto done;
-    }
-    object_seen(&candidate);
-    if (objects.version->name == NULL || objects.version->name_len <= 0 ||
-        (size_t)objects.version->name_len >=
-            sizeof(candidate.topology.driver_name) ||
-        memchr(objects.version->name, '\0', objects.version->name_len) != NULL ||
-        objects.version->version_major < 0 ||
-        objects.version->version_minor < 0 ||
-        objects.version->version_patchlevel < 0) {
-        set_preclassified(
-            &candidate, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
-        );
-        goto done;
-    }
-    memcpy(
-        candidate.topology.driver_name,
-        objects.version->name,
-        objects.version->name_len
-    );
-    candidate.topology.driver_version_major =
-        (uint32_t)objects.version->version_major;
-    candidate.topology.driver_version_minor =
-        (uint32_t)objects.version->version_minor;
-    candidate.topology.driver_version_patch =
-        (uint32_t)objects.version->version_patchlevel;
-    release_all(&objects, &candidate);
-
-    errno = 0;
-    result = drmGetCap(fd, DRM_CAP_TIMESTAMP_MONOTONIC, &monotonic_cap);
-    if (result != 0) {
-        set_operation_failure(
-            &candidate, MEISO_K230D_DRM_NATIVE_STAGE_TIMESTAMP_CAP,
-            positive_error(result)
-        );
-        goto done;
-    }
-    candidate.topology.page_flip_timestamps_monotonic = monotonic_cap != 0U;
-
-    errno = 0;
-    objects.resources = drmModeGetResources(fd);
-    if (objects.resources == NULL) {
-        set_operation_failure(
-            &candidate, MEISO_K230D_DRM_NATIVE_STAGE_RESOURCES,
-            positive_error(-1)
-        );
-        goto done;
-    }
-    object_seen(&candidate);
-    errno = 0;
-    objects.plane_resources = drmModeGetPlaneResources(fd);
-    if (objects.plane_resources == NULL) {
-        set_operation_failure(
-            &candidate, MEISO_K230D_DRM_NATIVE_STAGE_PLANE_RESOURCES,
-            positive_error(-1)
-        );
-        goto done;
-    }
-    object_seen(&candidate);
-    if (objects.resources->count_connectors < 0 ||
-        objects.resources->count_crtcs < 0) {
-        set_preclassified(
-            &candidate, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
-        );
-        goto done;
-    }
-    candidate.raw_connector_count =
-        (uint32_t)objects.resources->count_connectors;
-    candidate.raw_crtc_count = (uint32_t)objects.resources->count_crtcs;
-    candidate.raw_plane_count = objects.plane_resources->count_planes;
-    candidate.topology.connector_count = candidate.raw_connector_count;
-    candidate.topology.crtc_count = candidate.raw_crtc_count;
-    candidate.topology.plane_count = candidate.raw_plane_count;
-    if (candidate.raw_connector_count > MEISO_K230D_DRM_MAX_CONNECTORS ||
-        candidate.raw_crtc_count > MEISO_K230D_DRM_MAX_CRTCS ||
-        candidate.raw_crtc_count > 32U ||
-        candidate.raw_plane_count > MEISO_K230D_DRM_MAX_PLANES) {
-        candidate.status = MEISO_K230D_DRM_NATIVE_READ_COMPLETE;
-        candidate.topology_ready_for_evaluation = true;
-        goto done;
-    }
-    if ((candidate.raw_connector_count != 0U &&
-         objects.resources->connectors == NULL) ||
-        (candidate.raw_crtc_count != 0U && objects.resources->crtcs == NULL) ||
-        (candidate.raw_plane_count != 0U &&
-         objects.plane_resources->planes == NULL)) {
-        set_preclassified(
-            &candidate, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
-        );
-        goto done;
-    }
-    for (index = 0U; index < candidate.raw_crtc_count; ++index) {
-        uint32_t other;
-        if (objects.resources->crtcs[index] == 0U) {
-            set_preclassified(
-                &candidate,
-                MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
-            );
-            goto done;
-        }
-        for (other = 0U; other < index; ++other) {
-            if (objects.resources->crtcs[other] ==
-                objects.resources->crtcs[index]) {
-                set_preclassified(
-                    &candidate,
-                    MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
-                );
-                goto done;
-            }
-        }
-    }
-    if (!translate_crtcs(fd, &objects, &candidate) ||
-        !translate_connectors(fd, &objects, &candidate) ||
-        !translate_planes(fd, &objects, &candidate)) {
-        goto done;
-    }
-    if (!meiso_k230d_drm_private_topology_valid(&candidate.topology)) {
-        set_preclassified(
-            &candidate, MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL
-        );
-        goto done;
-    }
-    candidate.topology_complete = true;
-    candidate.topology_ready_for_evaluation = true;
-    candidate.status = MEISO_K230D_DRM_NATIVE_READ_COMPLETE;
+    read_topology_on_fd(fd, &objects, &candidate);
 
 done:
-    release_all(&objects, &candidate);
-    candidate.libdrm_objects_released =
-        candidate.libdrm_objects_seen ==
-        candidate.libdrm_objects_released_count;
-    if (!candidate.libdrm_objects_released) {
-        set_operation_failure(
-            &candidate, MEISO_K230D_DRM_NATIVE_STAGE_TRANSLATION, EBUSY
-        );
-    }
+    finish_topology_objects(&objects, &candidate);
     if (fd >= 0) {
         candidate.close_attempted = true;
         errno = 0;
