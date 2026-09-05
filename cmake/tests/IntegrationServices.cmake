@@ -1,5 +1,12 @@
 # Platform adapters, Host/Edge integrations, and long-lived service lanes.
 
+meiso_add_c_test(
+    meiso_display_ingress_host_fixture_input_test
+    tests/test_display_ingress_host_fixture_input.c
+    integration
+    meiso_display_ingress_host_fixture_input
+)
+
 if(TARGET meiso_device_telemetry_linux_adapter)
     meiso_add_c_test(
         meiso_device_telemetry_linux_adapter_test

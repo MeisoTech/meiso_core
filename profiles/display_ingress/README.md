@@ -250,6 +250,18 @@ UDP 适配器自己的单元测试只在同一进程内通过 IPv4/IPv6 本机�
 
 ### 受控双进程模拟 service
 
+模拟 Host 的画面不是从 Composition 预览输出倒灌，而是先读取公开的一次性本机测试画面
+记录（magic `DIFI`，版本 1）。它的精确布局、codec、fd 所有权与输入失败规则由
+[Host 本机测试画面输入合同](../../integrations/host/display_ingress_fixture_input.md) 唯一拥有；
+本 Profile 只规定验证成功后的 typed frame 如何进入当前媒体对象。这个输入不是 Meiso Link
+或 `DIFR` wire，也不是送达确认。
+
+当前模拟 service 只接受固定 64x32 opaque RGBA8，并且必须在任何 Session/control byte 发出
+前完整读入、校验且看到 frame fd 的明确 EOF。随后才进入下述真实 Session、Runtime、Profile
+binding 和 connected UDP 路径。成功收据升级为
+`DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2`，但仍只是 fixture 运行结果，不是业务 ACK
+或实屏证据。
+
 本机证据程序 `meiso_display_ingress_simulated_service` 只接受调用方传入的两个已连接、
 非阻塞 socket：`--control-fd` 是 TCP 控制通道，`--media-fd` 是 UDP 画面通道；`--role`
 精确选择 `host` 或 `edge`。程序不监听端口、不发现对端、不重连、不创建线程，也不安装
@@ -259,7 +271,7 @@ UDP 适配器自己的单元测试只在同一进程内通过 IPv4/IPv6 本机�
 两个角色都使用真实会话协议（wire magic `MSL0`，定义见
 [Session Core](../../docs/session-core-v0.md)）、资源运行时协议（wire magic `MRT0`，定义见
 [Runtime](../../docs/runtime.md)）、本页 Display Ingress Profile 和 POSIX socket adapter。
-所谓“模拟”只表示 Host 产生一张确定性测试画面、Edge 用内存显示接收端验证其 SHA-256，并发布
+所谓“模拟”只表示 Host 读取一张调用方提供的测试画面、Edge 用内存显示接收端验证其 SHA-256，并发布
 `SIMULATED + UNSPECIFIED` 呈现证据；它不允许手工拼接控制帧或媒体 packet。Edge 收到并
 提交合法 Desired 后，先把本地 RUNNING Actual 排入 Runtime；随后必须从同一个 Runtime
 导出媒体绑定身份（binding）并成功初始化 UDP 接收对象，才允许事件循环把该 Actual 写入 TCP。
@@ -278,39 +290,12 @@ UDP `send` 仍不算远端交付。本自动测试结合启动器创建的回环
 同机双进程、真实协议和指定 socket 的接线；单条收据只证明该进程所见的协议、哈希与关闭
 终态。两者都不证明 K230D、真实网络、屏幕像素或产品级安全承载。
 
-stdout 只允许每个角色输出一条终态 NDJSON（单行 JSON）收据，schema 固定为
-`DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V1`。字段顺序固定如下，便于测试拒绝缺项或把普通
-日志误认成证据：
-
-```text
-Host success: schema, role, status, session_id, catalog_generation,
-              applied_desired_version, actual_version, production_epoch,
-              media_stream_epoch, frame_sequence, input_sha256,
-              evidence_input_sha256, evidence_class, connector, carrier,
-              physical_evidence, link_security, clean_shutdown
-Edge success: schema, role, status, session_id, catalog_generation,
-              applied_desired_version, actual_version, production_epoch,
-              media_stream_epoch, frame_sequence, received_sha256,
-              evidence_input_sha256, evidence_class, connector,
-              udp_armed_before_actual_write, carrier, physical_evidence,
-              link_security, clean_shutdown
-Failure:      schema, role, status, plane, stage, carrier,
-              physical_evidence, link_security, clean_shutdown
-```
-
-成功的 `status` 是 `SUCCESS`，失败是 `FAILURE`；`role` 只能是 `host` 或 `edge`，
-`evidence_class` 固定为 `SIMULATED`，`connector` 固定为 `UNSPECIFIED`，目录中声明的能力
-（Catalog capability）也只广告这一种证据。`session_id` 是双方协商出的完整 SessionId 的
-十六进制；三个 SHA 字段
-都表示同一张完整 RGBA 输入的 32-byte SHA-256，而不是 64-byte evidence payload 自身的 hash，
-并写成 64 个小写十六进制字符。`media_stream_epoch` 必须等于 `production_epoch`；Edge 只有在
-UDP 接收对象已经从该 Runtime 媒体绑定身份成功初始化以后才可把 RUNNING Actual 的首字节写入
-TCP，成功收据因此必须写 `udp_armed_before_actual_write=true`。失败 `plane` 只能是
-`control`、`media` 或 `application`，`stage` 只能是 `bootstrap`、`session`、`catalog`、
-`state`、`binding`、`transfer`、`evidence` 或 `shutdown`。成功退出码为 0，已识别角色发生
-运行失败时为 1；参数非法时不产生 stdout 收据，只在 stderr 输出 `E_ARGUMENT` 并返回 2。
-其他诊断只能写 stderr。所有这些 stdout 行都固定 `physical_evidence=false`，不得当作物理
-呈现证据。
+stdout 仍只允许每个角色输出一条终态 NDJSON 收据。引入外部画面来源以后，schema 唯一升级为
+`DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2`；精确字段顺序、输入失败聚合字段与退出码由
+[Host 本机测试画面输入合同](../../integrations/host/display_ingress_fixture_input.md) 定义。
+Profile 仍要求两侧 frame metadata 与 SHA 对齐、`media_stream_epoch == production_epoch`，并且
+Edge 只有在 UDP 接收对象完成武装以后才能把 RUNNING Actual 首字节写入 TCP。所有 stdout
+收据固定 `physical_evidence=false`，不得当作物理呈现证据。
 
 ## 固定内存与 latest 规则
 

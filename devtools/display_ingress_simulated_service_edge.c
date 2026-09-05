@@ -258,25 +258,36 @@ bool service_run_edge(Service *service)
 static bool consume_latest(Service *service)
 {
     MeisoDisplayIngressMediaLatestView latest;
+    uint8_t digest[MEISO_SHA256_DIGEST_SIZE];
 
     if (meiso_display_ingress_media_transport_latest(
             service->media, &latest
         ) != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK ||
-        latest.frame.frame_sequence != SERVICE_FRAME_SEQUENCE ||
+        latest.frame.frame_sequence == 0U ||
         !meiso_time_point_valid(latest.frame.source_time) ||
-        latest.frame.source_time.clock_epoch != SERVICE_SOURCE_CLOCK_EPOCH ||
         latest.frame.sender_deadline.present ||
-        latest.frame.producer_dropped_frames != 0U ||
         latest.frame.rgba_frame.size != SERVICE_FRAME_BYTES ||
-        !service_verify_rgba_sha256(
-            latest.frame.rgba_frame, service->received_sha256
-        ) ||
+        !meiso_display_ingress_host_fixture_input_sha256(
+            latest.frame.rgba_frame, digest
+        )) {
+        return service_fail(service, "media", "transfer");
+    }
+    service->frame_input_width = SERVICE_FRAME_WIDTH;
+    service->frame_input_height = SERVICE_FRAME_HEIGHT;
+    service->frame_row_pitch_bytes = SERVICE_FRAME_WIDTH * 4U;
+    service->frame_rgba_bytes = SERVICE_FRAME_BYTES;
+    service->frame_sequence = latest.frame.frame_sequence;
+    service->frame_source_time = latest.frame.source_time;
+    service->frame_sender_deadline = latest.frame.sender_deadline;
+    service->frame_producer_dropped_frames =
+        latest.frame.producer_dropped_frames;
+    memmove(service->received_sha256, digest, sizeof(digest));
+    if (
         meiso_display_ingress_media_transport_release_latest(
             service->media, &latest.ref
         ) != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK) {
         return service_fail(service, "media", "transfer");
     }
-    service->frame_sequence = latest.frame.frame_sequence;
     service->frame_complete = true;
     return true;
 }
@@ -376,7 +387,7 @@ static bool queue_evidence_if_idle(Service *service)
         SERVICE_EVIDENCE_STREAM_SEQUENCE
     };
     sample.source_time = (MeisoTimePoint){
-        SERVICE_SOURCE_CLOCK_EPOCH, service_now_ns()
+        SERVICE_EVIDENCE_CLOCK_EPOCH, service_now_ns()
     };
     sample.payload = (MeisoByteView){payload, payload_size};
     if (!meiso_time_point_valid(sample.source_time)) {

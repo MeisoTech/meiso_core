@@ -2,60 +2,6 @@
 
 #include <string.h>
 
-static const uint8_t FRAME_SHA256[MEISO_SHA256_DIGEST_SIZE] = {
-    0x09U, 0xc6U, 0x64U, 0x3bU, 0xe8U, 0x31U, 0x74U, 0x03U,
-    0x23U, 0x7fU, 0x8eU, 0x51U, 0xbbU, 0x2cU, 0xa4U, 0x37U,
-    0x92U, 0x9aU, 0x1aU, 0x4fU, 0xa4U, 0x26U, 0xa2U, 0xc4U,
-    0xfdU, 0x0aU, 0x64U, 0x34U, 0xa5U, 0x05U, 0x8dU, 0x52U
-};
-
-bool service_verify_rgba_sha256(
-    MeisoByteView rgba,
-    uint8_t out_digest[32U]
-)
-{
-    MeisoContentId expected;
-
-    if (out_digest == NULL) {
-        return false;
-    }
-    memset(&expected, 0, sizeof(expected));
-    expected.algorithm = MEISO_CONTENT_ALGORITHM_SHA256;
-    expected.digest_size = MEISO_SHA256_DIGEST_SIZE;
-    memmove(expected.digest, FRAME_SHA256, sizeof(FRAME_SHA256));
-    if (!meiso_runtime_blob_sha256_verify(&expected, rgba, NULL)) {
-        return false;
-    }
-    memmove(out_digest, FRAME_SHA256, sizeof(FRAME_SHA256));
-    return true;
-}
-
-bool service_fill_and_verify_frame(Service *service)
-{
-    uint32_t y;
-
-    if (service == NULL) {
-        return false;
-    }
-    for (y = 0U; y < SERVICE_FRAME_HEIGHT; ++y) {
-        uint32_t x;
-
-        for (x = 0U; x < SERVICE_FRAME_WIDTH; ++x) {
-            const size_t offset =
-                ((size_t)y * SERVICE_FRAME_WIDTH + x) * 4U;
-
-            service->frame[offset] = (uint8_t)(x * 3U + y);
-            service->frame[offset + 1U] = (uint8_t)(y * 7U + x);
-            service->frame[offset + 2U] = (uint8_t)(x ^ y);
-            service->frame[offset + 3U] = UINT8_MAX;
-        }
-    }
-    return service_verify_rgba_sha256(
-        (MeisoByteView){service->frame, sizeof(service->frame)},
-        service->input_sha256
-    ) || service_fail(service, "application", "transfer");
-}
-
 bool service_terminate_media(
     Service *service,
     MeisoDisplayIngressMediaTerminalReason reason

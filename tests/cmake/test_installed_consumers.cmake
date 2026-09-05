@@ -168,6 +168,55 @@ meiso_build_consumer(
     "${runtime_prefix}"
 )
 
+set(difi_stage "${MEISO_TEST_ROOT}/difi-stage")
+set(difi_prefix "${MEISO_TEST_ROOT}/difi-relocated")
+foreach(component Core Runtime Profiles DisplayIngressHostFixtureInput)
+    meiso_install_component(${component} "${difi_stage}")
+endforeach()
+file(RENAME "${difi_stage}" "${difi_prefix}")
+meiso_assert_installed_composition_profile_surface("${difi_prefix}")
+foreach(required_path
+        "${difi_prefix}/include/meiso/host/display_ingress_fixture_input.h")
+    if(NOT EXISTS "${required_path}")
+        message(FATAL_ERROR
+            "DisplayIngressHostFixtureInput prefix is missing ${required_path}")
+    endif()
+endforeach()
+foreach(forbidden_path
+        "${difi_prefix}/include/meiso/adapters"
+        "${difi_prefix}/include/meiso/composition"
+        "${difi_prefix}/include/meiso/host/edge.h"
+        "${difi_prefix}/include/meiso/host/composition.h"
+        "${difi_prefix}/include/meiso/host/composition_runtime.h"
+        "${difi_prefix}/include/meiso/host/remote_edge.h"
+        "${difi_prefix}/include/meiso/simulation")
+    if(EXISTS "${forbidden_path}")
+        message(FATAL_ERROR
+            "DisplayIngressHostFixtureInput prefix leaked ${forbidden_path}")
+    endif()
+endforeach()
+file(
+    GLOB_RECURSE difi_forbidden_artifacts
+    LIST_DIRECTORIES FALSE
+    "${difi_prefix}/*MeisoPosixTargets*"
+    "${difi_prefix}/*MeisoControlTargets*"
+    "${difi_prefix}/*MeisoClientTargets*"
+    "${difi_prefix}/*MeisoCompositionTargets*"
+    "${difi_prefix}/*MeisoHostTargets*"
+)
+if(difi_forbidden_artifacts)
+    message(FATAL_ERROR
+        "DisplayIngressHostFixtureInput leaked targets: ${difi_forbidden_artifacts}")
+endif()
+meiso_build_consumer(
+    difi-consumer
+    "${MEISO_SOURCE_DIR}/tests/installed-consumers/display-ingress-host-fixture-input"
+    "${difi_prefix}"
+)
+unset(difi_forbidden_artifacts)
+unset(difi_prefix)
+unset(difi_stage)
+
 set(client_stage "${MEISO_TEST_ROOT}/client-stage")
 set(client_prefix "${MEISO_TEST_ROOT}/client-relocated")
 foreach(component Core Runtime Profiles Client)

@@ -14,6 +14,7 @@ typedef struct {
     const char *role_name;
     int control_fd;
     int media_fd;
+    int frame_fd;
 } Arguments;
 
 static Service service_storage;
@@ -42,6 +43,7 @@ static bool parse_arguments(int argc, char **argv, Arguments *out_arguments)
     bool role_seen = false;
     bool control_seen = false;
     bool media_seen = false;
+    bool frame_seen = false;
     int index;
 
     if (out_arguments == NULL) {
@@ -50,6 +52,7 @@ static bool parse_arguments(int argc, char **argv, Arguments *out_arguments)
     memset(&value, 0, sizeof(value));
     value.control_fd = -1;
     value.media_fd = -1;
+    value.frame_fd = -1;
     for (index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--role") == 0 && index + 1 < argc &&
             !role_seen) {
@@ -72,12 +75,21 @@ static bool parse_arguments(int argc, char **argv, Arguments *out_arguments)
                    index + 1 < argc && !media_seen &&
                    parse_fd(argv[++index], &value.media_fd)) {
             media_seen = true;
+        } else if (strcmp(argv[index], "--frame-fd") == 0 &&
+                   index + 1 < argc && !frame_seen &&
+                   parse_fd(argv[++index], &value.frame_fd)) {
+            frame_seen = true;
         } else {
             return false;
         }
     }
     if (!role_seen || !control_seen || !media_seen ||
-        value.control_fd == value.media_fd) {
+        value.control_fd == value.media_fd ||
+        (value.role == MEISO_SESSION_ROLE_HOST && !frame_seen) ||
+        (value.role == MEISO_SESSION_ROLE_EDGE && frame_seen) ||
+        (frame_seen &&
+         (value.frame_fd == value.control_fd ||
+          value.frame_fd == value.media_fd))) {
         return false;
     }
     *out_arguments = value;
@@ -97,13 +109,24 @@ int main(int argc, char **argv)
     memset(&service_storage, 0, sizeof(service_storage));
     service_storage.control_fd = arguments.control_fd;
     service_storage.media_fd = arguments.media_fd;
+    service_storage.frame_fd = arguments.frame_fd;
     service_storage.role = arguments.role;
     service_storage.role_name = arguments.role_name;
-    success = service_run(&service_storage);
+    if (service_storage.role == MEISO_SESSION_ROLE_HOST) {
+        success = service_read_host_fixture_input(&service_storage);
+        service_close_fd(&service_storage.frame_fd);
+    } else {
+        success = true;
+    }
+    if (success) {
+        success = service_run(&service_storage);
+    }
+    service_close_fd(&service_storage.frame_fd);
     service_close_fd(&service_storage.media_fd);
     service_close_fd(&service_storage.control_fd);
     service_storage.descriptors_closed =
-        service_storage.media_fd == -1 && service_storage.control_fd == -1;
+        service_storage.frame_fd == -1 && service_storage.media_fd == -1 &&
+        service_storage.control_fd == -1;
     if (success && !service_success_ready(&service_storage)) {
         success = service_fail(
             &service_storage, "application", "shutdown"

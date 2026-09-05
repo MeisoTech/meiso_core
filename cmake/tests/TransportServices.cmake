@@ -29,6 +29,10 @@ if(UNIX)
             meiso_display_ingress_simulated_service_test
             meiso_display_ingress_simulated_service
         )
+        target_link_libraries(
+            meiso_display_ingress_simulated_service_test
+            PRIVATE meiso_display_ingress_host_fixture_input
+        )
         meiso_enable_warnings(meiso_display_ingress_simulated_service_test)
         meiso_set_target_folder(
             meiso_display_ingress_simulated_service_test

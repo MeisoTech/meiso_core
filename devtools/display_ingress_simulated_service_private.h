@@ -3,6 +3,7 @@
 
 #include <meiso/adapters/posix/display_ingress_media_udp.h>
 #include <meiso/adapters/posix/tcp.h>
+#include <meiso/host/display_ingress_fixture_input.h>
 #include <meiso/profiles/display_ingress/profile.h>
 
 #include <stdbool.h>
@@ -33,10 +34,9 @@ enum {
     SERVICE_DESIRED_DELIVERY_GENERATION = 7,
     SERVICE_ACTUAL_DELIVERY_GENERATION = 8,
     SERVICE_PRODUCTION_EPOCH = 1,
-    SERVICE_FRAME_SEQUENCE = 1,
     SERVICE_EVIDENCE_STREAM_EPOCH = 3,
     SERVICE_EVIDENCE_STREAM_SEQUENCE = 1,
-    SERVICE_SOURCE_CLOCK_EPOCH = 4
+    SERVICE_EVIDENCE_CLOCK_EPOCH = 4
 };
 
 typedef union {
@@ -80,6 +80,7 @@ enum {
 typedef struct {
     int control_fd;
     int media_fd;
+    int frame_fd;
     MeisoSessionRole role;
     const char *role_name;
     const char *failure_plane;
@@ -110,7 +111,7 @@ typedef struct {
     ];
     MeisoDisplayIngressMediaBinding binding;
     MeisoSessionId session_id;
-    uint8_t frame[SERVICE_FRAME_BYTES];
+    uint8_t frame_bytes[SERVICE_FRAME_BYTES];
     uint8_t input_sha256[32U];
     uint8_t received_sha256[32U];
     uint8_t evidence_sha256[32U];
@@ -120,9 +121,17 @@ typedef struct {
     uint64_t production_epoch;
     uint64_t media_stream_epoch;
     uint64_t frame_sequence;
+    MeisoTimePoint frame_source_time;
+    MeisoDeadline frame_sender_deadline;
+    uint64_t frame_producer_dropped_frames;
+    uint32_t frame_input_width;
+    uint32_t frame_input_height;
+    uint32_t frame_row_pitch_bytes;
+    uint32_t frame_rgba_bytes;
     bool runtime_ready;
     bool catalog_active;
     bool binding_ready;
+    bool frame_input_complete;
     bool frame_complete;
     bool evidence_queued;
     bool evidence_complete;
@@ -146,6 +155,7 @@ SERVICE_PRIVATE_API uint64_t service_now_ns(void);
 SERVICE_PRIVATE_API uint64_t service_deadline_after_ms(uint32_t milliseconds);
 SERVICE_PRIVATE_API bool service_deadline_expired(uint64_t deadline_ns);
 SERVICE_PRIVATE_API bool service_random_bytes(void *output, size_t output_size);
+SERVICE_PRIVATE_API bool service_read_host_fixture_input(Service *service);
 
 SERVICE_PRIVATE_API bool service_session_tx_idle(const Service *service);
 SERVICE_PRIVATE_API bool service_wait_session_ready(Service *service);
@@ -166,11 +176,6 @@ SERVICE_PRIVATE_API bool service_run_host(Service *service);
 SERVICE_PRIVATE_API bool service_run_edge(Service *service);
 SERVICE_PRIVATE_API bool service_run_host_media(Service *service);
 SERVICE_PRIVATE_API bool service_run_edge_media(Service *service);
-SERVICE_PRIVATE_API bool service_fill_and_verify_frame(Service *service);
-SERVICE_PRIVATE_API bool service_verify_rgba_sha256(
-    MeisoByteView rgba,
-    uint8_t out_digest[32U]
-);
 SERVICE_PRIVATE_API bool service_terminate_media(
     Service *service,
     MeisoDisplayIngressMediaTerminalReason reason

@@ -265,7 +265,7 @@ static bool receive_host_event(
             SERVICE_EVIDENCE_STREAM_SEQUENCE ||
         !meiso_time_point_valid(event->stream_sample.source_time) ||
         event->stream_sample.source_time.clock_epoch !=
-            SERVICE_SOURCE_CLOCK_EPOCH ||
+            SERVICE_EVIDENCE_CLOCK_EPOCH ||
         event->stream_sample.sender_deadline.present ||
         event->stream_sample.dependency.size != 0U ||
         meiso_display_ingress_evidence_decode(
@@ -301,19 +301,25 @@ bool service_run_host_media(Service *service)
     MeisoDisplayIngressMediaFrame frame;
     const uint64_t deadline = service_deadline_after_ms(SERVICE_TIMEOUT_MS);
 
-    if (!service_fill_and_verify_frame(service)) {
-        return false;
+    if (service == NULL || !service->frame_input_complete ||
+        service->frame_fd != -1 ||
+        service->frame_input_width != SERVICE_FRAME_WIDTH ||
+        service->frame_input_height != SERVICE_FRAME_HEIGHT ||
+        service->frame_row_pitch_bytes != SERVICE_FRAME_WIDTH * 4U ||
+        service->frame_rgba_bytes != SERVICE_FRAME_BYTES) {
+        return service_fail(service, "application", "input");
     }
     memset(&frame, 0, sizeof(frame));
-    service->frame_sequence = SERVICE_FRAME_SEQUENCE;
     frame.frame_sequence = service->frame_sequence;
-    frame.source_time = (MeisoTimePoint){
-        SERVICE_SOURCE_CLOCK_EPOCH, service_now_ns()
-    };
+    frame.source_time = service->frame_source_time;
+    frame.sender_deadline = service->frame_sender_deadline;
+    frame.producer_dropped_frames =
+        service->frame_producer_dropped_frames;
     frame.rgba_frame = (MeisoByteView){
-        service->frame, sizeof(service->frame)
+        service->frame_bytes, sizeof(service->frame_bytes)
     };
     if (!meiso_time_point_valid(frame.source_time) ||
+        frame.sender_deadline.present ||
         meiso_display_ingress_media_transport_submit(
             service->media, &frame, NULL
         ) != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK) {

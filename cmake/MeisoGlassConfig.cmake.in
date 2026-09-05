@@ -6,6 +6,7 @@ set(
     Core
     Runtime
     Profiles
+    DisplayIngressHostFixtureInput
     Client
     Posix
     Composition
@@ -30,6 +31,7 @@ endforeach()
 set(MeisoGlass_Core_FOUND FALSE)
 set(MeisoGlass_Runtime_FOUND FALSE)
 set(MeisoGlass_Profiles_FOUND FALSE)
+set(MeisoGlass_DisplayIngressHostFixtureInput_FOUND FALSE)
 set(MeisoGlass_Client_FOUND FALSE)
 set(MeisoGlass_Posix_FOUND FALSE)
 set(MeisoGlass_Composition_FOUND FALSE)
@@ -40,6 +42,7 @@ set(MeisoGlass_Host_FOUND FALSE)
 set(want_Core FALSE)
 set(want_Runtime FALSE)
 set(want_Profiles FALSE)
+set(want_DisplayIngressHostFixtureInput FALSE)
 set(want_Client FALSE)
 set(want_Posix FALSE)
 set(want_Composition FALSE)
@@ -54,6 +57,9 @@ if(want_Host)
     set(want_Client TRUE)
     set(want_Control TRUE)
     set(want_Posix TRUE)
+    set(want_Profiles TRUE)
+endif()
+if(want_DisplayIngressHostFixtureInput)
     set(want_Profiles TRUE)
 endif()
 if(want_Simulation)
@@ -87,6 +93,7 @@ foreach(component
         Core
         Runtime
         Profiles
+        DisplayIngressHostFixtureInput
         Client
         Posix
         Composition
@@ -118,6 +125,7 @@ unset(target_file)
 unset(want_Core)
 unset(want_Runtime)
 unset(want_Profiles)
+unset(want_DisplayIngressHostFixtureInput)
 unset(want_Client)
 unset(want_Posix)
 unset(want_Composition)

@@ -1,6 +1,28 @@
 # Host integrations bind the portable client contract to POSIX transport and
 # control-session services. Operating-system concerns remain in adapters.
 
+add_library(
+    meiso_display_ingress_host_fixture_input
+    integrations/host/display_ingress_fixture_input.c
+)
+meiso_configure_public_target(
+    meiso_display_ingress_host_fixture_input
+    DisplayIngressHostFixtureInput
+)
+target_link_libraries(
+    meiso_display_ingress_host_fixture_input
+    PUBLIC meiso_display_ingress_media_transport
+)
+meiso_enable_warnings(meiso_display_ingress_host_fixture_input)
+meiso_set_target_folder(
+    meiso_display_ingress_host_fixture_input
+    "Meiso/Integrations/Host"
+)
+add_library(
+    Meiso::DisplayIngressHostFixtureInput
+    ALIAS meiso_display_ingress_host_fixture_input
+)
+
 if(UNIX)
     add_library(
         meiso_composition_host_runtime

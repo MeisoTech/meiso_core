@@ -121,6 +121,31 @@ install(
 )
 
 install(
+    TARGETS meiso_display_ingress_host_fixture_input
+    EXPORT MeisoDisplayIngressHostFixtureInputTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT DisplayIngressHostFixtureInput
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT DisplayIngressHostFixtureInput
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        COMPONENT DisplayIngressHostFixtureInput
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+install(
+    EXPORT MeisoDisplayIngressHostFixtureInputTargets
+    FILE MeisoDisplayIngressHostFixtureInputTargets.cmake
+    NAMESPACE Meiso::
+    DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
+    COMPONENT DisplayIngressHostFixtureInput
+)
+install(
+    FILES
+        "${PROJECT_SOURCE_DIR}/include/meiso/host/display_ingress_fixture_input.h"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/host"
+    COMPONENT DisplayIngressHostFixtureInput
+)
+
+install(
     TARGETS meiso_composition_edge
     EXPORT MeisoClientTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Client

@@ -98,6 +98,7 @@ if(UNIX)
         devtools/display_ingress_simulated_service_bootstrap.c
         devtools/display_ingress_simulated_service_control.c
         devtools/display_ingress_simulated_service_edge.c
+        devtools/display_ingress_simulated_service_frame_input.c
         devtools/display_ingress_simulated_service_host.c
         devtools/display_ingress_simulated_service_loop.c
         devtools/display_ingress_simulated_service_receipt.c
@@ -107,6 +108,7 @@ if(UNIX)
         PRIVATE
             meiso_posix_tcp_adapter
             meiso_display_ingress_media_posix_udp_adapter
+            meiso_display_ingress_host_fixture_input
     )
     meiso_enable_warnings(meiso_display_ingress_simulated_service)
     meiso_set_target_folder(

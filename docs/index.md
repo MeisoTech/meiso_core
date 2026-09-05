@@ -25,6 +25,8 @@
   MRT0 v2/v3 仅是内部 compatibility boundary；
 - [Host集成回执](host-integration-receipt-v0.md)：`COMPOSE_/_PROFILE:v1`、MRT0 v4、6/18 graph、
   terminal/fresh-Session和Looking Glass adapter边界；
+- [Display Ingress 本机测试画面输入](../integrations/host/display_ingress_fixture_input.md)：
+  `DIFI/v1` 一次性 Host fixture record、公开 codec、fd 所有权与 fail-closed 输入边界；
 - [Host/Edge并行模型](development-model.md)：双方如何依赖同一Profile、simulator和conformance；
 - [Composition Edge trace v1](composition-edge-trace-v1.md)：bounded canonical trace与replay。
 - [Composition Editor](../devtools/web/composition_editor/README.md)：loopback-only local draft、
@@ -41,7 +43,7 @@
 - [Display Ingress Profile](../profiles/display_ingress/README.md)：Host 到 Edge 实屏链路的
   单 endpoint、完整帧和异步呈现证据合同；四 route Catalog、Desired/Actual、呈现证据
   codec、一次 RUNNING 数据门、有界媒体 transport 和受控 connected UDP adapter 已实现；
-  现已接通两个本机进程上的真实协议、模拟画面源和内存显示接收端；产品进程、K230D、带安全
+  现已接通两个本机进程上的真实协议、调用方测试画面输入和内存显示接收端；产品进程、K230D、带安全
   保护的 carrier 与物理 E2E 尚未完成；
 - [K230D Linux Edge基线](k230d-linux-edge-development-baseline.md)与
   [target入口](../targets/k230d-linux/README.md)；
