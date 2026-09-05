@@ -73,7 +73,8 @@ property write、mode blob、legacy modeset 或 vendor `vo_init`。primary node 
 可能被内核隐式视为 master，关闭最后一个 fd 也可能触发驱动回调；因此收据只写
 `explicit_set_master_called=false`、实际 `master_observed_while_open`、
 `explicit_kms_mutation_calls=0` 和 `display_state_unchanged_unproven=true`。程序不把用户态
-没有显式写调用改写成“显示状态没有变化”；这一点必须由同次开机的前后状态对照证明。
+没有显式写调用改写成“显示状态没有变化”。同次开机的外层前后对照最多说明所选观察面
+未见持久差异；它仍不能证明没有瞬态 master/last-close 影响或像素连续性。
 
 stdout 只允许一条 canonical JSON 收据，type/schema 固定为
 `k230d_drm_topology_admission_probe` /
@@ -134,6 +135,35 @@ runner 进程、DRM fd/master、framebuffer、mapping 和 dumb buffer，记录 o
 kernel log 与资源账本，等待操作者单独授权恢复。不得强制 rmFB/close，不得再跑 `vo_init`
 或重复 probe，也不得 kill driver、卸载 module 或重启板卡来制造一次“通过”。
 
+### 2026-09-05 受控板端拓扑收据
+
+精确实现提交 `07a365696a32a294be31805df6a78d873267e022` 已从 fresh `git archive`
+重新交叉构建；生成的 42648-byte RISC-V/LP64D ELF SHA-256 为
+`e9c5941806be848e58c12c57fe839da1711729e95847d6706e1be3bca780657f`，与板上实际
+执行 artifact 逐字节相同。完整的脱敏[构建与运行证据](evidence/drm-topology-admission-2026-09-05.md)
+已保存；2021-byte canonical 脱敏收据按仓库卫生规则保留在公开 Git 树外，摘要记录其
+SHA-256 与所有准入关键字段，不提交原始运行 artifact。
+
+单次真实探针退出 0、stderr 为空；它观察到 `canaan-drm` 1.0.0、一个 connector、一个
+CRTC、七个 plane，以及 DSI connector 48 → CRTC 46 的 1920x1080 current mode。规范化
+topology SHA-256 为
+`4924deeef96f4f828accd9b85f104256acc011f1895bdeb0e48f88d2c3f5f96b`。虽然有两个当前
+未使用且支持 RGB565 的 overlay，但没有一个候选具备可验证的 immutable zpos；因此结果
+精确为 `ADMISSION_BLOCKED / ZPOS_UNPROVABLE`，没有选择 plane，也没有授权 Actual
+RUNNING。
+
+`active_plane_count=0` 只表示本次顺序枚举时，没有 plane 的 `CRTC_ID` 等于 46；它不证明
+面板关闭、黑屏、扫描停止或可以安全接管。运行前后处于同一 boot，DRM holder 都为零，
+所选 connector 与 kernel-log 快照逐字节相同；framebuffer sysfs 观察输入在前后都为空，
+因此不能提供 framebuffer 状态对照。这些事实仍不能证明没有瞬态 implicit-master/
+last-close 影响或像素连续性，所以 canonical 脱敏收据保留
+`display_state_unchanged_unproven=true`。这也是 DSI 拓扑证据，不是 HDMI、TEST_ONLY、
+真实 commit/page-flip、恢复或物理显示证据。
+
+正式探针前的一次 wrapper 检查因 BusyBox 缺少 `timeout` 以 127 退出，binary 未启动、
+stdout 为空，记为 `NOT_EXECUTED`，不算第二次设备探针。不能通过重复运行、猜 plane ID/
+枚举顺序，或把 RGB565 支持当成 z-order 证明来绕过当前阻断。
+
 ## Composition Edge service
 
 `K230dCompositionEdgeService` 组合：
@@ -173,7 +203,8 @@ ISP owner、卸载 module 或重启板卡。
 5. Host 保持在线时 Edge SIGTERM 退出 `rc=0/LOCAL_ABORT`，camera/media ledger 归零，
    原 ISP owner 与系统服务不变。
 
-当前正式身份的 fresh cross + board E2E 尚待收口。之前的 exact board evidence
-只作历史，不替代当前 commit。验收定义见
+当前拓扑观察已有上述 exact-commit fresh cross 与真板收据；Composition 的 fresh cross +
+combined board E2E 仍待收口。拓扑收据不能替代 frame、TEST_ONLY、真实 commit 或恢复门。
+验收定义见
 [K230D Composition E2E](../../docs/k230d-composition-e2e.md)。Cross-build 不证明板端运行；
 CPU off-screen 不证明 DRM/DSI/fence/vblank/panel；单 camera probe 不证明 combined E2E。

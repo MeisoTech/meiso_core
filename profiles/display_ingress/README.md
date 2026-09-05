@@ -409,8 +409,9 @@ sequence 和双方对完整输入计算的 SHA-256 精确相符。
 `KMS_LATCHED`，也只证明状态逻辑按合同推进。
 
 同一份纯 topology 判定器现在也接到一个显式启用的 K230D 原生拓扑观察程序。它用 libdrm
-完整读取当前 connector、CRTC、plane、format 与属性，规范化后调用共享判定器；它不取得
-显式 master、不建 buffer/FB、不做 TEST_ONLY 或真实 commit。完整拓扑不满足策略时输出
+在固定容量内顺序读取当前 connector、CRTC、plane、format 与属性，规范化后调用共享判定器；
+这不是内核原子快照。它不取得显式 master、不建 buffer/FB、不做 TEST_ONLY 或真实 commit。
+容量内完整 topology 不满足策略时输出
 `ADMISSION_BLOCKED`，满足时最多输出 `TOPOLOGY_ELIGIBLE_NOT_COMMIT_TESTED`。两者都固定
 `actual_running_authorized=false / physical_evidence=false`，不能生成 Display Actual
 RUNNING 或本 Profile 的 `DRM_KMS_PAGE_FLIP` 呈现证据。精确 CLI、收据字段、退出语义、
@@ -419,7 +420,7 @@ RUNNING 或本 Profile 的 `DRM_KMS_PAGE_FLIP` 呈现证据。精确 CLI、收�
 
 该策略内核固定以下安全选择，未来 native translation 只能如实提供事实，不能放宽：
 
-- 在最多 8 个 connector、8 个 CRTC、16 个 plane 的完整快照中，只接受唯一一条有效
+- 在最多 8 个 connector、8 个 CRTC、16 个 plane 的完整规范化 observation 中，只接受唯一一条有效
   显示路径：connector 已连接、已有 encoder/CRTC 绑定，并且该 CRTC 明确处于 `ACTIVE`
   且带 current mode。另一个已连接但未指向 active CRTC 的 connector 不算有效路径；
   所有对象按 ID 严格排序；
@@ -482,8 +483,10 @@ Display Actual 不得因本策略内核或拓扑收据存在而报告 RUNNING。
 2. **已完成：** 冻结其余三个 schema，实现完整 Catalog、Desired/Actual、evidence
    codec 和只证明协议状态机的双 Runtime fixture；
 3. **部分完成：** K230D 的 portable policy/state machine、fake failure matrix，以及原生
-   native libdrm topology/admission runner 已接到同一判定器；exact board topology 收据、
-   TEST_ONLY、真实 page-flip 与恢复仍按独立门推进；
+   native libdrm topology/admission runner 已接到同一判定器；
+   [2026-09-05 真板拓扑收据](../../targets/k230d-linux/evidence/drm-topology-admission-2026-09-05.md)
+   已得到 `ADMISSION_BLOCKED / ZPOS_UNPROVABLE`，所以没有选择 plane 或授权 Actual
+   RUNNING；TEST_ONLY、真实 page-flip 与恢复仍按独立门推进；
 4. **已完成：** connected UDP 行为适配器；它只关闭有界 connected-datagram 搬运与
    丢包恢复行为，并为后续跨进程/网络 bring-up 提供适配器，不关闭安全 carrier；
 5. **已完成：** 两个本机进程使用真实 TCP 控制、connected UDP 数据、模拟画面源和内存
