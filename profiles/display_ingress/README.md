@@ -434,6 +434,23 @@ immutable-zpos 门不因此放宽。既有板端观察记录了两个未使用�
 所以目前没有证明唯一候选；具体的新判定原因尚未由未来同一 master fd 上的新鲜枚举与
 判定证据封印，不能提前写成某个精确结果，更不能按请求 ID 猜选其中之一。
 
+下一层便携诊断执行器的合同由
+[K230D target 入口](../../targets/k230d-linux/README.md#便携的-test_only-only-执行器合同)
+拥有。在走到 TEST_ONLY callback 的分支，它计划在同一 master fd 上同步完成三次完整枚举：
+第一次核对精确候选，创建但不映射也不写像素的 RGB565 dumb buffer 与 framebuffer 后，
+第二次重新枚举并在任何 TEST_ONLY 前阻断漂移；一次 TEST_ONLY 后再做第三次枚举与候选复核。它的专用回调表无法
+表达 page flip、事件等待、恢复或真实 commit，TEST_ONLY 回调也没有 kind、flags 或
+cookie 参数。
+
+这一层仍只是“可构造并诊断检查单 plane 全屏 KMS 配置”的合同，不是画面路径。它不携带
+frame，不输出像素，不接 native libdrm/runner/板端收据；假设备失败矩阵完成前也不能声称
+已经执行。即使最终得到 `TEST_ACCEPTED_NOT_APPLIED`，也只表示受信的 injected
+`atomic_test_only` 回调按合同报告 accepted-not-applied；只有未来 native 运行证据才能把
+这个判断归因给内核。它不能授权 Display Actual RUNNING、真实提交、可见画面或物理呈现证据。
+所有成功打开的 fd 都必须经过一次终止性 close；这是新 TEST_ONLY Ops 对未来 Linux DRM
+native adapter 的专用合同，不改变现有 scanout Ops。remove/destroy/drop/close 的任一清理
+债务都会成为 `CLEANUP_FAILURE`，不得留下调用方不可达的对象所有权。
+
 现有供 scanout `begin()` 和拓扑探针使用的 real-commit eligibility 判定器固定以下安全
 选择；未来 native translation 只能如实提供事实，不能放宽：
 

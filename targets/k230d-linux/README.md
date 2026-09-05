@@ -83,6 +83,104 @@ master fd 上的新鲜枚举与判定证据封印，在那以前不得尝试 TES
 mode 每边先限制为 4096，计算出的 RGB565 最小 byte 数最大为 32 MiB，不另造一个当前
 不可到达的 buffer failure reason。
 
+### 便携的 TEST_ONLY-only 执行器合同
+
+下一层仍是仓内私有、同步、一次性的诊断执行器；本段先固定合同和 API 边界。在假设备
+回调的失败矩阵与可执行测试完成前，不把它写成“已经尝试过 TEST_ONLY”。入口消费上节
+精确的 `single_plane_test_candidate` 请求，但不会复用现有 `begin()`，也不会改变
+`begin()` 的真实提交规则。
+
+这层使用一套单独的窄回调表。它只能表达：打开 primary DRM 节点、启用 universal-plane
+和 atomic 枚举能力、取得并核验 master、读取完整 topology、创建未映射的 RGB565 dumb
+buffer、建立 framebuffer、执行一次没有 kind/flags/cookie 参数的 `atomic_test_only`、
+删除 framebuffer、销毁 dumb buffer、放弃 master 和关闭 fd。它没有 map 或像素写入入口，
+也无法表达 page flip、事件等待、恢复、connector/CRTC property、mode blob、
+`ALLOW_MODESET` 或真实 commit。该层只检查 KMS 配置请求，不携带像素；结果固定说明
+`pixel_payload_present=false`。
+
+同步调用按以下顺序执行：
+
+1. 先验证配置、请求、输出范围互不重叠，以及回调表完整；参数错误时输出逐字节不变；
+2. 打开 fd，启用两项枚举能力，取得并再次核验 master；
+3. 在同一 fd 上读取 topology #1，核对请求绑定的 SHA-256 和候选身份；若判定被阻断，
+   不创建资源、不尝试 TEST_ONLY，直接进入统一清理；
+4. 创建但不映射 RGB565 dumb buffer，并核验 handle 非零、pitch 至少为 `width * 2`、
+   size 至少为 `pitch * height` 且不超过 64 MiB；再建立非零 framebuffer ID；
+5. 在 TEST_ONLY 前重新读取 topology #2，并用同一请求重新判定；它的规范化 SHA-256、
+   route 和唯一候选必须与 topology #1 完全一致。任何漂移都在 TEST_ONLY 调用计数仍为零
+   时阻断；
+6. 只依据 topology #2 构造选中 plane 的全屏状态：FB/CRTC 使用新对象，source 与 CRTC
+   起点为零，source 宽高为 mode 宽高左移 16 位，CRTC 宽高等于 mode；
+7. 精确调用一次 `atomic_test_only`。回调只可能报告“接受但未应用”“拒绝且未应用”或
+   “操作失败且未应用”，不存在已应用或结果未知的表达；
+8. 无论 TEST_ONLY 报告接受、拒绝还是操作失败，都必须尝试读取 topology #3，再用同一
+   请求判定；#3 必须与 #2 的规范化 SHA-256、route 和候选完全一致。#3 读取、判定或对照
+   失败均记为 post-test operation failure，但仍保留 TEST_ONLY 已尝试及其 disposition 的
+   事实。这里只证明枚举到的 DRM 状态没有观察到变化，不证明屏幕像素、不可见硬件层或
+   显示状态绝对未变；
+9. 从 framebuffer、dumb buffer、master 到 fd 逆序清理，并分别记录主操作首错和清理首错。
+
+这是一份刻意受限的一次性所有权合同。`atomic_test_only` 永远不能应用状态，所以无论
+remove framebuffer、destroy dumb 或 drop master 中哪一步失败，执行器都会记录首个清理
+错误并继续后续清理，最后对每个成功打开的 fd 精确调用一次 `close_device`。这里的
+`close_device` 只是一份**新 TEST_ONLY Ops** 对未来 Linux DRM native adapter 的专用合同，
+不能推及现有 scanout Ops 或任意平台：第一次调用就是 primary fd 的终止性所有权栅栏，
+消费该 fd，以及这个 file description 仍持有的 master、GEM handle 和 framebuffer
+所有权；即使它报告错误，也不重试。`open_primary` 返回的非负 fd（包括 fd 0）必须是
+本次执行器调用唯一持有的用户态 descriptor reference，回调不得复制、外借或共享
+fd/GEM/framebuffer；除 close 外的回调
+失败必须保留该 fd 供统一清理。函数返回时不能留下调用方拿不到的
+fd/master/framebuffer/dumb 所有权位。结果会分别记录 close 是否尝试、是否成功，以及
+所有权是否已经消费；任一清理债务都把最终状态升级为 `CLEANUP_FAILURE`，不能伪装成
+普通拒绝。
+
+API 调用状态与执行结果严格分开。调用状态只有 `RESULT_AVAILABLE`、`INVALID_ARGUMENT`
+和 `INVALID_CONFIG`；后两者不调用任何回调并保持结果输出逐字节不变。只有
+`RESULT_AVAILABLE` 才写执行结果。结果只分为 `NOT_TESTED`、`TEST_REJECTED`、
+`TEST_ACCEPTED_NOT_APPLIED`、`OPERATION_FAILURE` 和 `CLEANUP_FAILURE`。前三种只有在
+统一清理完全成功后才是正常结果。TEST_ONLY 已经接受或拒绝后，如果 topology #3 失败，
+结果升级为 `OPERATION_FAILURE`，但结果中的 test disposition 仍保存先前事实；若随后清理
+失败，则再升级为 `CLEANUP_FAILURE`，同时保留主操作首错、postcondition 首错和清理首错。
+接受 TEST_ONLY 仍不授权 real commit、page-flip 事件、Display Actual RUNNING、画面可见或
+物理证据；结果类型根本没有 real commit、unknown outcome、event/poll、restore、Actual 或
+physical 的可置真字段/枚举值，只保留 `pixel_payload_present=false` 这一条显式边界。本切片
+不接 native libdrm、命令行 runner 或板端收据，也不安装或 export 新 API。
+
+调用状态的分类与优先级固定如下，混合错误只返回先命中的一类：
+
+1. `INVALID_ARGUMENT`：config/request/result 任一为空；这三个定长对象范围重叠；或者请求
+   中 connector/CRTC/plane ID 任一为零；
+2. `INVALID_CONFIG`：device path、Ops 或 context 为空；path 不是容量内的绝对 NUL 结尾
+   字符串；任一必需 callback 缺失；Ops/path 的已知范围与 config/request/result 或彼此
+   重叠；或者 context 基地址落在任一已知范围内。由于 core 不知道 context allocation
+   长度，完整 context-range 隔离仍由回调实现保证。
+
+以上两类都在首个 callback 前结束，result 逐字节不变。普通 `int` callback 只能返回零或
+正 errno；负数属于回调协议违约。带输出的 callback 先收到 sentinel/canary，失败时写过
+输出、成功时返回非法 fd/handle/ID/dumb contract，同样属于协议违约。core 不会把失败分支
+写出的 fd/handle/ID 猜成已取得所有权。`atomic_test_only` 的枚举越界、accepted 却带非零
+error，或 rejected/operation-failed 却没有正 error，也都按 `EPROTO` 记为
+`OPERATION_FAILURE`。只要 TEST_ONLY callback 已被调用，即使它违反返回合同，topology #3
+仍必须尝试；此时 test observation 固定为 `TEST_OPERATION_FAILED_NOT_APPLIED`，
+`test_error=EPROTO`。cleanup callback 的负数也规范化为 `EPROTO`，但不能中断后续清理
+和 terminal close。所有 callback 参数指针仅在该次 callback 调用期间借用，尤其不得保留
+path、topology/dumb/framebuffer 输出、局部 atomic state 或 error 输出指针。
+
+topology #1 或 topology #2 的候选判定出现任意 `BLOCKED`（包括但不限于
+hash/route/target 漂移），都得到清理干净的 `NOT_TESTED`：保留对应 candidate reason，operation stage 为
+`NONE`、operation error 为零，并且 TEST_ONLY 调用计数为零。候选判定器若对 core 自己构造
+的互不重叠对象返回 `INVALID_ARGUMENT`，属于内部协议违约，以 `EPROTO` 升级为
+`OPERATION_FAILURE`。如果 #2 返回 `CANDIDATE_IDENTIFIED`，结果却与同 hash 的 #1 候选
+语义不一致，也按 `EVALUATE_PRETEST_CANDIDATE / EPROTO` 处理，不能产生无原因的
+`NOT_TESTED`。只有 TEST_ONLY 已调用后的 topology #3 读取、候选复核或不一致使用
+独立 postcondition stage；它们把 outcome 升为 `OPERATION_FAILURE`，但不会覆盖先前记录的
+test disposition。具体映射固定为：#3 读取失败使用 `POSTCONDITION_READ_TOPOLOGY` 与
+callback 的正 errno（协议违约则为 `EPROTO`）；判定器返回内部不可达的
+`INVALID_ARGUMENT` 使用 `POSTCONDITION_EVALUATE_CANDIDATE / EPROTO`；合法 `BLOCKED`
+或与 #2 的 topology hash、route、target 语义不一致使用
+`POSTCONDITION_TOPOLOGY_CHANGED / ESTALE`。cleanup 再失败时，最终 outcome 继续升级为
+`CLEANUP_FAILURE`，三个错误轴仍分别保留。
+
 原生 target 由 `MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER=ON` 单独开启；默认构建
 为 OFF。调用方必须同时给出绝对的 `MEISO_K230D_LIBDRM_INCLUDE_DIR` 和
 `MEISO_K230D_LIBDRM_LIBRARY`。CMake 不查 pkg-config、不回退到 Host 系统 libdrm，target

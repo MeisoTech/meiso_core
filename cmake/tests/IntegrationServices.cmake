@@ -66,6 +66,17 @@ if(TARGET meiso_k230d_drm_scanout)
         PRIVATE targets/k230d-linux/adapters
     )
 
+    meiso_add_c_test(
+        meiso_k230d_drm_single_plane_test_only_test
+        tests/test_k230d_drm_single_plane_test_only.c
+        adapter
+        meiso_k230d_drm_scanout
+    )
+    target_include_directories(
+        meiso_k230d_drm_single_plane_test_only_test
+        PRIVATE targets/k230d-linux/adapters
+    )
+
     add_executable(
         meiso_k230d_drm_topology_admission_once_test
         tests/test_k230d_drm_topology_admission_once.c

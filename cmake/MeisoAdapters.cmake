@@ -109,6 +109,7 @@ if(UNIX)
         targets/k230d-linux/adapters/drm_scanout_lifecycle.c
         targets/k230d-linux/adapters/drm_scanout_ops.c
         targets/k230d-linux/adapters/drm_scanout_sha256.c
+        targets/k230d-linux/adapters/drm_scanout_single_plane_test_only.c
     )
     meiso_configure_public_target(
         meiso_k230d_drm_scanout K230dDrmScanout
