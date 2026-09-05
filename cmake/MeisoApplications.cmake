@@ -101,6 +101,7 @@ if(UNIX)
         devtools/display_ingress_simulated_service_frame_input.c
         devtools/display_ingress_simulated_service_host.c
         devtools/display_ingress_simulated_service_loop.c
+        devtools/display_ingress_simulated_pair_runner.c
         devtools/display_ingress_simulated_service_receipt.c
     )
     target_link_libraries(

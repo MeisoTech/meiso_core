@@ -36,7 +36,8 @@ enum {
     SERVICE_PRODUCTION_EPOCH = 1,
     SERVICE_EVIDENCE_STREAM_EPOCH = 3,
     SERVICE_EVIDENCE_STREAM_SEQUENCE = 1,
-    SERVICE_EVIDENCE_CLOCK_EPOCH = 4
+    SERVICE_EVIDENCE_CLOCK_EPOCH = 4,
+    SERVICE_PAIR_INPUT_READY_BYTE = 0xa5
 };
 
 typedef union {
@@ -188,6 +189,25 @@ SERVICE_PRIVATE_API bool service_consume_optional_accept(
 );
 SERVICE_PRIVATE_API void service_cleanup_failure(Service *service);
 SERVICE_PRIVATE_API bool service_run(Service *service);
+
+/*
+ * Runs one fork-isolated role with caller-owned inherited descriptors. The
+ * optional Host-only readiness descriptor is closed on every path; one byte
+ * is written only after DIFI validation/EOF/close and before service_run().
+ */
+SERVICE_PRIVATE_API int service_execute_role(
+    MeisoSessionRole role,
+    const char *role_name,
+    int control_fd,
+    int media_fd,
+    int frame_fd,
+    int readiness_fd
+);
+
+/* Runs the documented single-artifact --pair fixture mode. */
+SERVICE_PRIVATE_API int service_execute_pair(
+    int frame_fd
+);
 
 SERVICE_PRIVATE_API bool service_emit_failure(const Service *service);
 SERVICE_PRIVATE_API bool service_success_ready(const Service *service);

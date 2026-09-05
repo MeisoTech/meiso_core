@@ -26,7 +26,8 @@
 - [Host集成回执](host-integration-receipt-v0.md)：`COMPOSE_/_PROFILE:v1`、MRT0 v4、6/18 graph、
   terminal/fresh-Session和Looking Glass adapter边界；
 - [Display Ingress 本机测试画面输入](../integrations/host/display_ingress_fixture_input.md)：
-  `DIFI/v1` 一次性 Host fixture record、公开 codec、fd 所有权与 fail-closed 输入边界；
+  `DIFI/v1` 一次性 Host fixture record、公开 codec、fd 所有权、fail-closed 输入边界，以及
+  单程序的受控 Host/Edge pair 入口；
 - [Host/Edge并行模型](development-model.md)：双方如何依赖同一Profile、simulator和conformance；
 - [Composition Edge trace v1](composition-edge-trace-v1.md)：bounded canonical trace与replay。
 - [Composition Editor](../devtools/web/composition_editor/README.md)：loopback-only local draft、

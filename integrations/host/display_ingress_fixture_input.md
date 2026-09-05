@@ -155,6 +155,64 @@ Failure:      schema, role, status, plane, stage, carrier,
 精确拒绝类别由 codec status 与测试矩阵证明，不成为第二套 wire 合同。已识别角色运行失败
 返回 1；参数非法仍只在 stderr 输出 `E_ARGUMENT`、不产生 stdout 并返回 2。
 
+## 受控 Host/Edge pair 模式
+
+同一个未安装的本机证据程序还提供一条更窄的公开入口：
+
+```text
+/absolute/path/meiso_display_ingress_simulated_service --pair --frame-fd N
+```
+
+程序路径必须是绝对路径。`N` 必须大于等于 3，并且是调用方已经连接、已经设为非阻塞的
+`AF_UNIX SOCK_STREAM` 读端。调用方继续拥有另一端，负责写入恰好一条 `DIFI/v1` 记录并用
+EOF 结束；pair 模式从参数验证成功开始拥有传入的读端，在所有成功或失败路径恰好关闭一次，
+也不会向调用方写逐帧确认。
+
+pair 父进程不读取、不缓存也不重编码 DIFI 像素。它先创建全新的 IPv4 回环 TCP 连接、全新的
+connected UDP 四元组和一条内部单向 readiness pipe，再把调用方的 frame fd 唯一转移给 Host
+子进程并立即关闭自己的副本。Host 仍使用上一节唯一 reader；它完整验证记录、看到明确 EOF、
+关闭 frame fd 后，并且在调用 `service_run()` 或写任何 control byte 以前，向 readiness pipe
+写一个固定字节。这个内部字节只表示 Host 输入已验证且 fd 已关闭，不是画面、送达或业务 ACK，
+也不出现在 stdout 或收据里。
+
+pair 父进程只有收到该字节以后才 `fork` Edge，因此父进程和 Edge 从未持有或读取 RGBA，Edge
+也不可能继承 frame fd。父进程自己不创建 Session、Runtime、Profile binding 或媒体对象。
+它在没有 worker thread、没有待刷新的 stdio 输出时 `fork` 两个真实子进程；子进程直接调用
+同一已加载程序映像中的共享 role entry，不在 pair 内再次 `exec`。现有 `--role host|edge`
+入口及其独立 `fork/exec` 测试仍保留。
+
+新建 socket、capture pipe 和 readiness pipe 初始都带 close-on-exec；直接 `fork` 不会执行
+close-on-exec，所以每个子进程仍必须显式关闭不属于自己的全部描述符。父进程用一个不会因输入
+或输出进展而重置的总期限，在等待 readiness 时也监控 Host 退出并 drain 其 stdout/stderr；
+Edge 启动后继续同时 drain 两个子进程，并以非阻塞 `waitpid` 回收。超时或任何中途错误都终止
+并回收所有已启动的子进程。read、write、poll 与 waitpid 等等待/收集调用遇到 `EINTR`
+时重试；close 仍只调用一次。`POLLHUP` 先 drain，`SIGPIPE` 不得终止父进程。
+
+成功以前，pair 必须确认两侧都以 0 退出、stderr 为空、stdout 各恰好一条本页定义的 V2
+收据；随后交叉核对完整 SessionId、catalog/Desired/Actual/production/media epoch、画面几何、
+sequence、source time、deadline、drop high-water、输入/接收/证据 SHA、模拟证据类别、
+connector、UDP 武装顺序和 clean shutdown。只有全部相等且符合固定值以后，pair stdout 才写
+一条 canonical 聚合收据：
+
+```text
+Success: schema, status, host, edge, fixture_only,
+         physical_evidence, link_security, clean_shutdown
+Failure: schema, status, stage, fixture_only,
+         physical_evidence, link_security, clean_shutdown
+```
+
+成功 schema 是 `DISPLAY_INGRESS_SIMULATED_PAIR_RECEIPT_V1`，`status="SUCCESS"`；`host` 与
+`edge` 是已验证并去掉末尾换行的完整 V2 JSON 对象，顺序固定为 Host 后 Edge；最后四项固定
+为 `true, false, false, true`。已识别的运行失败使用同一 schema、`status="FAILURE"`，stage
+只允许 `input`、`bootstrap`、`child`、`receipt` 或 `timeout`，最后四项固定为
+`true, false, false, false`。失败不得透传子进程的半条或未验证 stdout。参数错误仍不产生
+JSON，只输出 `E_ARGUMENT` 并返回 2；运行失败返回 1，成功返回 0。
+
+这条聚合收据只是把两个本机 fixture 结果做严格配对，不是业务 ACK，也不是物理呈现证据。
+pair 模式不安装、不导出公共库，不声明内部使用了 `exec`，也不声明当前可执行文件的 SHA-256、
+ELF 身份或“由某个源码 commit 构建”。这些 artifact 与源码的因果关系必须由外部构建证明和
+后续调用方单独校验。
+
 ## 明确未完成
 
 本合同只服务受控 fixture E2E。它不建立产品级 Host ingress、连续 frame queue、背压策略、

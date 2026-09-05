@@ -517,6 +517,102 @@ static bool spawn_role(
     return true;
 }
 
+static bool spawn_pair(
+    const char *program,
+    const char *argument_zero,
+    int frame_fd,
+    int close_frame_fd,
+    bool inherit_frame_fd,
+    bool ignore_sigchld,
+    Child *out_child
+)
+{
+    int stdout_pipe[2] = {-1, -1};
+    int stderr_pipe[2] = {-1, -1};
+    char frame_text[32U];
+    pid_t pid;
+
+    if (program == NULL || argument_zero == NULL || frame_fd < 3 ||
+        out_child == NULL) {
+        return false;
+    }
+    memset(out_child, 0, sizeof(*out_child));
+    out_child->pid = -1;
+    out_child->stdout_fd = -1;
+    out_child->stderr_fd = -1;
+    out_child->exit_code = -1;
+    if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0 ||
+        !set_close_on_exec(stdout_pipe[0]) ||
+        !set_close_on_exec(stdout_pipe[1]) ||
+        !set_close_on_exec(stderr_pipe[0]) ||
+        !set_close_on_exec(stderr_pipe[1])) {
+        close_fd(&stdout_pipe[0]);
+        close_fd(&stdout_pipe[1]);
+        close_fd(&stderr_pipe[0]);
+        close_fd(&stderr_pipe[1]);
+        return false;
+    }
+    (void)snprintf(frame_text, sizeof(frame_text), "%d", frame_fd);
+    pid = fork();
+    if (pid < 0) {
+        close_fd(&stdout_pipe[0]);
+        close_fd(&stdout_pipe[1]);
+        close_fd(&stderr_pipe[0]);
+        close_fd(&stderr_pipe[1]);
+        return false;
+    }
+    if (pid == 0) {
+        struct sigaction child_action;
+
+        (void)close(stdout_pipe[0]);
+        (void)close(stderr_pipe[0]);
+        if (close_frame_fd >= 0 && close_frame_fd != frame_fd) {
+            (void)close(close_frame_fd);
+        }
+        if (dup2(stdout_pipe[1], STDOUT_FILENO) < 0 ||
+            dup2(stderr_pipe[1], STDERR_FILENO) < 0) {
+            _exit(126);
+        }
+        (void)close(stdout_pipe[1]);
+        (void)close(stderr_pipe[1]);
+        if (inherit_frame_fd && !clear_close_on_exec(frame_fd)) {
+            _exit(126);
+        }
+        if (ignore_sigchld) {
+            memset(&child_action, 0, sizeof(child_action));
+            child_action.sa_handler = SIG_IGN;
+            if (sigemptyset(&child_action.sa_mask) != 0 ||
+                sigaction(SIGCHLD, &child_action, NULL) != 0) {
+                _exit(126);
+            }
+        }
+        execl(
+            program,
+            argument_zero,
+            "--pair",
+            "--frame-fd",
+            frame_text,
+            (char *)NULL
+        );
+        _exit(127);
+    }
+    close_fd(&stdout_pipe[1]);
+    close_fd(&stderr_pipe[1]);
+    if (!set_nonblocking(stdout_pipe[0]) ||
+        !set_nonblocking(stderr_pipe[0])) {
+        (void)kill(pid, SIGKILL);
+        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {
+        }
+        close_fd(&stdout_pipe[0]);
+        close_fd(&stderr_pipe[0]);
+        return false;
+    }
+    out_child->pid = pid;
+    out_child->stdout_fd = stdout_pipe[0];
+    out_child->stderr_fd = stderr_pipe[0];
+    return true;
+}
+
 static bool drain_output(
     int *fd,
     char output[OUTPUT_CAPACITY],
@@ -681,19 +777,21 @@ static bool lowercase_hex_64(const char *value)
     return true;
 }
 
-static bool success_receipt_valid(
-    const char *receipt,
+static bool format_success_receipt(
+    char expected[2048U],
     const char *role,
     const char *session
 )
 {
-    char expected[2048U];
     int size;
 
+    if (expected == NULL || role == NULL || session == NULL) {
+        return false;
+    }
     if (strcmp(role, "host") == 0) {
         size = snprintf(
             expected,
-            sizeof(expected),
+            2048U,
             "{\"schema\":\"DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2\","
             "\"role\":\"host\",\"status\":\"SUCCESS\","
             "\"frame_input\":\"DIFI/v1\","
@@ -726,7 +824,7 @@ static bool success_receipt_valid(
     } else {
         size = snprintf(
             expected,
-            sizeof(expected),
+            2048U,
             "{\"schema\":\"DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2\","
             "\"role\":\"edge\",\"status\":\"SUCCESS\","
             "\"session_id\":\"%s\",\"catalog_generation\":1,"
@@ -757,7 +855,19 @@ static bool success_receipt_valid(
             FRAME_SHA256_HEX
         );
     }
-    return size > 0 && (size_t)size < sizeof(expected) &&
+    return size > 0 && (size_t)size < 2048U;
+}
+
+static bool success_receipt_valid(
+    const char *receipt,
+    const char *role,
+    const char *session
+)
+{
+    char expected[2048U];
+
+    return receipt != NULL &&
+        format_success_receipt(expected, role, session) &&
         strcmp(receipt, expected) == 0;
 }
 
@@ -855,6 +965,266 @@ done:
     close_fd(&frame[1]);
     if (!ok) {
         terminate_children(children, 2U);
+    }
+    return ok;
+}
+
+static bool pair_success_receipt_valid(
+    const char *receipt,
+    const char *session
+)
+{
+    char host[2048U];
+    char edge[2048U];
+    char expected[4096U];
+    size_t host_size;
+    size_t edge_size;
+    int size;
+
+    if (receipt == NULL || session == NULL ||
+        !format_success_receipt(host, "host", session) ||
+        !format_success_receipt(edge, "edge", session)) {
+        return false;
+    }
+    host_size = strlen(host);
+    edge_size = strlen(edge);
+    if (host_size < 2U || edge_size < 2U ||
+        host[host_size - 1U] != '\n' || edge[edge_size - 1U] != '\n') {
+        return false;
+    }
+    host[host_size - 1U] = '\0';
+    edge[edge_size - 1U] = '\0';
+    size = snprintf(
+        expected,
+        sizeof(expected),
+        "{\"schema\":\"DISPLAY_INGRESS_SIMULATED_PAIR_RECEIPT_V1\","
+        "\"status\":\"SUCCESS\",\"host\":%s,\"edge\":%s,"
+        "\"fixture_only\":true,\"physical_evidence\":false,"
+        "\"link_security\":false,\"clean_shutdown\":true}\n",
+        host,
+        edge
+    );
+    return size > 0 && (size_t)size < sizeof(expected) &&
+        strcmp(receipt, expected) == 0;
+}
+
+static bool run_pair_happy_once(
+    const char *program,
+    char out_session_id[65U],
+    bool inherit_ignored_sigchld
+)
+{
+    int frame[2] = {-1, -1};
+    uint8_t record[FRAME_RECORD_BYTES];
+    Child child;
+    bool spawned = false;
+    bool collected = false;
+    bool ok = false;
+
+    memset(&child, 0, sizeof(child));
+    child.pid = -1;
+    child.stdout_fd = -1;
+    child.stderr_fd = -1;
+    if (!make_frame_pair(frame) || !make_frame_record(record) ||
+        !spawn_pair(
+            program,
+            program,
+            frame[0],
+            frame[1],
+            true,
+            inherit_ignored_sigchld,
+            &child
+        )) {
+        goto done;
+    }
+    spawned = true;
+    close_fd(&frame[0]);
+    if (!send_frame_record_fragmented_and_eof(frame[1], record) ||
+        !wait_for_peer_close(frame[1])) {
+        goto done;
+    }
+    close_fd(&frame[1]);
+    collected = collect_child(&child);
+    if (!collected || child.exit_code != 0 ||
+        child.stderr_bytes[0] != '\0' || !extract_session_id(
+            child.stdout_bytes, out_session_id
+        ) || !lowercase_hex_64(out_session_id) ||
+        !pair_success_receipt_valid(child.stdout_bytes, out_session_id)) {
+        goto done;
+    }
+    ok = true;
+
+done:
+    close_fd(&frame[0]);
+    close_fd(&frame[1]);
+    if (spawned && !collected) {
+        terminate_children(&child, 1U);
+    }
+    return ok;
+}
+
+static bool pair_failure_receipt_valid(
+    const Child *child,
+    const char *stage
+)
+{
+    char expected[512U];
+    int size;
+
+    if (child == NULL || stage == NULL || child->exit_code != 1 ||
+        child->stderr_bytes[0] != '\0') {
+        return false;
+    }
+    size = snprintf(
+        expected,
+        sizeof(expected),
+        "{\"schema\":\"DISPLAY_INGRESS_SIMULATED_PAIR_RECEIPT_V1\","
+        "\"status\":\"FAILURE\",\"stage\":\"%s\","
+        "\"fixture_only\":true,\"physical_evidence\":false,"
+        "\"link_security\":false,\"clean_shutdown\":false}\n",
+        stage
+    );
+    return size > 0 && (size_t)size < sizeof(expected) &&
+        strcmp(child->stdout_bytes, expected) == 0;
+}
+
+static bool run_pair_input_failure_case(
+    const char *program,
+    const uint8_t *bytes,
+    size_t size,
+    bool send_eof
+)
+{
+    int frame[2] = {-1, -1};
+    Child child;
+    bool spawned = false;
+    bool collected = false;
+    bool ok = false;
+
+    memset(&child, 0, sizeof(child));
+    child.pid = -1;
+    child.stdout_fd = -1;
+    child.stderr_fd = -1;
+    if (!make_frame_pair(frame) ||
+        !spawn_pair(
+            program, program, frame[0], frame[1], true, false, &child
+        )) {
+        goto done;
+    }
+    spawned = true;
+    close_fd(&frame[0]);
+    if (!send_bytes(frame[1], bytes, size) ||
+        (send_eof && shutdown(frame[1], SHUT_WR) != 0)) {
+        goto done;
+    }
+    collected = collect_child(&child);
+    ok = collected && pair_failure_receipt_valid(&child, "input") &&
+        wait_for_peer_close(frame[1]);
+
+done:
+    close_fd(&frame[0]);
+    close_fd(&frame[1]);
+    if (spawned && !collected) {
+        terminate_children(&child, 1U);
+    }
+    return ok;
+}
+
+static bool run_pair_input_failure_matrix(const char *program)
+{
+    uint8_t record[FRAME_RECORD_BYTES + 1U];
+
+    CHECK(make_frame_record(record));
+    CHECK(run_pair_input_failure_case(program, record, 0U, true));
+    CHECK(run_pair_input_failure_case(program, record, 64U, true));
+    CHECK(run_pair_input_failure_case(
+        program, record, FRAME_RECORD_BYTES, false
+    ));
+
+    CHECK(make_frame_record(record));
+    record[FRAME_RECORD_BYTES] = 0x6dU;
+    CHECK(run_pair_input_failure_case(
+        program, record, sizeof(record), true
+    ));
+
+    CHECK(make_frame_record(record));
+    record[MEISO_DISPLAY_INGRESS_HOST_FIXTURE_INPUT_HEADER_WIRE_SIZE] ^= 1U;
+    CHECK(run_pair_input_failure_case(
+        program, record, FRAME_RECORD_BYTES, true
+    ));
+    return true;
+}
+
+static bool run_pair_argument_failure(const char *program)
+{
+    int frame[2] = {-1, -1};
+    Child child;
+    bool spawned = false;
+    bool collected = false;
+    bool ok = false;
+
+    memset(&child, 0, sizeof(child));
+    child.pid = -1;
+    child.stdout_fd = -1;
+    child.stderr_fd = -1;
+    if (!make_frame_pair(frame) || !spawn_pair(
+            program,
+            "relative-program",
+            frame[0],
+            frame[1],
+            true,
+            false,
+            &child
+        )) {
+        goto done;
+    }
+    spawned = true;
+    close_fd(&frame[0]);
+    close_fd(&frame[1]);
+    collected = collect_child(&child);
+    ok = collected && child.exit_code == 2 &&
+        child.stdout_bytes[0] == '\0' &&
+        strcmp(child.stderr_bytes, "E_ARGUMENT\n") == 0;
+
+done:
+    close_fd(&frame[0]);
+    close_fd(&frame[1]);
+    if (spawned && !collected) {
+        terminate_children(&child, 1U);
+    }
+    return ok;
+}
+
+static bool run_pair_closed_fd_failure(const char *program)
+{
+    Child child;
+    int closed_fd;
+    bool spawned = false;
+    bool collected = false;
+    bool ok = false;
+
+    memset(&child, 0, sizeof(child));
+    child.pid = -1;
+    child.stdout_fd = -1;
+    child.stderr_fd = -1;
+    closed_fd = fcntl(STDERR_FILENO, F_DUPFD, 64);
+    if (closed_fd < 64 || close(closed_fd) != 0 ||
+        fcntl(closed_fd, F_GETFD) >= 0 || errno != EBADF || !spawn_pair(
+            program,
+            program,
+            closed_fd,
+            -1,
+            false,
+            false,
+            &child
+        )) {
+        return false;
+    }
+    spawned = true;
+    collected = collect_child(&child);
+    ok = collected && pair_failure_receipt_valid(&child, "input");
+    if (spawned && !collected) {
+        terminate_children(&child, 1U);
     }
     return ok;
 }
@@ -1115,6 +1485,76 @@ static bool make_unix_datagram_pair(int pair[2])
         close_fd(&pair[1]);
         return false;
     }
+    return true;
+}
+
+static bool run_one_pair_invalid_frame_fd(
+    const char *program,
+    int *wrong_fd,
+    int *peer_fd,
+    bool expect_stream_close
+)
+{
+    Child child;
+    bool spawned = false;
+    bool collected = false;
+    bool ok = false;
+
+    memset(&child, 0, sizeof(child));
+    child.pid = -1;
+    child.stdout_fd = -1;
+    child.stderr_fd = -1;
+    if (wrong_fd == NULL || *wrong_fd < 3 || !spawn_pair(
+            program,
+            program,
+            *wrong_fd,
+            peer_fd != NULL ? *peer_fd : -1,
+            true,
+            false,
+            &child
+        )) {
+        goto done;
+    }
+    spawned = true;
+    close_fd(wrong_fd);
+    collected = collect_child(&child);
+    ok = collected && pair_failure_receipt_valid(&child, "input") &&
+        (!expect_stream_close ||
+         (peer_fd != NULL && wait_for_peer_close(*peer_fd)));
+
+done:
+    close_fd(wrong_fd);
+    if (peer_fd != NULL) {
+        close_fd(peer_fd);
+    }
+    if (spawned && !collected) {
+        terminate_children(&child, 1U);
+    }
+    return ok;
+}
+
+static bool run_pair_invalid_frame_fd_failure(const char *program)
+{
+    int descriptors[2] = {-1, -1};
+    int unconnected = -1;
+
+    CHECK(make_frame_pair(descriptors));
+    CHECK(clear_nonblocking(descriptors[0]));
+    CHECK(run_one_pair_invalid_frame_fd(
+        program, &descriptors[0], &descriptors[1], true
+    ));
+
+    CHECK(make_unix_datagram_pair(descriptors));
+    CHECK(run_one_pair_invalid_frame_fd(
+        program, &descriptors[0], &descriptors[1], false
+    ));
+
+    unconnected = socket(AF_UNIX, SOCK_STREAM, 0);
+    CHECK(unconnected >= 3 && set_nonblocking(unconnected) &&
+          set_close_on_exec(unconnected));
+    CHECK(run_one_pair_invalid_frame_fd(
+        program, &unconnected, NULL, false
+    ));
     return true;
 }
 
@@ -1424,6 +1864,8 @@ int main(int argc, char **argv)
 {
     char first_session[65U];
     char second_session[65U];
+    char first_pair_session[65U];
+    char second_pair_session[65U];
     UdpTuple first_tuple;
     UdpTuple second_tuple;
     int first_udp[2] = {-1, -1};
@@ -1451,7 +1893,14 @@ int main(int argc, char **argv)
         run_input_failure_matrix(argv[1]) &&
         run_control_bootstrap_failure(argv[1]) &&
         run_media_bootstrap_failure(argv[1]) &&
-        run_post_arm_control_loss(argv[1]);
+        run_post_arm_control_loss(argv[1]) &&
+        run_pair_happy_once(argv[1], first_pair_session, true) &&
+        run_pair_happy_once(argv[1], second_pair_session, false) &&
+        strcmp(first_pair_session, second_pair_session) != 0 &&
+        run_pair_input_failure_matrix(argv[1]) &&
+        run_pair_invalid_frame_fd_failure(argv[1]) &&
+        run_pair_argument_failure(argv[1]) &&
+        run_pair_closed_fd_failure(argv[1]);
     close_fd(&first_udp[0]);
     close_fd(&first_udp[1]);
     close_fd(&second_udp[0]);

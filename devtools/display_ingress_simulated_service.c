@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 typedef struct {
     MeisoSessionRole role;
@@ -18,6 +19,21 @@ typedef struct {
 } Arguments;
 
 static Service service_storage;
+
+static bool signal_input_ready(int *readiness_fd)
+{
+    static const uint8_t READY = SERVICE_PAIR_INPUT_READY_BYTE;
+    ssize_t count;
+
+    if (readiness_fd == NULL || *readiness_fd < 0) {
+        return true;
+    }
+    do {
+        count = write(*readiness_fd, &READY, sizeof(READY));
+    } while (count < 0 && errno == EINTR);
+    service_close_fd(readiness_fd);
+    return count == (ssize_t)sizeof(READY);
+}
 
 static bool parse_fd(const char *text, int *out_fd)
 {
@@ -96,28 +112,36 @@ static bool parse_arguments(int argc, char **argv, Arguments *out_arguments)
     return true;
 }
 
-int main(int argc, char **argv)
+int service_execute_role(
+    MeisoSessionRole role,
+    const char *role_name,
+    int control_fd,
+    int media_fd,
+    int frame_fd,
+    int readiness_fd
+)
 {
-    Arguments arguments;
     bool success;
     bool receipt_written;
 
-    if (!parse_arguments(argc, argv, &arguments)) {
-        fputs("E_ARGUMENT\n", stderr);
-        return 2;
-    }
     memset(&service_storage, 0, sizeof(service_storage));
-    service_storage.control_fd = arguments.control_fd;
-    service_storage.media_fd = arguments.media_fd;
-    service_storage.frame_fd = arguments.frame_fd;
-    service_storage.role = arguments.role;
-    service_storage.role_name = arguments.role_name;
+    service_storage.control_fd = control_fd;
+    service_storage.media_fd = media_fd;
+    service_storage.frame_fd = frame_fd;
+    service_storage.role = role;
+    service_storage.role_name = role_name;
     if (service_storage.role == MEISO_SESSION_ROLE_HOST) {
         success = service_read_host_fixture_input(&service_storage);
         service_close_fd(&service_storage.frame_fd);
+        if (success && !signal_input_ready(&readiness_fd)) {
+            success = service_fail(
+                &service_storage, "application", "bootstrap"
+            );
+        }
     } else {
         success = true;
     }
+    service_close_fd(&readiness_fd);
     if (success) {
         success = service_run(&service_storage);
     }
@@ -138,4 +162,29 @@ int main(int argc, char **argv)
         receipt_written = service_emit_failure(&service_storage);
     }
     return success && receipt_written ? 0 : 1;
+}
+
+int main(int argc, char **argv)
+{
+    Arguments arguments;
+    int frame_fd = -1;
+
+    if (argc == 4 && argv != NULL && argv[0] != NULL &&
+        argv[0][0] == '/' && strcmp(argv[1], "--pair") == 0 &&
+        strcmp(argv[2], "--frame-fd") == 0 &&
+        parse_fd(argv[3], &frame_fd)) {
+        return service_execute_pair(frame_fd);
+    }
+    if (!parse_arguments(argc, argv, &arguments)) {
+        fputs("E_ARGUMENT\n", stderr);
+        return 2;
+    }
+    return service_execute_role(
+        arguments.role,
+        arguments.role_name,
+        arguments.control_fd,
+        arguments.media_fd,
+        arguments.frame_fd,
+        -1
+    );
 }

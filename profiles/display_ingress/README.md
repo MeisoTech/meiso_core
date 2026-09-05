@@ -262,11 +262,19 @@ binding 和 connected UDP 路径。成功收据升级为
 `DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2`，但仍只是 fixture 运行结果，不是业务 ACK
 或实屏证据。
 
-本机证据程序 `meiso_display_ingress_simulated_service` 只接受调用方传入的两个已连接、
-非阻塞 socket：`--control-fd` 是 TCP 控制通道，`--media-fd` 是 UDP 画面通道；`--role`
-精确选择 `host` 或 `edge`。程序不监听端口、不发现对端、不重连、不创建线程，也不安装
-为产品可执行文件。测试启动器为每次运行创建新的 IPv4 回环 TCP 连接和全新 UDP 四元组
-（本地 IP/端口与对端 IP/端口），然后 `fork/exec` 两个真实进程。
+本机证据程序 `meiso_display_ingress_simulated_service` 的 `--role` 入口只接受调用方传入的
+两个已连接、非阻塞 socket：`--control-fd` 是 TCP 控制通道，`--media-fd` 是 UDP 画面通道；
+`--role` 精确选择 `host` 或 `edge`。在这个入口中，角色进程不监听端口、不发现对端、不重连、
+不创建线程；程序也不安装为产品可执行文件。测试启动器为每次运行创建新的 IPv4 回环 TCP
+连接和全新 UDP 四元组（本地 IP/端口与对端 IP/端口），然后 `fork/exec` 两个真实进程。
+
+同一程序另有 [Host 输入合同](../../integrations/host/display_ingress_fixture_input.md) 拥有的
+`--pair --frame-fd` 本机入口。它先建立尚未运行协议的私有 TCP/UDP 描述符，实际 DIFI 读取仍
+只发生在 Host 子进程。Host 在任何 control byte 前用内部单向 pipe 通知父进程输入已验证且
+外部 fd 已关闭，父进程收到后才 `fork` Edge。在没有 worker thread 的父进程中，两个
+子进程直接调用同一已加载程序映像的共享角色入口；pair 内部不再次 `exec`，父进程也不创建
+Runtime 或媒体对象。成功只输出一条内嵌两份已验证 V2 角色收据的 pair 聚合结果；它仍是
+fixture-only、非物理、非安全证据。
 
 两个角色都使用真实会话协议（wire magic `MSL0`，定义见
 [Session Core](../../docs/session-core-v0.md)）、资源运行时协议（wire magic `MRT0`，定义见
