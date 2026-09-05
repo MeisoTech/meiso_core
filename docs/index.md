@@ -40,8 +40,9 @@
   [direct-IP MediaStream](media-stream-direct-ip.md)；
 - [Display Ingress Profile](../profiles/display_ingress/README.md)：Host 到 Edge 实屏链路的
   单 endpoint、完整帧和异步呈现证据合同；四 route Catalog、Desired/Actual、呈现证据
-  codec、一次 RUNNING 数据门与 DATA route 的有界媒体 transport 已实现并通过纯内存合同
-  测试，carrier、Host/Edge service 接线与物理 E2E 尚未完成；
+  codec、一次 RUNNING 数据门、有界媒体 transport 和受控 connected UDP adapter 已实现；
+  现已接通两个本机进程上的真实协议、模拟画面源和内存显示接收端；产品进程、K230D、带安全
+  保护的 carrier 与物理 E2E 尚未完成；
 - [K230D Linux Edge基线](k230d-linux-edge-development-baseline.md)与
   [target入口](../targets/k230d-linux/README.md)；
 - [Edge local compositor](edge-local-compositor-v0.md)：已验CPU offscreen合成与尚未验物理present的分界。

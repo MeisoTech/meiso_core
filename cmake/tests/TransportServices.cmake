@@ -20,6 +20,31 @@ meiso_add_c_test(
 )
 
 if(UNIX)
+    if(TARGET meiso_display_ingress_simulated_service)
+        add_executable(
+            meiso_display_ingress_simulated_service_test
+            tests/test_display_ingress_simulated_service.c
+        )
+        add_dependencies(
+            meiso_display_ingress_simulated_service_test
+            meiso_display_ingress_simulated_service
+        )
+        meiso_enable_warnings(meiso_display_ingress_simulated_service_test)
+        meiso_set_target_folder(
+            meiso_display_ingress_simulated_service_test
+            "Meiso/Tests/service"
+        )
+        meiso_register_target_test(
+            meiso_display_ingress_simulated_service_test
+            "service"
+            $<TARGET_FILE:meiso_display_ingress_simulated_service>
+        )
+        set_tests_properties(
+            meiso_display_ingress_simulated_service_test
+            PROPERTIES TIMEOUT 60
+        )
+    endif()
+
     add_executable(
         meiso_composition_media_posix_tcp_test
         tests/test_composition_media_posix_tcp.c

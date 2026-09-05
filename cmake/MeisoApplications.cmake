@@ -92,6 +92,28 @@ if(MEISO_BUILD_K230D_LINUX_APPS AND
 endif()
 
 if(UNIX)
+    add_executable(
+        meiso_display_ingress_simulated_service
+        devtools/display_ingress_simulated_service.c
+        devtools/display_ingress_simulated_service_bootstrap.c
+        devtools/display_ingress_simulated_service_control.c
+        devtools/display_ingress_simulated_service_edge.c
+        devtools/display_ingress_simulated_service_host.c
+        devtools/display_ingress_simulated_service_loop.c
+        devtools/display_ingress_simulated_service_receipt.c
+    )
+    target_link_libraries(
+        meiso_display_ingress_simulated_service
+        PRIVATE
+            meiso_posix_tcp_adapter
+            meiso_display_ingress_media_posix_udp_adapter
+    )
+    meiso_enable_warnings(meiso_display_ingress_simulated_service)
+    meiso_set_target_folder(
+        meiso_display_ingress_simulated_service
+        "Meiso/Applications/Lab"
+    )
+
     set(
         MEISO_FOUR_KIND_LAB_APPLICATION_SOURCES
         devtools/four_kind_lab/four_kind_lab.c

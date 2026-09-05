@@ -1,9 +1,10 @@
 # Display Ingress Profile
 
-> 状态：Profile Catalog、State、呈现证据合同和媒体传输已经实现；本切片增加受控的、
-> 未认证且未加密的 UDP 搬运适配器。Linux 显示选择与资源状态逻辑已通过主机测试，但
-> 最终带身份认证、机密性与完整性保护的网络承载、Host/Edge service 接线、真实设备和
-> 物理端到端路径尚未完成。DRM/KMS 指 Linux 内核的显示管理和模式设置接口。
+> 状态：Profile Catalog、State、呈现证据合同、媒体传输和受控的未认证 UDP 搬运适配器
+> 已经实现。现在也已把相同协议接入两个独立本机进程，以模拟画面源和内存显示接收端验证
+> 进程接线；它不接 Looking Glass、K230D 或真实显示设备。最终带身份认证、机密性与
+> 完整性保护的网络承载、真实 Host/Edge service 和物理端到端路径尚未完成。DRM/KMS 指
+> Linux 内核的显示管理和模式设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
 
@@ -97,7 +98,7 @@ Runtime 公共 prefix 中的 enabled
 
 因此 Desired Resource 的最大 payload 是 Runtime 8-byte prefix 加 12-byte suffix，共 20 bytes；
 Actual Resource 是 56-byte prefix 加 32-byte suffix，共 88 bytes。Evidence payload 固定 64
-bytes。disabled Desired 仍携带完整有效 envelope，方便 fresh Session 重发当前配置。
+bytes。关闭状态的 Desired 仍携带完整有效外壳，方便全新会话重发当前配置。
 
 宽、高和帧率共同决定帧校验、buffer budget 与生产代际，不能拆成三个会产生不完整中间
 组合的 State。亮度、光学、布局和其他普通显示调节不属于这个 State；未来应使用独立窄
@@ -140,7 +141,7 @@ Profile 校验，成功才可调用 StateReplica，并把 `RECEIVE_NEW` 交给
 `MEISO_STATE_RECEIVE_INVALID` 调用 Runtime commit 清理该次 pending，绝不能作为
 `RECEIVE_NEW` 提交。Runtime 本身把 suffix 当 opaque bytes，不能替代这一步。
 
-每个 fresh Session 或 production epoch 只支付一次
+每个全新会话或一次生产周期（production epoch）只支付一次
 `Desired -> Actual RUNNING -> Host 本地提交该 Actual` 数据门。Host 收到 Actual 后必须依次
 完成 Profile 校验、StateReplica `RECEIVE_NEW`，再让
 `meiso_runtime_commit_state_receive(..., MEISO_STATE_RECEIVE_NEW)` 成功；三步全部完成后即可
@@ -222,7 +223,7 @@ OPEN/BIND 往返。Resource descriptor 本身不进入 DIFR；`catalog generatio
 
 ### 受控普通 UDP 行为路径
 
-这里的普通 UDP 指未加认证或加密的 UDP。本切片的 UDP 搬运适配器使用调用方已经创建、
+这里的普通 UDP 指未加认证或加密的 UDP。这个 UDP 搬运适配器使用调用方已经创建、
 连接并设为非阻塞（暂时无数据时立即返回）的 IPv4/IPv6 UDP socket。
 一个完整 `DIFR` packet 精确对应一个 UDP datagram；不增加 OPEN/BIND、业务 ACK、重传、排序
 或第二个 Core Session。Host 媒体侧只发送，Edge 媒体侧只接收。一次成功的 `send` 只表示
@@ -234,17 +235,82 @@ datagram 大于接收缓冲”标志）检出并整包丢弃，不能把截断 p
 丢失、重复和乱序只影响当前 partial frame；后续完整帧从新的 `RECOVERY|BEGIN` 恢复，
 不等待旧帧补传。
 
-当前自动测试只在同一进程内通过 IPv4/IPv6 本机回环地址搬运，尚未证明跨进程或真实网络。
-这个 UDP 适配器只用于受控行为验证和端到端初次打通。socket 固定对端地址不等于验证
+UDP 适配器自己的单元测试只在同一进程内通过 IPv4/IPv6 本机回环地址搬运；下一节另用
+两个真实进程证明同机接线。两者都没有证明跨机器真实网络。这个 UDP 适配器只用于受控
+行为验证和端到端初次打通。socket 固定对端地址不等于验证
 发送者身份；它不提供 Link 要求的身份认证、机密性、完整性或防重放，也不提供拥塞控制、
 自动存活检测、网络路径迁移或弱网性能保证。
 因此它不是最终产品 carrier，不能据此声称 Link 安全或完整 E2E 已关闭。
 
-每个 fresh Session 和媒体对象必须使用 fresh connected UDP 4-tuple（本地 IP/端口 +
-对端 IP/端口），并创建新的媒体 transport/adapter arena；不支持旧 4-tuple 复用、resume
+每个全新会话对象（Session）和媒体对象必须使用全新的 connected UDP 四元组（本地 IP/端口 +
+对端 IP/端口），并创建新的媒体 transport/adapter 内存区；不支持旧四元组复用、断点续用
 或跨 Session 残留队列继承。按本 Profile 已冻结的 fail-closed 规则，若旧 scope datagram
 仍到达新对象，Session/catalog/endpoint/epoch/nonce 任一不匹配都会终止该媒体对象；
 适配器不得把它静默降级成普通丢包。
+
+### 受控双进程模拟 service
+
+本机证据程序 `meiso_display_ingress_simulated_service` 只接受调用方传入的两个已连接、
+非阻塞 socket：`--control-fd` 是 TCP 控制通道，`--media-fd` 是 UDP 画面通道；`--role`
+精确选择 `host` 或 `edge`。程序不监听端口、不发现对端、不重连、不创建线程，也不安装
+为产品可执行文件。测试启动器为每次运行创建新的 IPv4 回环 TCP 连接和全新 UDP 四元组
+（本地 IP/端口与对端 IP/端口），然后 `fork/exec` 两个真实进程。
+
+两个角色都使用真实会话协议（wire magic `MSL0`，定义见
+[Session Core](../../docs/session-core-v0.md)）、资源运行时协议（wire magic `MRT0`，定义见
+[Runtime](../../docs/runtime.md)）、本页 Display Ingress Profile 和 POSIX socket adapter。
+所谓“模拟”只表示 Host 产生一张确定性测试画面、Edge 用内存显示接收端验证其 SHA-256，并发布
+`SIMULATED + UNSPECIFIED` 呈现证据；它不允许手工拼接控制帧或媒体 packet。Edge 收到并
+提交合法 Desired 后，先把本地 RUNNING Actual 排入 Runtime；随后必须从同一个 Runtime
+导出媒体绑定身份（binding）并成功初始化 UDP 接收对象，才允许事件循环把该 Actual 写入 TCP。
+Host 收到 Actual 后严格执行 Profile 校验、本地状态副本（StateReplica）的 `RECEIVE_NEW` 和
+Runtime 提交，再从 Runtime 导出媒体绑定身份并发送媒体；本证据程序不发送也不等待
+State 送达确认（wire event `State ACCEPT`）。
+
+这个一次性证据程序不发送 Desired/Actual 的 State 送达确认；这些确认不是画面或呈现事实，
+也不能占用控制通道的唯一待发送位置而拖住媒体或证据。通用 Core 测试仍单独覆盖 State
+送达确认语义；本程序以已提交的 Actual 和带类型的模拟呈现证据作为业务事实。
+
+成功收据必须让 Host 输入、Edge 完整帧和 Host 收到的模拟呈现证据携带同一个 SHA-256，
+同时明确 `physical_evidence=false`、`link_security=false` 和
+`carrier=CONTROLLED_RAW_UDP`。控制或媒体硬错误必须给出终态收据并以失败退出；一次成功
+UDP `send` 仍不算远端交付。本自动测试结合启动器创建的回环连接和两侧配对收据，最多证明
+同机双进程、真实协议和指定 socket 的接线；单条收据只证明该进程所见的协议、哈希与关闭
+终态。两者都不证明 K230D、真实网络、屏幕像素或产品级安全承载。
+
+stdout 只允许每个角色输出一条终态 NDJSON（单行 JSON）收据，schema 固定为
+`DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V1`。字段顺序固定如下，便于测试拒绝缺项或把普通
+日志误认成证据：
+
+```text
+Host success: schema, role, status, session_id, catalog_generation,
+              applied_desired_version, actual_version, production_epoch,
+              media_stream_epoch, frame_sequence, input_sha256,
+              evidence_input_sha256, evidence_class, connector, carrier,
+              physical_evidence, link_security, clean_shutdown
+Edge success: schema, role, status, session_id, catalog_generation,
+              applied_desired_version, actual_version, production_epoch,
+              media_stream_epoch, frame_sequence, received_sha256,
+              evidence_input_sha256, evidence_class, connector,
+              udp_armed_before_actual_write, carrier, physical_evidence,
+              link_security, clean_shutdown
+Failure:      schema, role, status, plane, stage, carrier,
+              physical_evidence, link_security, clean_shutdown
+```
+
+成功的 `status` 是 `SUCCESS`，失败是 `FAILURE`；`role` 只能是 `host` 或 `edge`，
+`evidence_class` 固定为 `SIMULATED`，`connector` 固定为 `UNSPECIFIED`，目录中声明的能力
+（Catalog capability）也只广告这一种证据。`session_id` 是双方协商出的完整 SessionId 的
+十六进制；三个 SHA 字段
+都表示同一张完整 RGBA 输入的 32-byte SHA-256，而不是 64-byte evidence payload 自身的 hash，
+并写成 64 个小写十六进制字符。`media_stream_epoch` 必须等于 `production_epoch`；Edge 只有在
+UDP 接收对象已经从该 Runtime 媒体绑定身份成功初始化以后才可把 RUNNING Actual 的首字节写入
+TCP，成功收据因此必须写 `udp_armed_before_actual_write=true`。失败 `plane` 只能是
+`control`、`media` 或 `application`，`stage` 只能是 `bootstrap`、`session`、`catalog`、
+`state`、`binding`、`transfer`、`evidence` 或 `shutdown`。成功退出码为 0，已识别角色发生
+运行失败时为 1；参数非法时不产生 stdout 收据，只在 stderr 输出 `E_ARGUMENT` 并返回 2。
+其他诊断只能写 stderr。所有这些 stdout 行都固定 `physical_evidence=false`，不得当作物理
+呈现证据。
 
 ## 固定内存与 latest 规则
 
@@ -415,11 +481,13 @@ native translation、runner、cross/link 和 board page-flip 都明确为 `PENDI
 3. **部分完成：** K230D 本机 probe 的 portable policy/state machine 与 fake failure matrix
    已在 Host 验证；native libdrm translation、runner、cross/link 和 exact board page-flip
    仍待独立切片；
-4. **本切片：** connected UDP 行为适配器；它只关闭有界 connected-datagram 搬运与
+4. **已完成：** connected UDP 行为适配器；它只关闭有界 connected-datagram 搬运与
    丢包恢复行为，并为后续跨进程/网络 bring-up 提供适配器，不关闭安全 carrier；
-5. integrity-protecting carrier 与 Edge receiver；
-6. LG Host latest slot 到 Profile sender 的映射；
-7. 真实 Host 输入 SHA-256 与 KMS page-flip evidence 对齐；
-8. 可选左右眼 atlas。
+5. **已完成：** 两个本机进程使用真实 TCP 控制、connected UDP 数据、模拟画面源和内存
+   显示接收端，对齐输入、接收和控制通道内小型呈现证据的 SHA-256；
+6. integrity-protecting carrier 与 K230D Edge receiver；
+7. LG Host latest slot 到 Profile sender 的映射；
+8. 真实 Host 输入 SHA-256 与 KMS page-flip evidence 对齐；
+9. 可选左右眼 atlas。
 
-第 7 步以前不得声称“Host 应用已经显示到 Edge 实屏”。
+第 8 步以前不得声称“Host 应用已经显示到 Edge 实屏”。
