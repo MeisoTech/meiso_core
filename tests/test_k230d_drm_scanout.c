@@ -2116,6 +2116,22 @@ static bool make_single_plane_test_request(
     return true;
 }
 
+static bool make_derive_unique_plane_request(
+    const MeisoK230dDrmTopology *topology,
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *out_request
+)
+{
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    CHECK(meiso_k230d_drm_private_topology_sha256(
+        topology, candidate.expected_topology_sha256
+    ));
+    candidate.connector_id = 10U;
+    candidate.crtc_id = 30U;
+    *out_request = candidate;
+    return true;
+}
+
 static bool expect_single_plane_test_candidate_reason(
     const MeisoK230dDrmTopology *topology,
     const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
@@ -2125,6 +2141,21 @@ static bool expect_single_plane_test_candidate_reason(
     MeisoK230dDrmSinglePlaneTestCandidate candidate;
     memset(&candidate, 0xa5, sizeof(candidate));
     CHECK(meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
+              topology, request, &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_BLOCKED);
+    CHECK(candidate.reason == reason);
+    return true;
+}
+
+static bool expect_derive_unique_plane_reason(
+    const MeisoK230dDrmTopology *topology,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestCandidateReason reason
+)
+{
+    MeisoK230dDrmSinglePlaneTestCandidate candidate;
+    memset(&candidate, 0xa5, sizeof(candidate));
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
               topology, request, &candidate
           ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_BLOCKED);
     CHECK(candidate.reason == reason);
@@ -2477,6 +2508,288 @@ static bool test_single_plane_test_candidate_invalid_arguments(void)
     return true;
 }
 
+static bool test_derive_unique_plane_candidate_success_and_parity(void)
+{
+    FakeDrm fake;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest derive_request;
+    MeisoK230dDrmSinglePlaneTestCandidateRequest explicit_request;
+    MeisoK230dDrmSinglePlaneTestCandidate derived;
+    MeisoK230dDrmSinglePlaneTestCandidate explicit_candidate;
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.page_flip_timestamps_monotonic = false;
+    fake.topology.planes[1].zpos_present = false;
+    fake.topology.planes[1].zpos_immutable = false;
+    fake.topology.planes[1].zpos = 0;
+    CHECK(make_derive_unique_plane_request(
+        &fake.topology, &derive_request
+    ));
+    CHECK(make_single_plane_test_request(
+        &fake.topology, &explicit_request
+    ));
+    memset(&derived, 0xa5, sizeof(derived));
+    memset(&explicit_candidate, 0x5a, sizeof(explicit_candidate));
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology, &derive_request, &derived
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_IDENTIFIED);
+    CHECK(meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
+              &fake.topology, &explicit_request, &explicit_candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_IDENTIFIED);
+    CHECK(memcmp(&derived, &explicit_candidate, sizeof(derived)) == 0);
+    CHECK(derived.topology_hash_valid &&
+          derived.topology_identity_matched && derived.route_selected &&
+          derived.enumerated_planes_inactive &&
+          derived.test_target_selected &&
+          derived.reason ==
+              MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NONE &&
+          derived.connector_index == 0U && derived.crtc_index == 0U &&
+          derived.plane_index == 1U && derived.test_target_count == 1U &&
+          fake.topology.planes[derived.plane_index].plane_id == 50U &&
+          derived.minimum_output_bytes == 32U);
+    CHECK(fake.log_count == 0U && fake.atomic_count == 0U);
+    return true;
+}
+
+static bool test_derive_unique_plane_candidate_precedence(void)
+{
+    FakeDrm fake;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+
+    make_single_plane_test_topology(&fake);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    fake.topology.connector_count = MEISO_K230D_DRM_MAX_CONNECTORS + 1U;
+    fake.topology.driver_name[0] = '\0';
+    request.expected_topology_sha256[0] ^= UINT8_C(1);
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_CAPACITY
+    ));
+
+    make_single_plane_test_topology(&fake);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    fake.topology.driver_name[0] = '\0';
+    request.expected_topology_sha256[0] ^= UINT8_C(1);
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_NONCANONICAL
+    ));
+
+    make_single_plane_test_topology(&fake);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    memset(request.expected_topology_sha256, 0,
+           sizeof(request.expected_topology_sha256));
+    fake.topology.connectors[0].connected = false;
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_IDENTITY_MISMATCH
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.connectors[0].connected = false;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NO_ACTIVE_ROUTE
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.connector_count = 2U;
+    fake.topology.connectors[1] = fake.topology.connectors[0];
+    fake.topology.connectors[1].connector_id = 11U;
+    fake.topology.connectors[1].encoder_id = 21U;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_ACTIVE_ROUTES
+    ));
+
+    make_single_plane_test_topology(&fake);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    request.crtc_id = 31U;
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ROUTE_IDENTITY_MISMATCH
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.crtc_count = 2U;
+    fake.topology.crtcs[1] = fake.topology.crtcs[0];
+    fake.topology.crtcs[1].crtc_id = 40U;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ACTIVE_CRTC_COUNT
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.crtcs[0].framebuffer_id = 500U;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_LEGACY_FRAMEBUFFER_ACTIVE
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.planes[0].properties[
+        MEISO_K230D_DRM_PLANE_FB_ID
+    ].value = 500U;
+    fake.topology.planes[0].properties[
+        MEISO_K230D_DRM_PLANE_CRTC_ID
+    ].value = 30U;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ENUMERATED_PLANE_ACTIVE
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.planes[1].supports_rgb565 = false;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NO_TEST_TARGET
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.plane_count = 3U;
+    fake.topology.planes[2] = fake.topology.planes[1];
+    fake.topology.planes[2].plane_id = 60U;
+    fill_plane_properties(&fake.topology.planes[2], 300U, 0U, 0U);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_TEST_TARGETS
+    ));
+
+    make_single_plane_test_topology(&fake);
+    fake.topology.crtcs[0].mode.hdisplay =
+        MEISO_K230D_DRM_MAX_DIMENSION + 1U;
+    fake.topology.crtcs[0].mode.hsync_start =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.hsync_end =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.htotal =
+        fake.topology.crtcs[0].mode.hdisplay;
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    CHECK(expect_derive_unique_plane_reason(
+        &fake.topology,
+        &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MODE_ENVELOPE
+    ));
+
+    CHECK(fake.log_count == 0U && fake.atomic_count == 0U);
+    return true;
+}
+
+static bool test_derive_unique_plane_candidate_invalid_arguments(void)
+{
+    union {
+        MeisoK230dDrmTopology topology;
+        MeisoK230dDrmSinglePlaneTestCandidate candidate;
+    } topology_output;
+    union {
+        MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+        MeisoK230dDrmSinglePlaneTestCandidate candidate;
+    } request_output;
+    union {
+        max_align_t alignment;
+        MeisoK230dDrmTopology topology;
+        MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+    } topology_request;
+    FakeDrm fake;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+    MeisoK230dDrmSinglePlaneTestCandidate candidate;
+    uint8_t candidate_before[sizeof(candidate)];
+    uint8_t topology_output_before[sizeof(topology_output)];
+    uint8_t request_output_before[sizeof(request_output)];
+    uint8_t topology_before[sizeof(fake.topology)];
+
+    make_single_plane_test_topology(&fake);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    memset(&candidate, 0x6d, sizeof(candidate));
+    memcpy(candidate_before, &candidate, sizeof(candidate_before));
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              NULL, &request, &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&candidate, candidate_before, sizeof(candidate)) == 0);
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology, NULL, &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&candidate, candidate_before, sizeof(candidate)) == 0);
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology, &request, NULL
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+
+    request.connector_id = 0U;
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology, &request, &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&candidate, candidate_before, sizeof(candidate)) == 0);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+    request.crtc_id = 0U;
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology, &request, &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&candidate, candidate_before, sizeof(candidate)) == 0);
+    CHECK(make_derive_unique_plane_request(&fake.topology, &request));
+
+    memset(&topology_output, 0xa5, sizeof(topology_output));
+    topology_output.topology = fake.topology;
+    memcpy(topology_output_before, &topology_output,
+           sizeof(topology_output_before));
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &topology_output.topology,
+              &request,
+              &topology_output.candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&topology_output, topology_output_before,
+                 sizeof(topology_output)) == 0);
+
+    memset(&request_output, 0xa5, sizeof(request_output));
+    request_output.request = request;
+    memcpy(request_output_before, &request_output,
+           sizeof(request_output_before));
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology,
+              &request_output.request,
+              &request_output.candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&request_output, request_output_before,
+                 sizeof(request_output)) == 0);
+
+    memset(&topology_request, 0xa5, sizeof(topology_request));
+    topology_request.request = request;
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &topology_request.topology,
+              &topology_request.request,
+              &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&candidate, candidate_before, sizeof(candidate)) == 0);
+
+    memcpy(topology_before, &fake.topology, sizeof(topology_before));
+    CHECK(meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+              &fake.topology,
+              (const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *)(
+                  const void *)&fake.topology.crtcs[0],
+              &candidate
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT);
+    CHECK(memcmp(&fake.topology, topology_before, sizeof(fake.topology)) == 0);
+    CHECK(memcmp(&candidate, candidate_before, sizeof(candidate)) == 0);
+    CHECK(fake.log_count == 0U && fake.atomic_count == 0U);
+    return true;
+}
+
 static bool test_crtc_mask_remap(void)
 {
     uint32_t resource_ids[2] = {30U, 20U};
@@ -2561,6 +2874,9 @@ int main(void)
         !test_single_plane_test_candidate_success_and_non_claims() ||
         !test_single_plane_test_candidate_precedence() ||
         !test_single_plane_test_candidate_invalid_arguments() ||
+        !test_derive_unique_plane_candidate_success_and_parity() ||
+        !test_derive_unique_plane_candidate_precedence() ||
+        !test_derive_unique_plane_candidate_invalid_arguments() ||
         !test_crtc_mask_remap()) {
         return 1;
     }

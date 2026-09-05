@@ -283,6 +283,31 @@ meiso_k230d_drm_private_run_single_plane_test_only(
     MeisoK230dDrmSinglePlaneTestOnlyResult *out_result
 );
 
+/*
+ * Additive unique-plane mode. Invocation validation and ownership are the
+ * same as above, except that the request has no plane id and only its nonzero
+ * connector/crtc ids participate in INVALID_ARGUMENT. The initial topology
+ * read uses the derive evaluator. BLOCKED, including zero or multiple test
+ * targets, is clean NOT_TESTED before dumb/framebuffer creation and before
+ * atomic_test_only; result.plane_id remains zero. After IDENTIFIED, the core
+ * copies the observed hash, route and nonzero plane id into a private explicit
+ * request, rechecks that request against topology #1, and freezes it for
+ * topology #2 and #3. result.plane_id then retains that derived id through
+ * all later operation, postcondition and cleanup outcomes.
+ *
+ * This entry point does not alter the explicit function or accept a zero
+ * plane-id sentinel. Invalid invocation calls no callback and leaves
+ * out_result byte-exact unchanged. RESULT_AVAILABLE still assigns only after
+ * the unified terminal-cleanup epilogue.
+ */
+MEISO_K230D_DRM_PRIVATE_API
+MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+    const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result
+);
+
 #ifdef __cplusplus
 }
 #endif

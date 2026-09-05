@@ -840,6 +840,11 @@ static bool native_candidate_read_cross_contract(
     const MeisoK230dDrmLibdrmSinglePlaneTestOnlyLedger *native
 )
 {
+    const bool identified[3] = {
+        portable->initial_candidate_identified,
+        portable->pretest_candidate_identified,
+        portable->posttest_candidate_identified
+    };
     const MeisoK230dDrmSinglePlaneTestCandidateReason reasons[3] = {
         portable->initial_candidate_reason,
         portable->pretest_candidate_reason,
@@ -865,6 +870,17 @@ static bool native_candidate_read_cross_contract(
                        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_CAPACITY ||
                    reasons[index] ==
                        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_NONCANONICAL) {
+            return false;
+        }
+        if (identified[index] &&
+            (native->topology_read_raw_connector_count[index] == 0U ||
+             native->topology_read_raw_crtc_count[index] == 0U ||
+             native->topology_read_raw_plane_count[index] == 0U)) {
+            return false;
+        }
+        if (reasons[index] ==
+                MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_TEST_TARGETS &&
+            native->topology_read_raw_plane_count[index] < 2U) {
             return false;
         }
     }
@@ -1627,6 +1643,45 @@ static bool combined_result_contract(
         native_result_contract(&result->portable, &result->native);
 }
 
+static bool derive_unique_plane_result_contract(
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    const MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *result,
+    MeisoK230dDrmSinglePlaneTestCandidateRequest *out_pinned_request
+)
+{
+    MeisoK230dDrmSinglePlaneTestCandidateRequest pinned_request;
+    const MeisoK230dDrmSinglePlaneTestOnlyResult *portable;
+
+    if (request == NULL || result == NULL || out_pinned_request == NULL ||
+        !result_boolean_representations_valid(result)) {
+        return false;
+    }
+    portable = &result->portable;
+    if (portable->connector_id != request->connector_id ||
+        portable->crtc_id != request->crtc_id ||
+        portable->initial_candidate_identified !=
+            (portable->plane_id != 0U) ||
+        portable->initial_candidate_reason ==
+            MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TEST_TARGET_IDENTITY_MISMATCH) {
+        return false;
+    }
+
+    memset(&pinned_request, 0, sizeof(pinned_request));
+    memcpy(
+        pinned_request.expected_topology_sha256,
+        request->expected_topology_sha256,
+        sizeof(pinned_request.expected_topology_sha256)
+    );
+    pinned_request.connector_id = request->connector_id;
+    pinned_request.crtc_id = request->crtc_id;
+    pinned_request.plane_id = portable->plane_id;
+    if (!combined_result_contract(&pinned_request, result)) {
+        return false;
+    }
+    *out_pinned_request = pinned_request;
+    return true;
+}
+
 static bool decode_lower_hex(
     const char *text,
     uint8_t *out_bytes,
@@ -1738,6 +1793,47 @@ static bool parse_arguments(
     return true;
 }
 
+static bool parse_derive_unique_plane_arguments(
+    int argument_count,
+    char **arguments,
+    const char **out_device_path,
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *out_request
+)
+{
+    size_t path_size;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+
+    if (argument_count != 10 || arguments == NULL ||
+        out_device_path == NULL || out_request == NULL ||
+        arguments[0] == NULL || arguments[1] == NULL ||
+        arguments[2] == NULL || arguments[3] == NULL ||
+        arguments[4] == NULL || arguments[5] == NULL ||
+        arguments[6] == NULL || arguments[7] == NULL ||
+        arguments[8] == NULL || arguments[9] == NULL ||
+        strcmp(arguments[1], "--derive-unique-plane") != 0 ||
+        strcmp(arguments[2], "--device") != 0 ||
+        strcmp(arguments[4], "--topology-sha256") != 0 ||
+        strcmp(arguments[6], "--connector-id") != 0 ||
+        strcmp(arguments[8], "--crtc-id") != 0 ||
+        arguments[3][0] != '/' ||
+        !meiso_k230d_drm_private_path_size(arguments[3], &path_size)) {
+        return false;
+    }
+    (void)path_size;
+    memset(&request, 0, sizeof(request));
+    if (!decode_lower_hex(
+            arguments[5], request.expected_topology_sha256,
+            sizeof(request.expected_topology_sha256)
+        ) || hash_is_zero(request.expected_topology_sha256) ||
+        !parse_canonical_u32(arguments[7], &request.connector_id) ||
+        !parse_canonical_u32(arguments[9], &request.crtc_id)) {
+        return false;
+    }
+    *out_device_path = arguments[3];
+    memcpy(out_request, &request, sizeof(request));
+    return true;
+}
+
 static void receipt_append(ReceiptBuffer *buffer, const char *format, ...)
 {
     va_list arguments;
@@ -1786,10 +1882,11 @@ static const char *boolean_token(bool value)
     return value ? "true" : "false";
 }
 
-static bool build_receipt(
+static bool build_receipt_common(
     ReceiptBuffer *buffer,
     const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
-    const MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *result
+    const MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *result,
+    bool derive_unique_plane
 )
 {
     const MeisoK230dDrmSinglePlaneTestOnlyResult *portable;
@@ -1804,36 +1901,70 @@ static bool build_receipt(
     native = &result->native;
     memset(buffer, 0, sizeof(*buffer));
     buffer->valid = true;
-    receipt_append(
-        buffer,
-        "{\"type\":\"k230d_drm_single_plane_test_only_probe\","
-        "\"schema\":\"meiso.k230d_drm_single_plane_test_only_probe.v1\","
-        "\"verification\":\"NATIVE_LIBDRM_TEST_ONLY_ONLY\","
-        "\"build_target\":\"k230d_linux\","
-        "\"scope\":\"single_plane_test_only_no_pixels\","
-        "\"outcome\":\"%s\",\"primary_outcome\":\"%s\","
-        "\"test_observation\":\"%s\","
-        "\"requested_topology_sha256\":",
-        outcome_token(portable->outcome),
-        primary_outcome_token(portable->primary_outcome),
-        test_observation_token(portable->test_observation)
-    );
+    if (derive_unique_plane) {
+        receipt_append(
+            buffer,
+            "{\"type\":\"k230d_drm_single_plane_test_only_probe\","
+            "\"schema\":\"meiso.k230d_drm_single_plane_test_only_probe.v2\","
+            "\"verification\":\"NATIVE_LIBDRM_TEST_ONLY_ONLY\","
+            "\"build_target\":\"k230d_linux\","
+            "\"scope\":\"single_plane_test_only_no_pixels\","
+            "\"selection_mode\":\"UNIQUE_POLICY_DERIVED\","
+            "\"outcome\":\"%s\",\"primary_outcome\":\"%s\","
+            "\"test_observation\":\"%s\","
+            "\"requested_topology_sha256\":",
+            outcome_token(portable->outcome),
+            primary_outcome_token(portable->primary_outcome),
+            test_observation_token(portable->test_observation)
+        );
+    } else {
+        receipt_append(
+            buffer,
+            "{\"type\":\"k230d_drm_single_plane_test_only_probe\","
+            "\"schema\":\"meiso.k230d_drm_single_plane_test_only_probe.v1\","
+            "\"verification\":\"NATIVE_LIBDRM_TEST_ONLY_ONLY\","
+            "\"build_target\":\"k230d_linux\","
+            "\"scope\":\"single_plane_test_only_no_pixels\","
+            "\"outcome\":\"%s\",\"primary_outcome\":\"%s\","
+            "\"test_observation\":\"%s\","
+            "\"requested_topology_sha256\":",
+            outcome_token(portable->outcome),
+            primary_outcome_token(portable->primary_outcome),
+            test_observation_token(portable->test_observation)
+        );
+    }
     receipt_append_hex(
         buffer, request->expected_topology_sha256,
         sizeof(request->expected_topology_sha256)
     );
-    receipt_append(
-        buffer,
-        ",\"requested_connector_id\":%u,\"requested_crtc_id\":%u,"
-        "\"requested_plane_id\":%u,\"initial_candidate_reason\":\"%s\","
-        "\"pretest_candidate_reason\":\"%s\","
-        "\"posttest_candidate_reason\":\"%s\","
-        "\"initial_topology_sha256\":",
-        request->connector_id, request->crtc_id, request->plane_id,
-        candidate_reason_token(portable->initial_candidate_reason),
-        candidate_reason_token(portable->pretest_candidate_reason),
-        candidate_reason_token(portable->posttest_candidate_reason)
-    );
+    if (derive_unique_plane) {
+        receipt_append(
+            buffer,
+            ",\"requested_connector_id\":%u,\"requested_crtc_id\":%u,"
+            "\"requested_plane_id\":0,\"derived_plane_id\":%u,"
+            "\"initial_candidate_reason\":\"%s\","
+            "\"pretest_candidate_reason\":\"%s\","
+            "\"posttest_candidate_reason\":\"%s\","
+            "\"initial_topology_sha256\":",
+            request->connector_id, request->crtc_id, request->plane_id,
+            candidate_reason_token(portable->initial_candidate_reason),
+            candidate_reason_token(portable->pretest_candidate_reason),
+            candidate_reason_token(portable->posttest_candidate_reason)
+        );
+    } else {
+        receipt_append(
+            buffer,
+            ",\"requested_connector_id\":%u,\"requested_crtc_id\":%u,"
+            "\"requested_plane_id\":%u,\"initial_candidate_reason\":\"%s\","
+            "\"pretest_candidate_reason\":\"%s\","
+            "\"posttest_candidate_reason\":\"%s\","
+            "\"initial_topology_sha256\":",
+            request->connector_id, request->crtc_id, request->plane_id,
+            candidate_reason_token(portable->initial_candidate_reason),
+            candidate_reason_token(portable->pretest_candidate_reason),
+            candidate_reason_token(portable->posttest_candidate_reason)
+        );
+    }
     receipt_append_hex(
         buffer, portable->initial_topology_sha256,
         sizeof(portable->initial_topology_sha256)
@@ -2113,6 +2244,31 @@ static bool build_receipt(
         buffer->bytes[buffer->size - 1U] == '\n';
 }
 
+static bool build_receipt(
+    ReceiptBuffer *buffer,
+    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    const MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *result
+)
+{
+    return build_receipt_common(buffer, request, result, false);
+}
+
+static bool build_derive_unique_plane_receipt(
+    ReceiptBuffer *buffer,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    const MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *result
+)
+{
+    MeisoK230dDrmSinglePlaneTestCandidateRequest pinned_request;
+
+    if (!derive_unique_plane_result_contract(
+            request, result, &pinned_request
+        )) {
+        return false;
+    }
+    return build_receipt_common(buffer, &pinned_request, result, true);
+}
+
 static void write_diagnostic(FILE *stream, const char *text)
 {
     if (stream != NULL && text != NULL) {
@@ -2179,6 +2335,67 @@ int meiso_k230d_drm_single_plane_test_only_once_run(
     return return_code;
 }
 
+int meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+    FILE *out_stream,
+    FILE *error_stream,
+    int argument_count,
+    char **arguments,
+    MeisoK230dDrmNativeSinglePlaneTestOnlyDeriveUniquePlaneExecuteFn execute
+)
+{
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest execute_request;
+    uint8_t execute_request_before[sizeof(execute_request)];
+    MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult result;
+    MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus status;
+    MeisoK230dDrmSinglePlaneTestCandidateRequest pinned_request;
+    ReceiptBuffer receipt;
+    const char *device_path = NULL;
+    int return_code;
+
+    if (out_stream == NULL || error_stream == NULL ||
+        out_stream == error_stream) {
+        return 2;
+    }
+    if (execute == NULL || !parse_derive_unique_plane_arguments(
+            argument_count, arguments, &device_path, &request
+        )) {
+        write_diagnostic(error_stream, "E_ARGUMENT\n");
+        return 2;
+    }
+    memset(&result, 0, sizeof(result));
+    memcpy(&execute_request, &request, sizeof(execute_request));
+    memcpy(
+        execute_request_before, &execute_request,
+        sizeof(execute_request_before)
+    );
+    status = execute(device_path, &execute_request, &result);
+    if (status !=
+            MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE ||
+        memcmp(
+            &execute_request, execute_request_before,
+            sizeof(execute_request)
+        ) != 0 ||
+        !derive_unique_plane_result_contract(
+            &request, &result, &pinned_request
+        ) ||
+        !build_derive_unique_plane_receipt(&receipt, &request, &result)) {
+        write_diagnostic(error_stream, "E_PROVIDER_CONTRACT\n");
+        return 1;
+    }
+    if (fwrite(receipt.bytes, 1U, receipt.size, out_stream) != receipt.size ||
+        fflush(out_stream) != 0) {
+        return 1;
+    }
+    return_code =
+        result.portable.outcome ==
+                MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_OPERATION_FAILURE ||
+            result.portable.outcome ==
+                MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_CLEANUP_FAILURE
+        ? 1 : 0;
+    return return_code;
+}
+
 #if !defined(MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_ONCE_NO_MAIN)
 int main(int argument_count, char **arguments)
 {
@@ -2189,6 +2406,15 @@ int main(int argument_count, char **arguments)
     if (sigemptyset(&action.sa_mask) != 0 ||
         sigaction(SIGPIPE, &action, NULL) != 0) {
         return 1;
+    }
+    if (argument_count > 1 && arguments != NULL &&
+        arguments[1] != NULL &&
+        strcmp(arguments[1], "--derive-unique-plane") == 0) {
+        return
+            meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+                stdout, stderr, argument_count, arguments,
+                meiso_k230d_drm_libdrm_run_single_plane_test_only_derive_unique_plane
+            );
     }
     return meiso_k230d_drm_single_plane_test_only_once_run(
         stdout, stderr, argument_count, arguments,

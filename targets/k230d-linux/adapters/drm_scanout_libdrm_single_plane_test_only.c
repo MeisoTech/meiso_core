@@ -549,10 +549,13 @@ static bool ranges_overlap(
     );
 }
 
-MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
-meiso_k230d_drm_libdrm_run_single_plane_test_only(
+static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+run_native_single_plane_test_only_validated(
     const char *device_path,
     const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest
+        *derive_request,
+    bool derive_unique_plane,
     MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
 )
 {
@@ -560,6 +563,39 @@ meiso_k230d_drm_libdrm_run_single_plane_test_only(
     MeisoK230dDrmSinglePlaneTestOnlyConfig config;
     MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus status;
     NativeTestOnlyContext context;
+
+    memset(&candidate, 0, sizeof(candidate));
+    memset(&context, 0, sizeof(context));
+    context.owned_fd = -1;
+    memset(&config, 0, sizeof(config));
+    config.device_path = device_path;
+    config.ops = &NATIVE_OPS;
+    config.ops_context = &context;
+    if (derive_unique_plane) {
+        status =
+            meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+                &config, derive_request, &candidate.portable
+            );
+    } else {
+        status = meiso_k230d_drm_private_run_single_plane_test_only(
+            &config, request, &candidate.portable
+        );
+    }
+    if (status != MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE) {
+        return status;
+    }
+    memcpy(&candidate.native, &context.ledger, sizeof(candidate.native));
+    memcpy(out_result, &candidate, sizeof(candidate));
+    return status;
+}
+
+MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+meiso_k230d_drm_libdrm_run_single_plane_test_only(
+    const char *device_path,
+    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
+)
+{
     size_t path_size;
 
     if (device_path == NULL || request == NULL || out_result == NULL ||
@@ -577,20 +613,36 @@ meiso_k230d_drm_libdrm_run_single_plane_test_only(
         return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT;
     }
 
-    memset(&candidate, 0, sizeof(candidate));
-    memset(&context, 0, sizeof(context));
-    context.owned_fd = -1;
-    memset(&config, 0, sizeof(config));
-    config.device_path = device_path;
-    config.ops = &NATIVE_OPS;
-    config.ops_context = &context;
-    status = meiso_k230d_drm_private_run_single_plane_test_only(
-        &config, request, &candidate.portable
+    return run_native_single_plane_test_only_validated(
+        device_path, request, NULL, false, out_result
     );
-    if (status != MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE) {
-        return status;
+}
+
+MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+meiso_k230d_drm_libdrm_run_single_plane_test_only_derive_unique_plane(
+    const char *device_path,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
+)
+{
+    size_t path_size;
+
+    if (device_path == NULL || request == NULL || out_result == NULL ||
+        ranges_overlap(request, sizeof(*request), out_result,
+            sizeof(*out_result)) ||
+        ranges_overlap(device_path, 1U, request, sizeof(*request)) ||
+        ranges_overlap(device_path, 1U, out_result, sizeof(*out_result)) ||
+        !meiso_k230d_drm_private_path_size(device_path, &path_size) ||
+        ranges_overlap(
+            device_path, path_size + 1U, request, sizeof(*request)
+        ) ||
+        ranges_overlap(
+            device_path, path_size + 1U, out_result, sizeof(*out_result)
+        )) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT;
     }
-    memcpy(&candidate.native, &context.ledger, sizeof(candidate.native));
-    memcpy(out_result, &candidate, sizeof(candidate));
-    return status;
+
+    return run_native_single_plane_test_only_validated(
+        device_path, NULL, request, true, out_result
+    );
 }

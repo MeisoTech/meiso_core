@@ -77,6 +77,20 @@ typedef struct {
 } MeisoK230dDrmSinglePlaneTestCandidateRequest;
 
 /*
+ * Additive selector for the unique-plane diagnostic mode. The caller still
+ * pins the expected topology identity and active route, but deliberately
+ * supplies no plane id. A plane id is derived only after the supplied
+ * snapshot passes every common candidate gate and contains exactly one
+ * compatible target. This type is never reinterpreted as the explicit
+ * request above, and zero is not a plane-id sentinel in either API.
+ */
+typedef struct {
+    uint8_t expected_topology_sha256[MEISO_K230D_DRM_SHA256_SIZE];
+    uint32_t connector_id;
+    uint32_t crtc_id;
+} MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest;
+
+/*
  * Pure selector result for a future diagnostic TEST_ONLY call.
  * IDENTIFIED means only that this exact snapshot and selector identify one
  * compatible, currently inactive enumerated DRM plane. It does not construct
@@ -198,6 +212,31 @@ MeisoK230dDrmSinglePlaneTestCandidateStatus
 meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
     const MeisoK230dDrmTopology *topology,
     const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
+);
+
+/*
+ * Applies the same ordered policy as the explicit evaluator, except that no
+ * caller-provided plane id exists to check after the unique-target gate.
+ * The three object ranges must be pairwise disjoint, connector_id and crtc_id
+ * must be nonzero, and INVALID_ARGUMENT leaves out_candidate byte-exact
+ * unchanged. BLOCKED writes the first reason in this order: capacity,
+ * canonical form, expected hash, unique active route, route ids, active-CRTC
+ * count, legacy framebuffer, enumerated plane activity, unique compatible
+ * target, then mode envelope. TEST_TARGET_IDENTITY_MISMATCH is therefore not
+ * an initial result of this function.
+ *
+ * IDENTIFIED exposes the unique plane only through plane_index into the
+ * caller-owned topology. It does not construct an explicit request, open a
+ * device or attempt TEST_ONLY. A consuming executor must copy the observed
+ * nonzero plane id and revalidate a frozen explicit request before creating
+ * an atomic state.
+ */
+MEISO_K230D_DRM_PRIVATE_API
+MeisoK230dDrmSinglePlaneTestCandidateStatus
+meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+    const MeisoK230dDrmTopology *topology,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
     MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
 );
 

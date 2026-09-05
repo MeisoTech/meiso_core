@@ -115,6 +115,7 @@ static MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult fake_result;
 static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus fake_status;
 static uint32_t fake_calls;
 static bool fake_mutate_request;
+static bool fake_mutate_derive_request;
 
 static void fill_expected_hash(
     uint8_t hash[MEISO_K230D_DRM_SHA256_SIZE]
@@ -134,6 +135,18 @@ static MeisoK230dDrmSinglePlaneTestCandidateRequest fixture_request(void)
     request.connector_id = 10U;
     request.crtc_id = 30U;
     request.plane_id = 50U;
+    return request;
+}
+
+static MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest
+fixture_derive_request(void)
+{
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+
+    memset(&request, 0, sizeof(request));
+    fill_expected_hash(request.expected_topology_sha256);
+    request.connector_id = 10U;
+    request.crtc_id = 30U;
     return request;
 }
 
@@ -242,6 +255,7 @@ static void reset_accepted_result(void)
     fake_status = MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE;
     fake_calls = 0U;
     fake_mutate_request = false;
+    fake_mutate_derive_request = false;
     portable = &fake_result.portable;
     native = &fake_result.native;
 
@@ -339,6 +353,7 @@ static void reset_initial_blocked_result(void)
     fake_status = MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE;
     fake_calls = 0U;
     fake_mutate_request = false;
+    fake_mutate_derive_request = false;
     portable = &fake_result.portable;
     native = &fake_result.native;
 
@@ -379,6 +394,30 @@ static void reset_initial_blocked_result(void)
     native->same_fd_check_count = 7U;
 }
 
+static void reset_derive_initial_blocked_result(void)
+{
+    reset_initial_blocked_result();
+    fake_result.portable.plane_id = 0U;
+}
+
+static void reset_derive_initial_selfcheck_failure_result(void)
+{
+    reset_derive_initial_blocked_result();
+    fake_result.portable.outcome =
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_OPERATION_FAILURE;
+    fake_result.portable.primary_outcome =
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_PRIMARY_OPERATION_FAILURE;
+    fake_result.portable.initial_candidate_reason =
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NONE;
+    memset(
+        fake_result.portable.initial_topology_sha256, 0,
+        sizeof(fake_result.portable.initial_topology_sha256)
+    );
+    fake_result.portable.operation_failure_stage =
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OPERATION_EVALUATE_INITIAL_CANDIDATE;
+    fake_result.portable.operation_error = EPROTO;
+}
+
 static void reset_open_failure_result(bool fd_was_obtained)
 {
     MeisoK230dDrmSinglePlaneTestCandidateRequest request = fixture_request();
@@ -389,6 +428,7 @@ static void reset_open_failure_result(bool fd_was_obtained)
     fake_status = MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE;
     fake_calls = 0U;
     fake_mutate_request = false;
+    fake_mutate_derive_request = false;
     portable = &fake_result.portable;
     native = &fake_result.native;
     portable->outcome =
@@ -412,6 +452,12 @@ static void reset_open_failure_result(bool fd_was_obtained)
         native->open_failure_close_error = EIO;
         native->open_failure_close_terminal_consumed = true;
     }
+}
+
+static void reset_derive_open_failure_result(bool fd_was_obtained)
+{
+    reset_open_failure_result(fd_was_obtained);
+    fake_result.portable.plane_id = 0U;
 }
 
 static void reset_post_read_failure_result(void)
@@ -574,6 +620,29 @@ static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus fake_execute(
     return fake_status;
 }
 
+static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus fake_derive_execute(
+    const char *device_path,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
+)
+{
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest expected =
+        fixture_derive_request();
+
+    ++fake_calls;
+    if (device_path == NULL || request == NULL || out_result == NULL ||
+        strcmp(device_path, "/sensitive/card0") != 0 ||
+        memcmp(request, &expected, sizeof(expected)) != 0) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT;
+    }
+    if (fake_mutate_derive_request) {
+        ((MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *)(void *)
+             request)->crtc_id = 31U;
+    }
+    memcpy(out_result, &fake_result, sizeof(*out_result));
+    return fake_status;
+}
+
 static bool read_stream(FILE *stream, char *bytes, size_t capacity)
 {
     size_t size;
@@ -614,6 +683,39 @@ static bool run_probe(
     *out_return_code = meiso_k230d_drm_single_plane_test_only_once_run(
         out_stream, error_stream, 11, arguments, fake_execute
     );
+    CHECK(read_stream(out_stream, output, output_capacity));
+    CHECK(read_stream(error_stream, errors, error_capacity));
+    CHECK(fclose(out_stream) == 0 && fclose(error_stream) == 0);
+    return true;
+}
+
+static bool run_derive_probe(
+    int *out_return_code,
+    char *output,
+    size_t output_capacity,
+    char *errors,
+    size_t error_capacity
+)
+{
+    static char hash[] =
+        "0102030405060708090a0b0c0d0e0f10"
+        "1112131415161718191a1b1c1d1e1f20";
+    char *arguments[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", hash,
+        (char *)"--connector-id", (char *)"10",
+        (char *)"--crtc-id", (char *)"30"
+    };
+    FILE *out_stream = tmpfile();
+    FILE *error_stream = tmpfile();
+
+    CHECK(out_return_code != NULL && out_stream != NULL &&
+          error_stream != NULL);
+    *out_return_code =
+        meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+            out_stream, error_stream, 10, arguments, fake_derive_execute
+        );
     CHECK(read_stream(out_stream, output, output_capacity));
     CHECK(read_stream(error_stream, errors, error_capacity));
     CHECK(fclose(out_stream) == 0 && fclose(error_stream) == 0);
@@ -673,6 +775,271 @@ static bool accepted_receipt_exact(const char *receipt)
     CHECK(memcmp(
         receipt + size_1 + size_2, ACCEPTED_RECEIPT_3, size_3
     ) == 0);
+    return true;
+}
+
+static bool copy_accepted_receipt(char *buffer, size_t capacity)
+{
+    const size_t size_1 = sizeof(ACCEPTED_RECEIPT_1) - 1U;
+    const size_t size_2 = sizeof(ACCEPTED_RECEIPT_2) - 1U;
+    const size_t size_3 = sizeof(ACCEPTED_RECEIPT_3) - 1U;
+    const size_t total_size = size_1 + size_2 + size_3;
+
+    if (buffer == NULL || total_size + 1U > capacity) {
+        return false;
+    }
+    memcpy(buffer, ACCEPTED_RECEIPT_1, size_1);
+    memcpy(buffer + size_1, ACCEPTED_RECEIPT_2, size_2);
+    memcpy(buffer + size_1 + size_2, ACCEPTED_RECEIPT_3, size_3);
+    buffer[total_size] = '\0';
+    return true;
+}
+
+static bool replace_once(
+    char *buffer,
+    size_t capacity,
+    const char *needle,
+    const char *replacement
+)
+{
+    char *match;
+    size_t buffer_size;
+    size_t needle_size;
+    size_t replacement_size;
+    size_t tail_size;
+
+    if (buffer == NULL || needle == NULL || replacement == NULL ||
+        needle[0] == '\0') {
+        return false;
+    }
+    match = strstr(buffer, needle);
+    if (match == NULL) {
+        return false;
+    }
+    needle_size = strlen(needle);
+    if (strstr(match + needle_size, needle) != NULL) {
+        return false;
+    }
+    buffer_size = strlen(buffer);
+    replacement_size = strlen(replacement);
+    if (buffer_size - needle_size + replacement_size + 1U > capacity) {
+        return false;
+    }
+    tail_size = buffer_size - (size_t)(match - buffer) - needle_size + 1U;
+    memmove(match + replacement_size, match + needle_size, tail_size);
+    memcpy(match, replacement, replacement_size);
+    return true;
+}
+
+static bool replace_json_value_once(
+    char *buffer,
+    size_t capacity,
+    const char *key,
+    const char *old_value,
+    const char *new_value
+)
+{
+    char needle[256];
+    char replacement[256];
+    int needle_size;
+    int replacement_size;
+
+    if (key == NULL || old_value == NULL || new_value == NULL) {
+        return false;
+    }
+    needle_size = snprintf(
+        needle, sizeof(needle), "\"%s\":%s", key, old_value
+    );
+    replacement_size = snprintf(
+        replacement, sizeof(replacement), "\"%s\":%s", key, new_value
+    );
+    if (needle_size < 0 || replacement_size < 0 ||
+        (size_t)needle_size >= sizeof(needle) ||
+        (size_t)replacement_size >= sizeof(replacement)) {
+        return false;
+    }
+    return replace_once(buffer, capacity, needle, replacement);
+}
+
+static bool make_expected_derive_accepted_receipt(
+    char *buffer,
+    size_t capacity
+)
+{
+    if (!copy_accepted_receipt(buffer, capacity) ||
+        !replace_json_value_once(
+            buffer, capacity, "schema",
+            "\"meiso.k230d_drm_single_plane_test_only_probe.v1\"",
+            "\"meiso.k230d_drm_single_plane_test_only_probe.v2\""
+        ) ||
+        !replace_once(
+            buffer, capacity,
+            "\"scope\":\"single_plane_test_only_no_pixels\",",
+            "\"scope\":\"single_plane_test_only_no_pixels\","
+            "\"selection_mode\":\"UNIQUE_POLICY_DERIVED\","
+        ) ||
+        !replace_once(
+            buffer, capacity,
+            "\"requested_plane_id\":50,",
+            "\"requested_plane_id\":0,\"derived_plane_id\":50,"
+        )) {
+        return false;
+    }
+    return true;
+}
+
+static bool make_expected_derive_blocked_receipt(
+    char *buffer,
+    size_t capacity
+)
+{
+    static const char EXPECTED_HASH[] =
+        "\"0102030405060708090a0b0c0d0e0f10"
+        "1112131415161718191a1b1c1d1e1f20\"";
+    static const char ZERO_HASH[] =
+        "\"00000000000000000000000000000000"
+        "00000000000000000000000000000000\"";
+    static const struct {
+        const char *key;
+        const char *old_value;
+        const char *new_value;
+    } REPLACEMENTS[] = {
+        {"outcome", "\"TEST_ACCEPTED_NOT_APPLIED\"", "\"NOT_TESTED\""},
+        {"primary_outcome", "\"TEST_ACCEPTED_NOT_APPLIED\"", "\"NOT_TESTED\""},
+        {"test_observation", "\"ACCEPTED_NOT_APPLIED\"", "\"NOT_ATTEMPTED\""},
+        {"derived_plane_id", "50", "0"},
+        {"initial_candidate_reason", "\"NONE\"", "\"MULTIPLE_TEST_TARGETS\""},
+        {"pretest_topology_sha256", EXPECTED_HASH, ZERO_HASH},
+        {"posttest_topology_sha256", EXPECTED_HASH, ZERO_HASH},
+        {"topology_read_attempt_count", "3", "1"},
+        {"topology_read_success_count", "3", "1"},
+        {"atomic_test_only_call_count", "1", "0"},
+        {"initial_candidate_identified", "true", "false"},
+        {"pretest_candidate_identified", "true", "false"},
+        {"posttest_candidate_identified", "true", "false"},
+        {"pretest_topology_unchanged", "true", "false"},
+        {"posttest_topology_unchanged", "true", "false"},
+        {"test_only_attempted", "true", "false"},
+        {"test_callback_reported_accepted_not_applied", "true", "false"},
+        {"created_dumb_handle", "101", "0"},
+        {"created_dumb_pitch", "8", "0"},
+        {"created_dumb_size", "32", "0"},
+        {"created_framebuffer_id", "201", "0"},
+        {"minimum_output_bytes", "32", "0"},
+        {"dumb_was_created", "true", "false"},
+        {"framebuffer_was_created", "true", "false"},
+        {"remove_framebuffer_attempted", "true", "false"},
+        {"remove_framebuffer_succeeded", "true", "false"},
+        {"destroy_dumb_attempted", "true", "false"},
+        {"destroy_dumb_succeeded", "true", "false"},
+        {"dumb_ownership_consumed", "true", "false"},
+        {"framebuffer_ownership_consumed", "true", "false"},
+        {"native_same_fd_check_count", "14", "7"},
+        {"native_topology_read_call_count", "3", "1"},
+        {"native_topology_read_1_raw_plane_count", "1", "2"},
+        {"native_topology_read_2_attempted", "true", "false"},
+        {"native_topology_read_2_status", "\"COMPLETE\"", "\"NOT_ATTEMPTED\""},
+        {"native_topology_read_2_stage", "\"NONE\"", "\"NOT_ATTEMPTED\""},
+        {"native_topology_read_2_ready_for_evaluation", "true", "false"},
+        {"native_topology_read_2_topology_complete", "true", "false"},
+        {"native_topology_read_2_all_plane_properties_complete", "true", "false"},
+        {"native_topology_read_2_raw_connector_count", "1", "0"},
+        {"native_topology_read_2_raw_crtc_count", "1", "0"},
+        {"native_topology_read_2_raw_plane_count", "1", "0"},
+        {"native_topology_read_2_objects_seen", "12", "0"},
+        {"native_topology_read_2_objects_released", "12", "0"},
+        {"native_topology_read_2_objects_all_released", "true", "false"},
+        {"native_topology_read_3_attempted", "true", "false"},
+        {"native_topology_read_3_status", "\"COMPLETE\"", "\"NOT_ATTEMPTED\""},
+        {"native_topology_read_3_stage", "\"NONE\"", "\"NOT_ATTEMPTED\""},
+        {"native_topology_read_3_ready_for_evaluation", "true", "false"},
+        {"native_topology_read_3_topology_complete", "true", "false"},
+        {"native_topology_read_3_all_plane_properties_complete", "true", "false"},
+        {"native_topology_read_3_raw_connector_count", "1", "0"},
+        {"native_topology_read_3_raw_crtc_count", "1", "0"},
+        {"native_topology_read_3_raw_plane_count", "1", "0"},
+        {"native_topology_read_3_objects_seen", "12", "0"},
+        {"native_topology_read_3_objects_released", "12", "0"},
+        {"native_topology_read_3_objects_all_released", "true", "false"},
+        {"native_create_dumb_api_call_count", "1", "0"},
+        {"native_add_framebuffer_call_count", "1", "0"},
+        {"native_portable_atomic_callback_call_count", "1", "0"},
+        {"native_atomic_request_alloc_call_count", "1", "0"},
+        {"native_atomic_request_alloc_succeeded", "true", "false"},
+        {"native_atomic_plane_property_add_attempt_count", "10", "0"},
+        {"native_atomic_plane_property_add_success_count", "10", "0"},
+        {"native_atomic_commit_api_call_count", "1", "0"},
+        {"native_atomic_commit_flags", "256", "0"},
+        {"native_atomic_commit_user_data_null", "true", "false"},
+        {"native_atomic_request_free_call_count", "1", "0"},
+        {"native_remove_framebuffer_call_count", "1", "0"},
+        {"native_destroy_dumb_api_call_count", "1", "0"}
+    };
+    size_t index;
+
+    if (!make_expected_derive_accepted_receipt(buffer, capacity)) {
+        return false;
+    }
+    for (index = 0U;
+         index < sizeof(REPLACEMENTS) / sizeof(REPLACEMENTS[0]);
+         ++index) {
+        if (!replace_json_value_once(
+                buffer, capacity, REPLACEMENTS[index].key,
+                REPLACEMENTS[index].old_value,
+                REPLACEMENTS[index].new_value
+            )) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool derive_receipt_shape(const char *receipt)
+{
+    const char *selection_mode;
+    size_t size;
+
+    CHECK(receipt != NULL);
+    size = strlen(receipt);
+    CHECK(size > 2U && size <
+          MEISO_K230D_DRM_NATIVE_TEST_ONLY_RECEIPT_CAPACITY);
+    CHECK(receipt[0] == '{' && receipt[size - 2U] == '}' &&
+          receipt[size - 1U] == '\n');
+    CHECK(strchr(receipt, '\n') == receipt + size - 1U);
+    CHECK(strncmp(
+        receipt,
+        "{\"type\":\"k230d_drm_single_plane_test_only_probe\","
+        "\"schema\":\"meiso.k230d_drm_single_plane_test_only_probe.v2\","
+        "\"verification\":\"NATIVE_LIBDRM_TEST_ONLY_ONLY\","
+        "\"build_target\":\"k230d_linux\","
+        "\"scope\":\"single_plane_test_only_no_pixels\","
+        "\"selection_mode\":\"UNIQUE_POLICY_DERIVED\",",
+        strlen(
+            "{\"type\":\"k230d_drm_single_plane_test_only_probe\","
+            "\"schema\":\"meiso.k230d_drm_single_plane_test_only_probe.v2\","
+            "\"verification\":\"NATIVE_LIBDRM_TEST_ONLY_ONLY\","
+            "\"build_target\":\"k230d_linux\","
+            "\"scope\":\"single_plane_test_only_no_pixels\","
+            "\"selection_mode\":\"UNIQUE_POLICY_DERIVED\","
+        )
+    ) == 0);
+    CHECK(strstr(receipt, "/sensitive/card0") == NULL);
+    CHECK(strstr(receipt, "\"requested_plane_id\":0,") != NULL);
+    selection_mode = strstr(receipt, "\"selection_mode\":");
+    CHECK(selection_mode != NULL);
+    CHECK(strstr(selection_mode + 1, "\"selection_mode\":") == NULL);
+    CHECK(strstr(
+        receipt,
+        "\"pixel_payload_present\":false,"
+        "\"framebuffer_mapped\":false,\"presented\":false,"
+        "\"visibility_exclusivity_unproven\":true,"
+        "\"real_commit_attempted\":false,"
+        "\"allow_modeset_attempted\":false,"
+        "\"page_flip_event_requested\":false,"
+        "\"display_state_unchanged_unproven\":true,"
+        "\"display_actual_authorized\":false,"
+        "\"physical_evidence\":false}\n"
+    ) != NULL);
     return true;
 }
 
@@ -742,6 +1109,92 @@ static bool test_accepted_and_initial_blocked_receipts(void)
         "\"native_remove_framebuffer_call_count\":0,"
         "\"native_remove_framebuffer_error\":0,"
         "\"native_destroy_dumb_api_call_count\":0"
+    ) != NULL);
+    return true;
+}
+
+static bool test_derive_accepted_and_initial_blocked_receipts(void)
+{
+    char expected[TEST_OUTPUT_CAPACITY];
+    char expected_operation[128];
+    char output[TEST_OUTPUT_CAPACITY];
+    char errors[128];
+    int return_code;
+
+    reset_accepted_result();
+    CHECK(run_derive_probe(
+        &return_code, output, sizeof(output), errors, sizeof(errors)
+    ));
+    CHECK(return_code == 0 && errors[0] == '\0' && fake_calls == 1U);
+    CHECK(derive_receipt_shape(output));
+    CHECK(make_expected_derive_accepted_receipt(
+        expected, sizeof(expected)
+    ));
+    CHECK(strcmp(output, expected) == 0);
+
+    reset_derive_initial_blocked_result();
+    CHECK(run_derive_probe(
+        &return_code, output, sizeof(output), errors, sizeof(errors)
+    ));
+    CHECK(return_code == 0 && errors[0] == '\0' && fake_calls == 1U);
+    CHECK(derive_receipt_shape(output));
+    CHECK(make_expected_derive_blocked_receipt(
+        expected, sizeof(expected)
+    ));
+    CHECK(strcmp(output, expected) == 0);
+    CHECK(strstr(
+        output,
+        "\"requested_plane_id\":0,\"derived_plane_id\":0,"
+        "\"initial_candidate_reason\":\"MULTIPLE_TEST_TARGETS\""
+    ) != NULL);
+    CHECK(strstr(
+        output,
+        "\"native_create_dumb_api_call_count\":0,"
+        "\"native_create_dumb_error\":0,"
+        "\"native_add_framebuffer_call_count\":0,"
+        "\"native_add_framebuffer_error\":0,"
+        "\"native_portable_atomic_callback_call_count\":0"
+    ) != NULL);
+
+    /*
+     * Models the defensive initial self-check failure: evaluator INVALID
+     * diagnostics must be canonical NONE/zero, never the identified local
+     * candidate that triggered the failed internal consistency check.
+     */
+    reset_derive_initial_selfcheck_failure_result();
+    CHECK(run_derive_probe(
+        &return_code, output, sizeof(output), errors, sizeof(errors)
+    ));
+    CHECK(return_code == 1 && errors[0] == '\0' && fake_calls == 1U);
+    CHECK(derive_receipt_shape(output));
+    CHECK(strstr(
+        output,
+        "\"requested_plane_id\":0,\"derived_plane_id\":0,"
+        "\"initial_candidate_reason\":\"NONE\""
+    ) != NULL);
+    CHECK(strstr(
+        output,
+        "\"initial_topology_sha256\":"
+        "\"00000000000000000000000000000000"
+        "00000000000000000000000000000000\""
+    ) != NULL);
+    CHECK(snprintf(
+        expected_operation, sizeof(expected_operation),
+        "\"operation_failure_stage\":"
+        "\"EVALUATE_INITIAL_CANDIDATE\",\"operation_error\":%d",
+        EPROTO
+    ) > 0);
+    CHECK(strstr(output, expected_operation) != NULL);
+
+    reset_derive_open_failure_result(false);
+    CHECK(run_derive_probe(
+        &return_code, output, sizeof(output), errors, sizeof(errors)
+    ));
+    CHECK(return_code == 1 && errors[0] == '\0' && fake_calls == 1U);
+    CHECK(derive_receipt_shape(output));
+    CHECK(strstr(
+        output,
+        "\"requested_plane_id\":0,\"derived_plane_id\":0"
     ) != NULL);
     return true;
 }
@@ -927,6 +1380,73 @@ static bool expect_provider_failure(void)
     ));
     CHECK(return_code == 1 && fake_calls == 1U && output[0] == '\0');
     CHECK(strcmp(errors, "E_PROVIDER_CONTRACT\n") == 0);
+    return true;
+}
+
+static bool expect_derive_provider_failure(void)
+{
+    char output[TEST_OUTPUT_CAPACITY];
+    char errors[128];
+    int return_code;
+
+    CHECK(run_derive_probe(
+        &return_code, output, sizeof(output), errors, sizeof(errors)
+    ));
+    CHECK(return_code == 1 && fake_calls == 1U && output[0] == '\0');
+    CHECK(strcmp(errors, "E_PROVIDER_CONTRACT\n") == 0);
+    return true;
+}
+
+static bool test_derive_provider_contract_failures(void)
+{
+    reset_accepted_result();
+    fake_mutate_derive_request = true;
+    CHECK(expect_derive_provider_failure());
+
+    reset_accepted_result();
+    fake_result.portable.plane_id = 0U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_accepted_result();
+    fake_result.portable.initial_candidate_identified = false;
+    CHECK(expect_derive_provider_failure());
+
+    reset_accepted_result();
+    fake_result.portable.connector_id = 11U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_accepted_result();
+    fake_result.portable.crtc_id = 31U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_accepted_result();
+    fake_result.native.topology_read_raw_plane_count[0] = 0U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_derive_initial_blocked_result();
+    fake_result.portable.initial_candidate_reason =
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TEST_TARGET_IDENTITY_MISMATCH;
+    CHECK(expect_derive_provider_failure());
+
+    reset_derive_initial_blocked_result();
+    fake_result.native.create_dumb_api_call_count = 1U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_derive_initial_blocked_result();
+    fake_result.native.add_framebuffer_call_count = 1U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_derive_initial_blocked_result();
+    fake_result.native.portable_atomic_callback_call_count = 1U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_derive_initial_blocked_result();
+    fake_result.native.topology_read_raw_plane_count[0] = 1U;
+    CHECK(expect_derive_provider_failure());
+
+    reset_derive_initial_blocked_result();
+    fake_status = MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG;
+    CHECK(expect_derive_provider_failure());
     return true;
 }
 
@@ -1122,6 +1642,172 @@ static bool test_provider_contract_failures(void)
     return true;
 }
 
+static bool expect_derive_argument_failure(
+    int argument_count,
+    char **arguments
+)
+{
+    char output[128];
+    char errors[128];
+    FILE *out_stream = tmpfile();
+    FILE *error_stream = tmpfile();
+    int return_code;
+
+    CHECK(out_stream != NULL && error_stream != NULL);
+    reset_accepted_result();
+    return_code =
+        meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+            out_stream, error_stream, argument_count, arguments,
+            fake_derive_execute
+        );
+    CHECK(return_code == 2 && fake_calls == 0U);
+    CHECK(read_stream(out_stream, output, sizeof(output)));
+    CHECK(read_stream(error_stream, errors, sizeof(errors)));
+    CHECK(output[0] == '\0' && strcmp(errors, "E_ARGUMENT\n") == 0);
+    CHECK(fclose(out_stream) == 0 && fclose(error_stream) == 0);
+    return true;
+}
+
+static bool test_derive_argument_failures_and_stream_alias(void)
+{
+    static char hash[] =
+        "0102030405060708090a0b0c0d0e0f10"
+        "1112131415161718191a1b1c1d1e1f20";
+    static char uppercase_hash[] =
+        "A102030405060708090a0b0c0d0e0f10"
+        "1112131415161718191a1b1c1d1e1f20";
+    char *with_plane[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", hash,
+        (char *)"--connector-id", (char *)"10",
+        (char *)"--crtc-id", (char *)"30",
+        (char *)"--plane-id", (char *)"50"
+    };
+    char *extra[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", hash,
+        (char *)"--connector-id", (char *)"10",
+        (char *)"--crtc-id", (char *)"30", (char *)"extra"
+    };
+    char *reordered[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--connector-id", (char *)"10",
+        (char *)"--topology-sha256", hash,
+        (char *)"--crtc-id", (char *)"30"
+    };
+    char *zero_id[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", hash,
+        (char *)"--connector-id", (char *)"0",
+        (char *)"--crtc-id", (char *)"30"
+    };
+    char *noncanonical_id[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", hash,
+        (char *)"--connector-id", (char *)"010",
+        (char *)"--crtc-id", (char *)"30"
+    };
+    char *bad_hash[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", uppercase_hash,
+        (char *)"--connector-id", (char *)"10",
+        (char *)"--crtc-id", (char *)"30"
+    };
+    char *good_arguments[] = {
+        (char *)"probe", (char *)"--derive-unique-plane",
+        (char *)"--device", (char *)"/sensitive/card0",
+        (char *)"--topology-sha256", hash,
+        (char *)"--connector-id", (char *)"10",
+        (char *)"--crtc-id", (char *)"30"
+    };
+    static const char STREAM_CANARY[] = "unchanged-derived-stream";
+    char output[128];
+    char errors[128];
+    FILE *stream;
+    FILE *out_stream;
+    FILE *error_stream;
+    int return_code;
+
+    CHECK(expect_derive_argument_failure(12, with_plane));
+    CHECK(expect_derive_argument_failure(11, extra));
+    CHECK(expect_derive_argument_failure(10, reordered));
+    CHECK(expect_derive_argument_failure(10, zero_id));
+    CHECK(expect_derive_argument_failure(10, noncanonical_id));
+    CHECK(expect_derive_argument_failure(10, bad_hash));
+
+    stream = tmpfile();
+    CHECK(stream != NULL);
+    CHECK(fwrite(
+        STREAM_CANARY, 1U, sizeof(STREAM_CANARY) - 1U, stream
+    ) == sizeof(STREAM_CANARY) - 1U);
+    CHECK(fflush(stream) == 0);
+    CHECK(ftell(stream) == (long)(sizeof(STREAM_CANARY) - 1U));
+    reset_accepted_result();
+    return_code =
+        meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+            stream, stream, 10, good_arguments, fake_derive_execute
+        );
+    CHECK(return_code == 2 && fake_calls == 0U);
+    CHECK(ftell(stream) == (long)(sizeof(STREAM_CANARY) - 1U));
+    CHECK(read_stream(stream, output, sizeof(output)));
+    CHECK(strcmp(output, STREAM_CANARY) == 0);
+    CHECK(fclose(stream) == 0);
+
+    error_stream = tmpfile();
+    CHECK(error_stream != NULL);
+    CHECK(fwrite(
+        STREAM_CANARY, 1U, sizeof(STREAM_CANARY) - 1U, error_stream
+    ) == sizeof(STREAM_CANARY) - 1U);
+    CHECK(fflush(error_stream) == 0);
+    reset_accepted_result();
+    CHECK(
+        meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+            NULL, error_stream, 10, good_arguments, fake_derive_execute
+        ) == 2
+    );
+    CHECK(fake_calls == 0U);
+    CHECK(read_stream(error_stream, errors, sizeof(errors)));
+    CHECK(strcmp(errors, STREAM_CANARY) == 0);
+    CHECK(fclose(error_stream) == 0);
+
+    out_stream = tmpfile();
+    error_stream = tmpfile();
+    CHECK(out_stream != NULL && error_stream != NULL);
+    reset_accepted_result();
+    CHECK(
+        meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+            out_stream, error_stream, 10, good_arguments, NULL
+        ) == 2
+    );
+    CHECK(fake_calls == 0U);
+    CHECK(read_stream(out_stream, output, sizeof(output)));
+    CHECK(read_stream(error_stream, errors, sizeof(errors)));
+    CHECK(output[0] == '\0' && strcmp(errors, "E_ARGUMENT\n") == 0);
+    CHECK(fclose(out_stream) == 0 && fclose(error_stream) == 0);
+
+    out_stream = fopen("/dev/null", "r");
+    error_stream = tmpfile();
+    CHECK(out_stream != NULL && error_stream != NULL);
+    reset_accepted_result();
+    CHECK(
+        meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+            out_stream, error_stream, 10, good_arguments,
+            fake_derive_execute
+        ) == 1
+    );
+    CHECK(fake_calls == 1U);
+    CHECK(read_stream(error_stream, errors, sizeof(errors)));
+    CHECK(errors[0] == '\0');
+    CHECK(fclose(out_stream) == 0 && fclose(error_stream) == 0);
+    return true;
+}
+
 static bool test_argument_failures_and_stream_alias(void)
 {
     static char hash[] =
@@ -1225,9 +1911,12 @@ static bool test_argument_failures_and_stream_alias(void)
 int main(void)
 {
     if (!test_accepted_and_initial_blocked_receipts() ||
+        !test_derive_accepted_and_initial_blocked_receipts() ||
         !test_cleanup_failure_preserves_master_history() ||
         !test_valid_failure_receipts() ||
         !test_provider_contract_failures() ||
+        !test_derive_provider_contract_failures() ||
+        !test_derive_argument_failures_and_stream_alias() ||
         !test_argument_failures_and_stream_alias()) {
         return 1;
     }

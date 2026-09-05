@@ -357,6 +357,26 @@ static bool fixture_init(Fixture *fixture)
     return true;
 }
 
+static bool fixture_derive_request(
+    const Fixture *fixture,
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *out_request
+)
+{
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest candidate;
+
+    memset(&candidate, 0, sizeof(candidate));
+    if (!meiso_k230d_drm_private_topology_sha256(
+            &fixture->fake.topologies[0],
+            candidate.expected_topology_sha256
+        )) {
+        return false;
+    }
+    candidate.connector_id = 10U;
+    candidate.crtc_id = 30U;
+    *out_request = candidate;
+    return true;
+}
+
 static bool log_is(
     const FakeDrm *fake,
     const FakeOperation *expected,
@@ -366,6 +386,22 @@ static bool log_is(
     return fake->log_count == expected_count &&
         memcmp(fake->log, expected,
                expected_count * sizeof(expected[0])) == 0;
+}
+
+static uint32_t operation_count(
+    const FakeDrm *fake,
+    FakeOperation operation
+)
+{
+    uint32_t count = 0U;
+    uint32_t index;
+
+    for (index = 0U; index < fake->log_count; ++index) {
+        if (fake->log[index] == operation) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 static bool test_accepted_fd_zero_and_three_reads(void)
@@ -1036,6 +1072,155 @@ static bool test_cleanup_stage_matrix_and_primary_preservation(void)
     return true;
 }
 
+static bool test_derive_unique_plane_accepted_and_pinned(void)
+{
+    static const FakeOperation expected[] = {
+        FAKE_OPEN, FAKE_ENABLE_UNIVERSAL, FAKE_ENABLE_ATOMIC,
+        FAKE_ACQUIRE_MASTER, FAKE_VERIFY_MASTER, FAKE_READ_TOPOLOGY,
+        FAKE_CREATE_DUMB, FAKE_ADD_FRAMEBUFFER, FAKE_READ_TOPOLOGY,
+        FAKE_TEST_ONLY, FAKE_READ_TOPOLOGY, FAKE_REMOVE_FRAMEBUFFER,
+        FAKE_DESTROY_DUMB, FAKE_DROP_MASTER, FAKE_CLOSE
+    };
+    Fixture fixture;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+    MeisoK230dDrmSinglePlaneTestOnlyResult result;
+
+    CHECK(fixture_init(&fixture));
+    CHECK(fixture_derive_request(&fixture, &request));
+    memset(&result, 0xa5, sizeof(result));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &fixture.config, &request, &result
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE);
+    CHECK(result.outcome ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_TEST_ACCEPTED_NOT_APPLIED);
+    CHECK(result.primary_outcome ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_PRIMARY_TEST_ACCEPTED_NOT_APPLIED);
+    CHECK(result.initial_candidate_identified &&
+          result.pretest_candidate_identified &&
+          result.posttest_candidate_identified &&
+          result.pretest_topology_unchanged &&
+          result.posttest_topology_unchanged);
+    CHECK(result.connector_id == 10U && result.crtc_id == 30U &&
+          result.plane_id == 50U &&
+          result.minimum_output_bytes == UINT64_C(32));
+    CHECK(result.topology_read_attempt_count == 3U &&
+          result.topology_read_success_count == 3U &&
+          result.atomic_test_only_call_count == 1U &&
+          fixture.fake.test_calls == 1U &&
+          fixture.fake.observed_state.plane_id == 50U);
+    CHECK(result.dumb_was_created && result.framebuffer_was_created &&
+          result.remove_framebuffer_succeeded &&
+          result.destroy_dumb_succeeded && result.drop_master_succeeded &&
+          result.close_succeeded && fixture.fake.close_calls == 1U);
+    CHECK(log_is(&fixture.fake, expected,
+                 sizeof(expected) / sizeof(expected[0])));
+    return true;
+}
+
+static bool test_derive_unique_plane_zero_and_many_stop_after_initial(void)
+{
+    static const FakeOperation expected[] = {
+        FAKE_OPEN, FAKE_ENABLE_UNIVERSAL, FAKE_ENABLE_ATOMIC,
+        FAKE_ACQUIRE_MASTER, FAKE_VERIFY_MASTER, FAKE_READ_TOPOLOGY,
+        FAKE_DROP_MASTER, FAKE_CLOSE
+    };
+    uint32_t case_index;
+
+    for (case_index = 0U; case_index < 2U; ++case_index) {
+        Fixture fixture;
+        MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+        MeisoK230dDrmSinglePlaneTestOnlyResult result;
+        MeisoK230dDrmSinglePlaneTestCandidateReason expected_reason;
+
+        CHECK(fixture_init(&fixture));
+        if (case_index == 0U) {
+            fixture.fake.topologies[0].planes[0].supports_rgb565 = false;
+            expected_reason =
+                MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_NO_TEST_TARGET;
+        } else {
+            fixture.fake.topologies[0].plane_count = 2U;
+            fixture.fake.topologies[0].planes[1] =
+                fixture.fake.topologies[0].planes[0];
+            fixture.fake.topologies[0].planes[1].plane_id = 60U;
+            expected_reason =
+                MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_TEST_TARGETS;
+        }
+        CHECK(fixture_derive_request(&fixture, &request));
+        CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+                  &fixture.config, &request, &result
+              ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE);
+        CHECK(result.outcome ==
+              MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_NOT_TESTED);
+        CHECK(result.primary_outcome ==
+              MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_PRIMARY_NOT_TESTED);
+        CHECK(result.initial_candidate_reason == expected_reason &&
+              !result.initial_candidate_identified &&
+              result.plane_id == 0U);
+        CHECK(result.topology_read_attempt_count == 1U &&
+              result.topology_read_success_count == 1U &&
+              result.atomic_test_only_call_count == 0U);
+        CHECK(!result.dumb_was_created &&
+              !result.framebuffer_was_created &&
+              !result.remove_framebuffer_attempted &&
+              !result.destroy_dumb_attempted &&
+              fixture.fake.test_calls == 0U &&
+              operation_count(&fixture.fake, FAKE_CREATE_DUMB) == 0U &&
+              operation_count(&fixture.fake, FAKE_ADD_FRAMEBUFFER) == 0U &&
+              operation_count(&fixture.fake, FAKE_TEST_ONLY) == 0U);
+        CHECK(result.drop_master_succeeded && result.close_succeeded &&
+              fixture.fake.close_calls == 1U);
+        CHECK(log_is(&fixture.fake, expected,
+                     sizeof(expected) / sizeof(expected[0])));
+    }
+    return true;
+}
+
+static bool test_derive_unique_plane_pretest_and_posttest_drift(void)
+{
+    Fixture fixture;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+    MeisoK230dDrmSinglePlaneTestOnlyResult result;
+
+    CHECK(fixture_init(&fixture));
+    CHECK(fixture_derive_request(&fixture, &request));
+    fixture.fake.topologies[1].driver_version_patch = 4U;
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &fixture.config, &request, &result
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE);
+    CHECK(result.outcome ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_NOT_TESTED);
+    CHECK(result.initial_candidate_identified &&
+          !result.pretest_candidate_identified && result.plane_id == 50U);
+    CHECK(result.pretest_candidate_reason ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TOPOLOGY_IDENTITY_MISMATCH);
+    CHECK(result.operation_failure_stage ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OPERATION_NONE);
+    CHECK(result.topology_read_attempt_count == 2U &&
+          result.atomic_test_only_call_count == 0U &&
+          result.dumb_was_created && result.framebuffer_was_created &&
+          fixture.fake.test_calls == 0U && result.close_succeeded);
+
+    CHECK(fixture_init(&fixture));
+    CHECK(fixture_derive_request(&fixture, &request));
+    fixture.fake.topologies[2].driver_version_patch = 4U;
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &fixture.config, &request, &result
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE);
+    CHECK(result.outcome ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_OPERATION_FAILURE);
+    CHECK(result.primary_outcome ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_PRIMARY_TEST_ACCEPTED_NOT_APPLIED);
+    CHECK(result.test_observation ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_TEST_ACCEPTED_NOT_APPLIED);
+    CHECK(result.postcondition_failure_stage ==
+          MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_POSTCONDITION_TOPOLOGY_CHANGED);
+    CHECK(result.postcondition_error == ESTALE && result.plane_id == 50U &&
+          result.topology_read_attempt_count == 3U &&
+          result.atomic_test_only_call_count == 1U &&
+          fixture.fake.test_calls == 1U && result.close_succeeded);
+    return true;
+}
+
 static bool expect_no_callback_rejection(
     Fixture *fixture,
     const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
@@ -1066,6 +1251,45 @@ static bool expect_existing_output_rejection(
     uint8_t before[sizeof(*out_result)];
     memcpy(before, out_result, sizeof(before));
     CHECK(meiso_k230d_drm_private_run_single_plane_test_only(
+              config, request, out_result
+          ) == expected_status);
+    CHECK(memcmp(out_result, before, sizeof(before)) == 0 &&
+          fixture->fake.log_count == 0U);
+    return true;
+}
+
+static bool expect_derive_no_callback_rejection(
+    Fixture *fixture,
+    const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus expected_status
+)
+{
+    MeisoK230dDrmSinglePlaneTestOnlyResult result;
+    uint8_t before[sizeof(result)];
+
+    memset(&result, 0xa5, sizeof(result));
+    memcpy(before, &result, sizeof(before));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              config, request, &result
+          ) == expected_status);
+    CHECK(memcmp(&result, before, sizeof(result)) == 0 &&
+          fixture->fake.log_count == 0U);
+    return true;
+}
+
+static bool expect_derive_existing_output_rejection(
+    Fixture *fixture,
+    const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result,
+    MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus expected_status
+)
+{
+    uint8_t before[sizeof(*out_result)];
+
+    memcpy(before, out_result, sizeof(before));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
               config, request, out_result
           ) == expected_status);
     CHECK(memcmp(out_result, before, sizeof(before)) == 0 &&
@@ -1431,6 +1655,249 @@ static bool test_path_and_ops_overlap_beyond_base(void)
     return true;
 }
 
+static bool test_derive_invocation_and_alias_contract(void)
+{
+    union {
+        max_align_t alignment;
+        MeisoK230dDrmSinglePlaneTestOnlyConfig config;
+        MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+        MeisoK230dDrmSinglePlaneTestOnlyResult result;
+    } shared;
+    union {
+        max_align_t alignment;
+        uint8_t bytes[
+            sizeof(MeisoK230dDrmSinglePlaneTestOnlyResult) +
+            sizeof(max_align_t) + 32U
+        ];
+    } path_storage;
+    Fixture fixture;
+    MeisoK230dDrmSinglePlaneTestOnlyConfig config;
+    MeisoK230dDrmSinglePlaneTestOnlyOps ops;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest request;
+    MeisoK230dDrmSinglePlaneTestOnlyResult result;
+    MeisoK230dDrmSinglePlaneTestOnlyResult *overlapped_result;
+    uint8_t shared_before[sizeof(shared)];
+    uint8_t result_before[sizeof(result)];
+    char long_path[MEISO_K230D_DRM_DEVICE_PATH_CAPACITY];
+    const size_t offset = sizeof(max_align_t);
+
+    CHECK(fixture_init(&fixture));
+    CHECK(fixture_derive_request(&fixture, &request));
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, NULL, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT
+    ));
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &fixture.config, NULL,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT
+    ));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &fixture.config, &request, NULL
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT);
+    CHECK(fixture.fake.log_count == 0U);
+
+    request.connector_id = 0U;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &fixture.config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT
+    ));
+    CHECK(fixture_derive_request(&fixture, &request));
+    request.crtc_id = 0U;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &fixture.config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT
+    ));
+    config = fixture.config;
+    config.device_path = NULL;
+    request.connector_id = 0U;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT
+    ));
+    CHECK(fixture_derive_request(&fixture, &request));
+
+    memset(&shared, 0, sizeof(shared));
+    shared.config = fixture.config;
+    memset(&result, 0xa5, sizeof(result));
+    memcpy(shared_before, &shared, sizeof(shared_before));
+    memcpy(result_before, &result, sizeof(result_before));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &shared.config,
+              (const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *)(
+                  const void *)&shared,
+              &result
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT);
+    CHECK(memcmp(&shared, shared_before, sizeof(shared_before)) == 0 &&
+          memcmp(&result, result_before, sizeof(result_before)) == 0);
+
+    memset(&shared, 0, sizeof(shared));
+    shared.config = fixture.config;
+    memcpy(shared_before, &shared, sizeof(shared_before));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &shared.config, &request,
+              (MeisoK230dDrmSinglePlaneTestOnlyResult *)(void *)&shared
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT);
+    CHECK(memcmp(&shared, shared_before, sizeof(shared_before)) == 0);
+
+    memset(&shared, 0, sizeof(shared));
+    shared.request = request;
+    memcpy(shared_before, &shared, sizeof(shared_before));
+    CHECK(meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+              &fixture.config, &shared.request,
+              (MeisoK230dDrmSinglePlaneTestOnlyResult *)(void *)&shared
+          ) == MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT);
+    CHECK(memcmp(&shared, shared_before, sizeof(shared_before)) == 0 &&
+          fixture.fake.log_count == 0U);
+
+    config = fixture.config;
+    config.device_path = NULL;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops = NULL;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops_context = NULL;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.device_path = "relative";
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    memset(long_path, 'a', sizeof(long_path));
+    long_path[0] = '/';
+    config = fixture.config;
+    config.device_path = long_path;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    ops = FAKE_OPS;
+    ops.atomic_test_only = NULL;
+    config = fixture.config;
+    config.ops = &ops;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+
+    memset(&result, 0xa5, sizeof(result));
+    config = fixture.config;
+    config.device_path = (const char *)(const void *)&config;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.device_path = (const char *)(const void *)&request;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.device_path = (const char *)(const void *)&FAKE_OPS;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.device_path = (const char *)(const void *)&result;
+    CHECK(expect_derive_existing_output_rejection(
+        &fixture, &config, &request, &result,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.device_path = (const char *)(const void *)&fixture.fake;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+
+    config = fixture.config;
+    config.ops = (const MeisoK230dDrmSinglePlaneTestOnlyOps *)(
+        const void *)&config;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops = (const MeisoK230dDrmSinglePlaneTestOnlyOps *)(
+        const void *)&request;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops = (const MeisoK230dDrmSinglePlaneTestOnlyOps *)(
+        const void *)&result;
+    CHECK(expect_derive_existing_output_rejection(
+        &fixture, &config, &request, &result,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops = (const MeisoK230dDrmSinglePlaneTestOnlyOps *)(
+        const void *)config.device_path;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+
+    config = fixture.config;
+    config.ops_context = &config;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops_context = &request;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops_context = &result;
+    CHECK(expect_derive_existing_output_rejection(
+        &fixture, &config, &request, &result,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops_context = (void *)(uintptr_t)(const void *)&FAKE_OPS;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    config = fixture.config;
+    config.ops_context = (void *)(uintptr_t)(const void *)config.device_path;
+    CHECK(expect_derive_no_callback_rejection(
+        &fixture, &config, &request,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+
+    memset(&path_storage, 'p', sizeof(path_storage));
+    path_storage.bytes[0] = '/';
+    path_storage.bytes[offset + 8U] = '\0';
+    overlapped_result =
+        (MeisoK230dDrmSinglePlaneTestOnlyResult *)(void *)(
+            path_storage.bytes + offset
+        );
+    config = fixture.config;
+    config.device_path = (const char *)(const void *)path_storage.bytes;
+    CHECK(expect_derive_existing_output_rejection(
+        &fixture, &config, &request, overlapped_result,
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG
+    ));
+    return true;
+}
+
 int main(void)
 {
     if (!test_accepted_fd_zero_and_three_reads() ||
@@ -1445,11 +1912,15 @@ int main(void)
         !test_each_operation_stage_positive_and_negative_error() ||
         !test_create_and_add_output_contracts() ||
         !test_cleanup_stage_matrix_and_primary_preservation() ||
+        !test_derive_unique_plane_accepted_and_pinned() ||
+        !test_derive_unique_plane_zero_and_many_stop_after_initial() ||
+        !test_derive_unique_plane_pretest_and_posttest_drift() ||
         !test_invocation_null_zero_and_mixed_precedence() ||
         !test_invocation_fixed_object_aliases() ||
         !test_invocation_configuration_matrix() ||
         !test_success_output_sentinels_and_post_axes() ||
-        !test_path_and_ops_overlap_beyond_base()) {
+        !test_path_and_ops_overlap_beyond_base() ||
+        !test_derive_invocation_and_alias_contract()) {
         return 1;
     }
     (void)printf("K230D_DRM_SINGLE_PLANE_TEST_ONLY_CORE_TEST_PASSED\n");

@@ -434,7 +434,15 @@ immutable-zpos 门不因此放宽。既有板端观察记录了两个未使用�
 所以目前没有证明唯一候选；具体的新判定原因尚未由未来同一 master fd 上的新鲜枚举与
 判定证据封印，不能提前写成某个精确结果，更不能按请求 ID 猜选其中之一。
 
-下一层便携诊断执行器的合同由
+为避免 operator 猜 plane ID，另有 additive derived selector。它仍要求调用方给出 expected
+topology SHA-256 和 connector/CRTC route，只在同一份 topology 通过全部共同门且兼容
+immutable RGB565 overlay 恰好一个后派生 plane ID。零候选或多个候选都 clean block，不能
+用 plane ID 二选一；derived request 类型没有 plane 字段，也不把零传进旧显式 API。
+IDENTIFIED 后，便携执行器从 topology #1 复制实际 hash/route/plane，立即用旧显式 evaluator
+自校并冻结该请求，#2 与 #3 仍按完整显式身份复核。这个入口同样不使用 zpos，也不改变
+real-commit eligibility 或任何物理/可见性门。
+
+下一层便携诊断执行器的 explicit 与 derived 合同由
 [K230D target 入口](../../targets/k230d-linux/README.md#便携的-test_only-only-执行器合同)
 拥有。在走到 TEST_ONLY callback 的分支，它计划在同一 master fd 上同步完成三次完整枚举：
 第一次核对精确候选，创建但不映射也不写像素的 RGB565 dumb buffer 与 framebuffer 后，
@@ -453,11 +461,17 @@ callback 的分支才必须执行第三次读取，未尝试的 slot 不能冒�
 portable result 硬推这些事实。该调用计数不观测 libdrm 内部的 syscall 尝试或重试。
 精确 CLI、收据和 cross-link 门由
 [K230D target 入口](../../targets/k230d-linux/README.md#原生-test_only-only-adapter-与一次性探针)
-拥有。只有这份 native 运行收据中的 accepted-not-applied 才能归因于该次 libdrm/内核
+拥有。旧显式模式继续输出 byte-exact V1；derived 模式必须由 operator 显式选择
+`--derive-unique-plane`，不接收 plane ID，并输出 V2，其中
+`selection_mode=UNIQUE_POLICY_DERIVED`、`requested_plane_id=0` 与独立
+`derived_plane_id` 不能混称。只有这份 native 运行收据中的 accepted-not-applied 才能归因于该次 libdrm/内核
 调用；注入 Ops 的 Host test 仍不能。两者都不能授权 Display Actual RUNNING、真实提交、
 可见画面或物理呈现证据；native receipt 还固定声明 framebuffer 未 map、
 `presented=false`、`visibility_exclusivity_unproven=true` 与
 `display_state_unchanged_unproven=true`。
+这里的 execute provider 是 exact runner artifact 内链接的受信进程内实现；runner 不接收
+topology bytes，V2 validator 只检查 result/native ledger 的可达性与内部一致性，不能脱离
+linked provider artifact identity 单独证明派生事实。
 所有成功打开的 fd 都必须经过一次终止性 close；这是新 TEST_ONLY Ops 对未来 Linux DRM
 native adapter 的专用合同，不改变现有 scanout Ops。remove/destroy/drop/close 的任一清理
 债务都会成为 `CLEANUP_FAILURE`，不得留下调用方不可达的对象所有权。

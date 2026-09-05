@@ -9,6 +9,8 @@ typedef struct {
     void *ops_context;
     char device_path[MEISO_K230D_DRM_DEVICE_PATH_CAPACITY];
     MeisoK230dDrmSinglePlaneTestCandidateRequest request;
+    MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest derive_request;
+    bool derive_unique_plane;
     MeisoK230dDrmSinglePlaneTestOnlyResult result;
     MeisoK230dDrmTopology initial_topology;
     MeisoK230dDrmTopology pretest_topology;
@@ -50,7 +52,8 @@ static bool ranges_overlap(
 
 static bool known_config_ranges_overlap(
     const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
-    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    const void *request,
+    size_t request_size,
     MeisoK230dDrmSinglePlaneTestOnlyResult *out_result,
     size_t path_bytes
 )
@@ -60,7 +63,7 @@ static bool known_config_ranges_overlap(
         config, request, out_result, config->ops, config->device_path
     };
     const size_t sizes[] = {
-        sizeof(*config), sizeof(*request), sizeof(*out_result),
+        sizeof(*config), request_size, sizeof(*out_result),
         sizeof(*config->ops), path_bytes
     };
     size_t lhs;
@@ -140,7 +143,74 @@ static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus validate_invocation(
     }
     ++path_size;
     if (known_config_ranges_overlap(
-            config, request, out_result, path_size
+            config, request, sizeof(*request), out_result, path_size
+        ) || !ops_valid(config->ops)) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG;
+    }
+    *out_path_bytes = path_size;
+    return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE;
+}
+
+static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+validate_derive_invocation(
+    const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result,
+    size_t *out_path_bytes
+)
+{
+    size_t path_size;
+
+    if (config == NULL || request == NULL || out_result == NULL) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT;
+    }
+    if (ranges_overlap(config, sizeof(*config), request, sizeof(*request)) ||
+        ranges_overlap(config, sizeof(*config), out_result,
+                       sizeof(*out_result)) ||
+        ranges_overlap(request, sizeof(*request), out_result,
+                       sizeof(*out_result)) ||
+        request->connector_id == 0U || request->crtc_id == 0U) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_ARGUMENT;
+    }
+    if (config->device_path == NULL || config->ops == NULL ||
+        config->ops_context == NULL) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG;
+    }
+    /* Reject known fixed-range aliases before scanning path or reading Ops. */
+    if (ranges_overlap(config->ops, sizeof(*config->ops),
+                       config, sizeof(*config)) ||
+        ranges_overlap(config->ops, sizeof(*config->ops),
+                       request, sizeof(*request)) ||
+        ranges_overlap(config->ops, sizeof(*config->ops),
+                       out_result, sizeof(*out_result)) ||
+        ranges_overlap(config->device_path, 1U,
+                       config, sizeof(*config)) ||
+        ranges_overlap(config->device_path, 1U,
+                       request, sizeof(*request)) ||
+        ranges_overlap(config->device_path, 1U,
+                       out_result, sizeof(*out_result)) ||
+        ranges_overlap(config->device_path, 1U,
+                       config->ops, sizeof(*config->ops)) ||
+        ranges_overlap(config->device_path, 1U,
+                       config->ops_context, 1U) ||
+        ranges_overlap(config->ops_context, 1U,
+                       config, sizeof(*config)) ||
+        ranges_overlap(config->ops_context, 1U,
+                       request, sizeof(*request)) ||
+        ranges_overlap(config->ops_context, 1U,
+                       out_result, sizeof(*out_result)) ||
+        ranges_overlap(config->ops_context, 1U,
+                       config->ops, sizeof(*config->ops))) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG;
+    }
+    if (!meiso_k230d_drm_private_path_size(
+            config->device_path, &path_size
+        )) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG;
+    }
+    ++path_size;
+    if (known_config_ranges_overlap(
+            config, request, sizeof(*request), out_result, path_size
         ) || !ops_valid(config->ops)) {
         return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_INVALID_CONFIG;
     }
@@ -501,6 +571,78 @@ static MeisoK230dDrmSinglePlaneTestCandidateStatus evaluate_candidate(
     );
 }
 
+static MeisoK230dDrmSinglePlaneTestCandidateStatus
+evaluate_initial_candidate(
+    SinglePlaneTestExecution *execution,
+    const MeisoK230dDrmTopology *topology,
+    MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
+)
+{
+    MeisoK230dDrmSinglePlaneTestCandidate derived_candidate;
+    MeisoK230dDrmSinglePlaneTestCandidate explicit_candidate;
+    MeisoK230dDrmSinglePlaneTestCandidateStatus status;
+    MeisoK230dDrmSinglePlaneTestCandidateRequest pinned_request;
+    uint32_t plane_id;
+
+    if (!execution->derive_unique_plane) {
+        return evaluate_candidate(execution, topology, out_candidate);
+    }
+
+    memset(out_candidate, 0, sizeof(*out_candidate));
+    memset(&derived_candidate, 0, sizeof(derived_candidate));
+    status = meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+        topology, &execution->derive_request, &derived_candidate
+    );
+    if (status ==
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_BLOCKED) {
+        *out_candidate = derived_candidate;
+        return status;
+    }
+    if (status !=
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_IDENTIFIED) {
+        return status;
+    }
+
+    if (derived_candidate.connector_index >= topology->connector_count ||
+        derived_candidate.crtc_index >= topology->crtc_count ||
+        derived_candidate.plane_index >= topology->plane_count) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+    plane_id = topology->planes[derived_candidate.plane_index].plane_id;
+    if (plane_id == 0U ||
+        topology->connectors[derived_candidate.connector_index].connector_id !=
+            execution->derive_request.connector_id ||
+        topology->crtcs[derived_candidate.crtc_index].crtc_id !=
+            execution->derive_request.crtc_id) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+
+    memset(&pinned_request, 0, sizeof(pinned_request));
+    memcpy(
+        pinned_request.expected_topology_sha256,
+        derived_candidate.topology_sha256,
+        sizeof(pinned_request.expected_topology_sha256)
+    );
+    pinned_request.connector_id = execution->derive_request.connector_id;
+    pinned_request.crtc_id = execution->derive_request.crtc_id;
+    pinned_request.plane_id = plane_id;
+
+    memset(&explicit_candidate, 0, sizeof(explicit_candidate));
+    status = meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
+        topology, &pinned_request, &explicit_candidate
+    );
+    if (status !=
+            MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_IDENTIFIED ||
+        !candidate_same(&derived_candidate, &explicit_candidate)) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+
+    execution->request = pinned_request;
+    execution->result.plane_id = plane_id;
+    *out_candidate = explicit_candidate;
+    return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_IDENTIFIED;
+}
+
 static void construct_plane_state(
     const MeisoK230dDrmTopology *topology,
     const MeisoK230dDrmSinglePlaneTestCandidate *candidate,
@@ -558,46 +700,50 @@ static bool dumb_contract_valid(
         dumb->size <= MEISO_K230D_DRM_MAX_DUMB_BYTES;
 }
 
-MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
-meiso_k230d_drm_private_run_single_plane_test_only(
+static MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+run_single_plane_test_only_validated(
     const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
     const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
-    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest
+        *derive_request,
+    bool derive_unique_plane,
+    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result,
+    size_t path_bytes
 )
 {
     SinglePlaneTestExecution execution;
-    MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus invoke_status;
     MeisoK230dDrmSinglePlaneTestCandidateStatus candidate_status;
     MeisoK230dDrmAtomicPlaneState state;
     MeisoK230dDrmDumbBuffer dumb;
     const MeisoK230dDrmMode *mode;
     uint32_t framebuffer_id = 0U;
-    size_t path_bytes = 0U;
     int error;
-
-    invoke_status = validate_invocation(
-        config, request, out_result, &path_bytes
-    );
-    if (invoke_status !=
-        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE) {
-        return invoke_status;
-    }
 
     memset(&execution, 0, sizeof(execution));
     execution.fd = -1;
     execution.ops = *config->ops;
     execution.ops_context = config->ops_context;
     memcpy(execution.device_path, config->device_path, path_bytes);
-    execution.request = *request;
+    execution.derive_unique_plane = derive_unique_plane;
+    if (derive_unique_plane) {
+        execution.derive_request = *derive_request;
+    } else {
+        execution.request = *request;
+    }
     execution.result.outcome =
         MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_OUTCOME_NOT_TESTED;
     execution.result.primary_outcome =
         MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_PRIMARY_NOT_TESTED;
     execution.result.test_observation =
         MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_TEST_NOT_ATTEMPTED;
-    execution.result.connector_id = request->connector_id;
-    execution.result.crtc_id = request->crtc_id;
-    execution.result.plane_id = request->plane_id;
+    if (derive_unique_plane) {
+        execution.result.connector_id = derive_request->connector_id;
+        execution.result.crtc_id = derive_request->crtc_id;
+    } else {
+        execution.result.connector_id = request->connector_id;
+        execution.result.crtc_id = request->crtc_id;
+        execution.result.plane_id = request->plane_id;
+    }
 
     error = call_open(&execution, &execution.fd);
     if (error != 0) {
@@ -665,7 +811,7 @@ meiso_k230d_drm_private_run_single_plane_test_only(
         );
         goto done;
     }
-    candidate_status = evaluate_candidate(
+    candidate_status = evaluate_initial_candidate(
         &execution, &execution.initial_topology,
         &execution.initial_candidate
     );
@@ -855,4 +1001,48 @@ done:
     cleanup_execution(&execution);
     *out_result = execution.result;
     return MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE;
+}
+
+MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+meiso_k230d_drm_private_run_single_plane_test_only(
+    const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
+    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result
+)
+{
+    MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus invoke_status;
+    size_t path_bytes = 0U;
+
+    invoke_status = validate_invocation(
+        config, request, out_result, &path_bytes
+    );
+    if (invoke_status !=
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE) {
+        return invoke_status;
+    }
+    return run_single_plane_test_only_validated(
+        config, request, NULL, false, out_result, path_bytes
+    );
+}
+
+MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+meiso_k230d_drm_private_run_single_plane_test_only_derive_unique_plane(
+    const MeisoK230dDrmSinglePlaneTestOnlyConfig *config,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestOnlyResult *out_result
+)
+{
+    MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus invoke_status;
+    size_t path_bytes = 0U;
+
+    invoke_status = validate_derive_invocation(
+        config, request, out_result, &path_bytes
+    );
+    if (invoke_status !=
+        MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RESULT_AVAILABLE) {
+        return invoke_status;
+    }
+    return run_single_plane_test_only_validated(
+        config, NULL, request, true, out_result, path_bytes
+    );
 }

@@ -171,10 +171,32 @@ meiso_k230d_drm_libdrm_run_single_plane_test_only(
     MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
 );
 
+/*
+ * Uses the same native binder and ledger with the additive portable
+ * unique-plane entry point. The path/request/output ranges are pairwise
+ * disjoint and failure-no-write rules are identical to the explicit wrapper.
+ * No preliminary fd or topology read is permitted: derivation happens on
+ * topology #1 after master verification on the one fd owned by this run.
+ */
+MEISO_K230D_DRM_PRIVATE_API
+MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+meiso_k230d_drm_libdrm_run_single_plane_test_only_derive_unique_plane(
+    const char *device_path,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
+);
+
 typedef MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
     (*MeisoK230dDrmNativeSinglePlaneTestOnlyExecuteFn)(
         const char *device_path,
         const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+        MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
+    );
+
+typedef MeisoK230dDrmSinglePlaneTestOnlyInvokeStatus
+    (*MeisoK230dDrmNativeSinglePlaneTestOnlyDeriveUniquePlaneExecuteFn)(
+        const char *device_path,
+        const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
         MeisoK230dDrmLibdrmSinglePlaneTestOnlyResult *out_result
     );
 
@@ -200,6 +222,32 @@ int meiso_k230d_drm_single_plane_test_only_once_run(
     int argument_count,
     char **arguments,
     MeisoK230dDrmNativeSinglePlaneTestOnlyExecuteFn execute
+);
+
+/*
+ * Additive Host-testable seam for the exact derived-mode CLI:
+ *
+ *   PROGRAM --derive-unique-plane --device ABSOLUTE_PATH
+ *       --topology-sha256 LOWER_HEX_64 --connector-id CANONICAL_U32
+ *       --crtc-id CANONICAL_U32
+ *
+ * --plane-id is never accepted in this mode. Stream, diagnostic, provider,
+ * bounded-output and exit-code rules match the explicit seam. Its canonical
+ * V2 receipt keeps requested_plane_id at the literal zero and reports the
+ * separately derived plane id; it never labels that id as caller-requested.
+ * execute is a trusted in-process provider linked into the exact runner
+ * artifact, not an external evidence source. This seam receives no topology
+ * bytes: its validator rejects unreachable or internally inconsistent
+ * result/ledger combinations, but derivation provenance still depends on the
+ * identity of the linked native provider artifact.
+ */
+MEISO_K230D_DRM_PRIVATE_API
+int meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run(
+    FILE *out_stream,
+    FILE *error_stream,
+    int argument_count,
+    char **arguments,
+    MeisoK230dDrmNativeSinglePlaneTestOnlyDeriveUniquePlaneExecuteFn execute
 );
 
 #ifdef __cplusplus

@@ -84,12 +84,22 @@ master fd 上的新鲜枚举与判定证据封印，在那以前不得尝试 TES
 mode 每边先限制为 4096，计算出的 RGB565 最小 byte 数最大为 32 MiB，不另造一个当前
 不可到达的 buffer failure reason。
 
+另一个 additive `derive_unique_plane` 私有入口只省略调用方无法安全猜测的 plane ID；调用方
+仍须钉住 expected topology SHA-256 与 connector/CRTC route。它和显式入口共用上述同一
+policy 与顺序，但在“兼容候选恰好一个”后直接返回该候选的 topology index，不执行“唯一
+候选 ID 等于请求值”这一步。零候选或多候选仍分别为 `NO_TEST_TARGET` 与
+`MULTIPLE_TEST_TARGETS`，不能按 ID 或枚举顺序挑选。derived request 类型根本没有 plane
+字段；零 plane ID 也不会作为旧显式 API 的哨兵。空指针、零 connector/CRTC ID 或三段对象
+范围重叠仍是 `INVALID_ARGUMENT` 且输出不变。IDENTIFIED 后的执行器才可从这份 topology
+复制非零 plane ID，并立即用原显式判定器自校一个冻结请求。
+
 ### 便携的 TEST_ONLY-only 执行器合同
 
 下一层仍是仓内私有、同步、一次性的诊断执行器；本段先固定合同和 API 边界。在假设备
-回调的失败矩阵与可执行测试完成前，不把它写成“已经尝试过 TEST_ONLY”。入口消费上节
-精确的 `single_plane_test_candidate` 请求，但不会复用现有 `begin()`，也不会改变
-`begin()` 的真实提交规则。
+回调的失败矩阵与可执行测试完成前，不把它写成“已经尝试过 TEST_ONLY”。原入口消费上节
+精确的 `single_plane_test_candidate` 请求；additive derived 入口消费 expected hash 与
+connector/CRTC，不接收 plane ID。二者不会复用现有 `begin()`，也不会改变 `begin()` 的
+真实提交规则。
 
 这层使用一套单独的窄回调表。它只能表达：打开 primary DRM 节点、启用 universal-plane
 和 atomic 枚举能力、取得并核验 master、读取完整 topology、创建未映射的 RGB565 dumb
@@ -103,8 +113,11 @@ buffer、建立 framebuffer、执行一次没有 kind/flags/cookie 参数的 `at
 
 1. 先验证配置、请求、输出范围互不重叠，以及回调表完整；参数错误时输出逐字节不变；
 2. 打开 fd，启用两项枚举能力，取得并再次核验 master；
-3. 在同一 fd 上读取 topology #1，核对请求绑定的 SHA-256 和候选身份；若判定被阻断，
-   不创建资源、不尝试 TEST_ONLY，直接进入统一清理；
+3. 在同一 fd 上读取 topology #1。显式模式核对请求绑定的 SHA-256 和完整候选身份；derived
+   模式核对 expected SHA-256 与 connector/CRTC route，并要求兼容 plane 恰好一个。derived
+   模式只有 IDENTIFIED 后才从 #1 复制非零 plane ID，构造并立即自校一个显式冻结请求。
+   任一模式被阻断都不创建 dumb/FB、不尝试 TEST_ONLY，直接进入统一清理；derived 模式的
+   结果 plane ID 此时保持零；
 4. 创建但不映射 RGB565 dumb buffer，并核验 handle 非零、pitch 至少为 `width * 2`、
    size 至少为 `pitch * height` 且不超过 64 MiB；再建立非零 framebuffer ID；
 5. 在 TEST_ONLY 前重新读取 topology #2，并用同一请求重新判定；它的规范化 SHA-256、
@@ -150,8 +163,8 @@ core 自身不链接 native libdrm、命令行 runner 或板端收据，也不�
 
 调用状态的分类与优先级固定如下，混合错误只返回先命中的一类：
 
-1. `INVALID_ARGUMENT`：config/request/result 任一为空；这三个定长对象范围重叠；或者请求
-   中 connector/CRTC/plane ID 任一为零；
+1. `INVALID_ARGUMENT`：config/request/result 任一为空；这三个定长对象范围重叠；两种
+   request 的 connector/CRTC ID 任一为零，或者仅在 explicit request 中 plane ID 为零；
 2. `INVALID_CONFIG`：device path、Ops 或 context 为空；path 不是容量内的绝对 NUL 结尾
    字符串；任一必需 callback 缺失；Ops/path 的已知范围与 config/request/result 或彼此
    重叠；或者 context 基地址落在任一已知范围内。由于 core 不知道 context allocation
@@ -238,6 +251,17 @@ meiso_k230d_drm_single_plane_test_only_once \
   --plane-id CANONICAL_NONZERO_U32
 ```
 
+或者显式选择 derived mode；该 grammar 不接受 `--plane-id`：
+
+```sh
+meiso_k230d_drm_single_plane_test_only_once \
+  --derive-unique-plane \
+  --device /dev/dri/card0 \
+  --topology-sha256 LOWERCASE_SHA256 \
+  --connector-id CANONICAL_NONZERO_U32 \
+  --crtc-id CANONICAL_NONZERO_U32
+```
+
 十进制 ID 必须是无前导零的 canonical 非零 `uint32_t`；SHA-256 必须是 64 个小写十六进制
 字符。参数错误只向 stderr 写 `E_ARGUMENT`、stdout 为空并退出 2。内部 provider/result
 违反私有合同只写 `E_PROVIDER_CONTRACT`、不输出半条收据并退出 1。合法
@@ -266,12 +290,29 @@ stdout 的唯一 JSON 行固定为
    `display_state_unchanged_unproven=true`、`display_actual_authorized=false`、
    `physical_evidence=false`。
 
+上述 V1 只属于显式 plane 请求；旧 CLI、API、schema 与所有合法 V1 receipt bytes 保持
+不变，common provider validator 只加严不可达的 native/result ledger 组合。
+derived mode 使用同一 type 的 additive
+`meiso.k230d_drm_single_plane_test_only_probe.v2`；它在 scope 后固定加入
+`selection_mode="UNIQUE_POLICY_DERIVED"`，在原请求字段位置固定写
+`requested_plane_id=0`，随后写 `derived_plane_id`，其余账本字段保持 V1 的顺序与含义。
+这个零只表示“调用方没有请求 plane”，从不传入显式 evaluator。topology #1 未识别唯一候选
+或更早失败时，`derived_plane_id=0`，dumb/FB/atomic 调用计数均为零；一旦 #1 IDENTIFIED，
+`derived_plane_id` 必须非零且在 #2、#3、操作失败与清理结果中保持固定。V2 provider 必须
+把 expected hash、connector/CRTC 与 derived request 精确交叉核对；initial reason 不得为
+`TEST_TARGET_IDENTITY_MISMATCH`。合法 clean `NOT_TESTED` 的退出语义与 V1 相同。
+这里的 execute provider 是 exact runner artifact 内链接的受信进程内实现，不是外部证据源；
+runner 不接收 topology bytes，validator 只能拒绝不可达或内部不自洽的 result/native ledger，
+不能单独证明 plane 的派生过程。V2 的派生事实因而必须与该次运行所加载的 native provider
+artifact identity 一起使用，不能脱离 artifact provenance 解读。
+
 收据不含 device path，也不声称源码 commit、artifact 身份、像素、可见性或物理呈现。
 即使三份枚举 hash 相同，open/set/drop/close 与驱动内部副作用仍不由本程序证明为零，所以
 `display_state_unchanged_unproven` 恒为 true。当前已封存的板端 topology 只证明有
 两个兼容的未使用 RGB565 overlay；它没有封存新 evaluator 的其余候选门，
 也不能预先声称会得到“多候选”或任何其他精确 reason。只有同一 master fd 上
-的新鲜三次枚举与该 runner 的新收据，才可能说明此次是否真的到达
+最多三次的新鲜枚举（只有到达 TEST_ONLY callback 才执行 #3）与该 runner 的新收据，
+才可能说明此次是否真的到达
 `TEST_ONLY`。Host 单元测试只注入 execute result 验证 CLI/收据，不冒充 libdrm；原生代码
 必须另经显式 target cross compile/link 门。
 

@@ -186,10 +186,14 @@ meiso_k230d_drm_private_evaluate_topology(
     return MEISO_K230D_DRM_TOPOLOGY_ELIGIBLE;
 }
 
-MeisoK230dDrmSinglePlaneTestCandidateStatus
-meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
+static MeisoK230dDrmSinglePlaneTestCandidateStatus
+evaluate_single_plane_test_candidate_common(
     const MeisoK230dDrmTopology *topology,
-    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    const uint8_t expected_topology_sha256[MEISO_K230D_DRM_SHA256_SIZE],
+    uint32_t requested_connector_id,
+    uint32_t requested_crtc_id,
+    bool require_plane_id,
+    uint32_t requested_plane_id,
     MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
 )
 {
@@ -200,22 +204,6 @@ meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
     uint32_t connector_index;
     uint32_t crtc_index;
     uint32_t plane_index;
-
-    if (topology == NULL || request == NULL || out_candidate == NULL) {
-        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
-    }
-    if (meiso_k230d_drm_private_ranges_overlap(
-            topology, sizeof(*topology), request, sizeof(*request)
-        ) || meiso_k230d_drm_private_ranges_overlap(
-            topology, sizeof(*topology), out_candidate,
-            sizeof(*out_candidate)
-        ) || meiso_k230d_drm_private_ranges_overlap(
-            request, sizeof(*request), out_candidate,
-            sizeof(*out_candidate)
-        ) || request->connector_id == 0U || request->crtc_id == 0U ||
-        request->plane_id == 0U) {
-        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
-    }
 
     memset(&candidate, 0, sizeof(candidate));
     if (topology->connector_count > MEISO_K230D_DRM_MAX_CONNECTORS ||
@@ -237,7 +225,7 @@ meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
     candidate.topology_hash_valid = true;
     if (memcmp(
             candidate.topology_sha256,
-            request->expected_topology_sha256,
+            expected_topology_sha256,
             sizeof(candidate.topology_sha256)
         ) != 0) {
         candidate.reason =
@@ -283,8 +271,8 @@ meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
     }
     candidate.route_selected = true;
     if (topology->connectors[candidate.connector_index].connector_id !=
-            request->connector_id ||
-        topology->crtcs[candidate.crtc_index].crtc_id != request->crtc_id) {
+            requested_connector_id ||
+        topology->crtcs[candidate.crtc_index].crtc_id != requested_crtc_id) {
         candidate.reason =
             MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_ROUTE_IDENTITY_MISMATCH;
         goto blocked;
@@ -340,8 +328,9 @@ meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
             MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_MULTIPLE_TEST_TARGETS;
         goto blocked;
     }
-    if (topology->planes[candidate.plane_index].plane_id !=
-        request->plane_id) {
+    if (require_plane_id &&
+        topology->planes[candidate.plane_index].plane_id !=
+            requested_plane_id) {
         candidate.reason =
             MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_REASON_TEST_TARGET_IDENTITY_MISMATCH;
         goto blocked;
@@ -366,6 +355,71 @@ meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
 blocked:
     *out_candidate = candidate;
     return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_BLOCKED;
+}
+
+MeisoK230dDrmSinglePlaneTestCandidateStatus
+meiso_k230d_drm_private_evaluate_single_plane_test_candidate(
+    const MeisoK230dDrmTopology *topology,
+    const MeisoK230dDrmSinglePlaneTestCandidateRequest *request,
+    MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
+)
+{
+    if (topology == NULL || request == NULL || out_candidate == NULL) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+    if (meiso_k230d_drm_private_ranges_overlap(
+            topology, sizeof(*topology), request, sizeof(*request)
+        ) || meiso_k230d_drm_private_ranges_overlap(
+            topology, sizeof(*topology), out_candidate,
+            sizeof(*out_candidate)
+        ) || meiso_k230d_drm_private_ranges_overlap(
+            request, sizeof(*request), out_candidate,
+            sizeof(*out_candidate)
+        ) || request->connector_id == 0U || request->crtc_id == 0U ||
+        request->plane_id == 0U) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+    return evaluate_single_plane_test_candidate_common(
+        topology,
+        request->expected_topology_sha256,
+        request->connector_id,
+        request->crtc_id,
+        true,
+        request->plane_id,
+        out_candidate
+    );
+}
+
+MeisoK230dDrmSinglePlaneTestCandidateStatus
+meiso_k230d_drm_private_derive_unique_plane_test_candidate(
+    const MeisoK230dDrmTopology *topology,
+    const MeisoK230dDrmSinglePlaneTestDeriveUniquePlaneRequest *request,
+    MeisoK230dDrmSinglePlaneTestCandidate *out_candidate
+)
+{
+    if (topology == NULL || request == NULL || out_candidate == NULL) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+    if (meiso_k230d_drm_private_ranges_overlap(
+            topology, sizeof(*topology), request, sizeof(*request)
+        ) || meiso_k230d_drm_private_ranges_overlap(
+            topology, sizeof(*topology), out_candidate,
+            sizeof(*out_candidate)
+        ) || meiso_k230d_drm_private_ranges_overlap(
+            request, sizeof(*request), out_candidate,
+            sizeof(*out_candidate)
+        ) || request->connector_id == 0U || request->crtc_id == 0U) {
+        return MEISO_K230D_DRM_SINGLE_PLANE_TEST_CANDIDATE_INVALID_ARGUMENT;
+    }
+    return evaluate_single_plane_test_candidate_common(
+        topology,
+        request->expected_topology_sha256,
+        request->connector_id,
+        request->crtc_id,
+        false,
+        0U,
+        out_candidate
+    );
 }
 
 bool meiso_k230d_drm_private_remap_crtc_mask(
