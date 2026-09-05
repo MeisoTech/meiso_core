@@ -476,6 +476,18 @@ linked provider artifact identity 单独证明派生事实。
 native adapter 的专用合同，不改变现有 scanout Ops。remove/destroy/drop/close 的任一清理
 债务都会成为 `CLEANUP_FAILURE`，不得留下调用方不可达的对象所有权。
 
+板端执行还需要一层独立的 one-child 监督封套，不能把 Host SSH timeout 当作远端回收。
+这层默认关闭的 K230D target 将 derived V2 runner 与 native provider 链进同一个待重新
+封印的 combined ELF；fork 后的唯一 child 在任何 DRM 调用前绑定 parent-death kill、复核 parent 并停在
+本地 gate，随后只由板端 parent 按 `CLOCK_MONOTONIC` 的绝对 15/17/20 秒边界执行至多一次
+TERM、至多一次 KILL 和最终 quarantine/waitpid。Host 不发送控制信号，也不因回执丢失
+重启。只有 child 已回收且 holder=0 等 postflight 完成才有 terminal supervision result；
+超时、forced signal 或 +20 秒仍未 exact-reap 一律是 UNKNOWN/no-retry。该封套只约束并记录 exact
+direct child 的内核观测生命周期与 holder snapshot，
+不解释 V2 收据，也不新增 TEST_ONLY、真实 commit、像素、可见性、Actual 或 physical 权限。
+合同、Host fake 或 durable quarantine 本身不证明 Linux 内核行为、child 已终止或 DRM 已
+隔离；只有新 combined artifact 门、exact reap 与 clean postflight 才能支持对应结论。
+
 现有供 scanout `begin()` 和拓扑探针使用的 real-commit eligibility 判定器固定以下安全
 选择；未来 native translation 只能如实提供事实，不能放宽：
 

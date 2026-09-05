@@ -306,6 +306,112 @@ runner 不接收 topology bytes，validator 只能拒绝不可达或内部不自
 不能单独证明 plane 的派生过程。V2 的派生事实因而必须与该次运行所加载的 native provider
 artifact identity 一起使用，不能脱离 artifact provenance 解读。
 
+### derived TEST_ONLY 的板端监督封套
+
+Host 侧 SSH 超时不能安全替代板端子进程回收：连接或回执丢失时，Host 既不能证明远端
+`TERM`/`KILL` 已送达，也不能安全重发同一种信号。为消除这项歧义，后续单独、默认关闭的
+`meiso_k230d_drm_single_plane_test_only_supervised_once` target 把本节既有 V2 runner 源和
+native provider 链入同一个 ELF。它不是通用进程监督器：CLI 没有 runner path、任意 argv、
+environment、PID、signal、timeout、device 或 plane 参数；device 固定为 `/dev/dri/card0`，
+child 只可直接调用 derived-V2 seam。旧 runner ELF、显式 V1/V2 CLI/API/schema 和合法收据
+字节不因此改变。
+
+CLI 顺序固定为：
+
+```sh
+meiso_k230d_drm_single_plane_test_only_supervised_once \
+  --run-dir ABSOLUTE_PRIVATE_EMPTY_DIRECTORY \
+  --nonce LOWERCASE_HEX_64 \
+  --boot-id-sha256 LOWERCASE_HEX_64 \
+  --artifact-sha256 LOWERCASE_HEX_64 \
+  --topology-sha256 LOWERCASE_HEX_64 \
+  --connector-id CANONICAL_NONZERO_U32 \
+  --crtc-id CANONICAL_NONZERO_U32
+```
+
+run-dir 必须是调用者拥有、此前为空、非符号链接且 mode 0700 的绝对目录。supervisor 只在
+持有的 dirfd 下通过 `openat(O_NOFOLLOW | O_EXCL)` 创建固定的
+`launch.consumed.v1.json`、`run.ready.v1.json`、`runner.stdout`、
+`runner.stderr`、可选的 `run.quarantine.v1.json` 和最后的 `run.result.v1.json`；调用方
+不能改名或增加输出路径。每个记录都必须完整写入、同步文件并同步 parent directory，禁止
+覆盖已有对象或跟随链接；可见的 JSON 名称只可由同目录内已经同步的 private body 通过
+no-clobber atomic publication 产生，不能让读取者把半写文件当成完成记录。全局 per-boot
+tombstone 使用固定 root-owned `/run` 名称，且与
+run-dir 内 mirror 绑定同一 nonce/boot/artifact/topology/route。artifact hash 对应当前这个
+combined ELF，而不是旧 runner ELF。
+固定全局名称是
+`/run/meiso-k230d-drm-single-plane-test-only.launch.consumed.v1.json`；
+`--boot-id-sha256` 是对 `/proc/sys/kernel/random/boot_id` 原始完整字节（包括文件自带的末尾
+LF）计算的 SHA-256，不能用去掉换行或重新格式化的 UUID 代替。
+
+启动这个 supervisor 本身就是一次且唯一的执行授权。Host 此后只可等待或读取固定证据
+文件，绝不向 child 发送 `CONT`、`TERM` 或 `KILL`，也不得因 SSH/回执丢失重启 supervisor。
+supervisor 在任何 DRM 回调前先完成 boot、combined-artifact、primary-node、全量 holder 和
+单线程 preflight，再先后、分别耐久取得本次开机全局及 evidence-dir 内的 `O_EXCL`
+no-rerun claim；全局 claim 是唯一 authority，evidence mirror 失败不得删除或改写它。任一步
+只要可能创建过对象就耗尽本次授权、不得重试；只有两个 claim 都完成 file 与 parent-dir
+sync 的唯一写入者可以 fork。取得 direct child 后，child 必须设置
+`PR_SET_PDEATHSIG=SIGKILL`、复核 parent 未在设置窗口内改变、隔离继承 fd、恢复子进程
+signal 状态并停在本地 gate。fork 成功便立即把这个 exact direct
+child 的所有权交给 parent；固定 `0x52` ready byte 与 exact
+`waitpid(..., WUNTRACED)` 的 `WIFSTOPPED/SIGSTOP` 由另一步确认，并在 child 停止时绑定
+其 PID 与 `/proc/PID/stat` start ticks。parent 随后再次做 preflight，并在 gate 前耐久发布
+launch-ready 记录。任何 handshake、记录或二次 preflight 失败都发生在 derived seam 前；
+若仍持有未回收 child，必须先发出至多一次 KILL、尝试一次 quarantine 记录并持续 exact wait 到
+回收，不能因 signal/记录错误返回。tombstone 一经写入便不删除，不能用失败后的第二次调用
+补救。
+portable 状态机只能校验 callback 返回的 PID 字节，不能从一个恶意、隐藏 fork 的 provider
+恢复未知 child；因此 no-child 结论明确依赖 production Linux spawn callback 的 side-effect
+合同，并须由 source gate 与 harmless-child test 证明。zero-return 但 PID 非 canonical 只会记为
+`EPROTO`/no authority，绝不能被解读为对 Byzantine provider 的隐藏进程证明。
+
+parent 成功发送唯一一次 `SIGCONT` 后立即取得的 `CLOCK_MONOTONIC` 时刻记为 T0；若
+`SIGCONT` 已成功而取时失败，不能重发 CONT，只能进入 KILL-once 与无限 exact-reap 的失败
+收敛。放行后到首次 wait 之间不再做任何同步持久化。parent 每次都先用 exact `waitpid` 检查
+direct child 是否已退出，再在绝对 T0+15 秒至多调用一次 `SIGTERM`，T0+17 秒仍未回收时
+至多调用一次 `SIGKILL`。signal syscall 报错也不得重发同类信号。T0+20 秒仍未回收不允许
+猜测 SIGKILL 已生效：只能尝试一次耐久 `QUARANTINED_UNREAPED_AT_DEADLINE` 记录，随后继续
+持有 no-rerun tombstone 并等待同一个 child；它只声称最后一次 exact wait 尚未回收且
+observed-now 不早于 deadline，不声称 child 当时仍在运行。即使记录失败也不能重试记录；
+在 exact reap 前不能退出或发布 terminal result。
+在 gate、preflight、ready-record、CONT/T0 或时钟协议失败触发的较早 ownership fence 中，
+同一文件的 state 固定为 `OWNERSHIP_FENCE_PENDING_EXACT_REAP`；它只声称 parent 仍持有尚未
+exact-reap 的 direct child，不虚构已到达 +20 秒或做过最后一次 deadline wait。
+HUP/INT/TERM 等 supervisor 终止请求
+只进入同一板端收敛状态机；若 supervisor 被不可捕获地终止，child 的 parent-death signal
+负责阻止其继续运行。direct parent 在回收前持有 child PID，因此 signal 不依赖可复用的
+`/proc/PID` 身份猜测。任一后续单调时钟读取失败、回退或越过可表示范围都会立即转入
+KILL-once/quarantine/infinite-reap，不能让 wait 错误或信号洪泛把 15/17/20 秒边界无限拖延。
+最终只有 exact `waitpid` 已回收、runner stdout/stderr 已同步、同一
+boot/device/artifact 复核和完整 holder=0 postflight 全部完成，才可最后发布 terminal
+supervisor result。
+
+进程通道也固定：参数或静态配置错误发生在 stdio 隔离前，stdout 必须为空，stderr 只写一行
+`E_ARGUMENT`，退出 2；一旦执行被接纳，process seam 必须 `setsid`、接管相关 signal 并把
+自身 SSH stdio 隔离到 `/dev/null`，child 的原始 V2 stdout/stderr 只进入上述两个 fresh 文件。
+此后任何 no-child failure、监督债务、forced signal、quarantine、child rc=1、postflight 或
+terminal-record 债务在能够安全返回时都退出 1。只有 child 未经 TERM/KILL 自然退出 0、
+postflight clean、所有计数未饱和且 terminal record durable 才退出 0；它只说明 lifecycle 与 raw receipt 已可供
+Host 继续验证，不等于 TEST_ONLY accepted，也不授权任何 real commit/Actual/physical 结论。
+
+首版不依赖尚未在同一 K230 内核封印的 seccomp filter。combined artifact 的 source、依赖
+闭包和 ELF 必须另行证明 child 路径没有 `fork`、`vfork`、`clone`、`clone3`、`exec*`、
+shell、network 或第二进程入口；监督 TU 是唯一允许调用 `fork`/`prctl`/`kill`/`waitpid` 的
+范围。该静态证据不能冒充内核强制。supervisor 的固定证据文件只约束并记录 exact direct
+child 的内核观测生命周期与 holder snapshot、TERM/KILL 调用次数与 errno、deadline、输出
+byte/hash 和 pre/postflight ledger；其中不存在 TEST_ONLY `SUCCESS`、accepted、显示、像素、
+Actual 或 physical 结论。
+只有 Host 另行验证原始 V2 runner receipt、combined ELF provenance、运行时依赖和外部
+postflight 后，才能把一次自然退出分类为 accepted-not-applied、rejected 或 not-tested。
+任何 forced signal、quarantine、记录债务、holder 债务或连接不确定性都固定为 UNKNOWN 且
+不得重跑。连接不确定本身不证明 child 或 DRM 已被隔离；durable quarantine 只证明 no-rerun
+fence，只有 exact reap 加 holder=0 postflight 才支持相应清理结论。
+
+本段、默认关闭的实现和 Linux Host harmless-child 测试面仍不证明 combined ELF 已为 K230
+构建、封印或适合板端运行；Host 测试只能约束当前 Host kernel/libc 下的直接 child 生命周期。
+旧 `a2e4373` runner artifact、旧 cross 收据和既有板端 observation 都不能替代该 combined
+target 的新 source/dependency/ELF 与最终板端 preflight 门。
+
 收据不含 device path，也不声称源码 commit、artifact 身份、像素、可见性或物理呈现。
 即使三份枚举 hash 相同，open/set/drop/close 与驱动内部副作用仍不由本程序证明为零，所以
 `display_state_unchanged_unproven` 恒为 true。当前已封存的板端 topology 只证明有

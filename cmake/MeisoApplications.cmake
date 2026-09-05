@@ -16,6 +16,11 @@ option(
     "Build the explicit K230D libdrm single-plane TEST_ONLY-only runner"
     OFF
 )
+option(
+    MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR
+    "Build the explicit K230D supervised single-plane TEST_ONLY-only runner"
+    OFF
+)
 
 set(
     MEISO_K230D_LIBDRM_INCLUDE_DIR
@@ -55,7 +60,8 @@ if(MEISO_BUILD_K230D_LINUX_APPS)
 endif()
 
 if(MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER OR
-   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER)
+   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER OR
+   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
     if(NOT MEISO_BUILD_K230D_LINUX_APPS OR
        NOT MEISO_K230_LINUX_TARGET OR
        NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
@@ -149,7 +155,8 @@ if(MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER)
     )
 endif()
 
-if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER)
+if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER OR
+   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
     add_library(
         meiso_k230d_drm_libdrm_single_plane_test_only STATIC
         targets/k230d-linux/adapters/drm_scanout_libdrm_single_plane_test_only.c
@@ -171,7 +178,9 @@ if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER)
         meiso_k230d_drm_libdrm_single_plane_test_only
         "Meiso/Adapters/Linux/Native"
     )
+endif()
 
+if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER)
     add_executable(
         meiso_k230d_drm_single_plane_test_only_once
         targets/k230d-linux/drm_single_plane_test_only_once.c
@@ -194,6 +203,41 @@ if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER)
     meiso_enable_warnings(meiso_k230d_drm_single_plane_test_only_once)
     meiso_set_target_folder(
         meiso_k230d_drm_single_plane_test_only_once
+        "Meiso/Applications/Edge/Evidence"
+    )
+endif()
+
+if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
+    add_executable(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
+        targets/k230d-linux/drm_single_plane_test_only_once.c
+        targets/k230d-linux/drm_single_plane_test_only_supervisor.c
+        targets/k230d-linux/drm_single_plane_test_only_supervisor_linux.c
+    )
+    target_compile_definitions(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
+        PRIVATE MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_ONCE_NO_MAIN=1
+    )
+    target_include_directories(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
+        PRIVATE targets/k230d-linux/adapters
+    )
+    target_link_libraries(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
+        PRIVATE
+            meiso_k230d_drm_libdrm_single_plane_test_only
+            meiso_k230d_drm_scanout
+            meiso_k230d_linux_target_contract
+    )
+    set_target_properties(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
+        PROPERTIES SKIP_BUILD_RPATH TRUE
+    )
+    meiso_enable_warnings(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
+    )
+    meiso_set_target_folder(
+        meiso_k230d_drm_single_plane_test_only_supervised_once
         "Meiso/Applications/Edge/Evidence"
     )
 endif()

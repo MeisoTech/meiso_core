@@ -128,6 +128,62 @@ if(TARGET meiso_k230d_drm_scanout)
     meiso_register_target_test(
         meiso_k230d_drm_single_plane_test_only_once_test "target-policy"
     )
+
+    add_executable(
+        meiso_k230d_drm_single_plane_test_only_supervisor_test
+        tests/test_k230d_drm_single_plane_test_only_supervisor.c
+        targets/k230d-linux/drm_single_plane_test_only_supervisor.c
+    )
+    target_include_directories(
+        meiso_k230d_drm_single_plane_test_only_supervisor_test
+        PRIVATE targets/k230d-linux/adapters
+    )
+    target_link_libraries(
+        meiso_k230d_drm_single_plane_test_only_supervisor_test
+        PRIVATE meiso_k230d_drm_scanout
+    )
+    meiso_enable_warnings(
+        meiso_k230d_drm_single_plane_test_only_supervisor_test
+    )
+    meiso_set_target_folder(
+        meiso_k230d_drm_single_plane_test_only_supervisor_test
+        "Meiso/Tests/target-policy"
+    )
+    meiso_register_target_test(
+        meiso_k230d_drm_single_plane_test_only_supervisor_test
+        "target-policy"
+    )
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+        add_executable(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+            tests/test_k230d_drm_single_plane_test_only_supervisor_linux.c
+            targets/k230d-linux/drm_single_plane_test_only_supervisor.c
+        )
+        target_include_directories(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+            PRIVATE targets/k230d-linux/adapters
+        )
+        target_link_libraries(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+            PRIVATE meiso_k230d_drm_scanout rt
+        )
+        meiso_enable_warnings(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+        )
+        meiso_set_target_folder(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+            "Meiso/Tests/target-policy"
+        )
+        meiso_register_target_test(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+            "target-policy"
+        )
+        set_tests_properties(
+            meiso_k230d_drm_single_plane_test_only_supervisor_linux_test
+            PROPERTIES TIMEOUT 30
+        )
+    endif()
 endif()
 
 if(TARGET meiso_composition_control_session)
