@@ -20,6 +20,30 @@ typedef struct {
     uint64_t generation;
 } MeisoK230dDrmEventCookie;
 
+typedef uint8_t MeisoK230dDrmTopologyAdmissionStatus;
+enum {
+    MEISO_K230D_DRM_TOPOLOGY_ELIGIBLE = 0,
+    MEISO_K230D_DRM_TOPOLOGY_BLOCKED = 1,
+    MEISO_K230D_DRM_TOPOLOGY_INVALID_ARGUMENT = 2
+};
+
+/*
+ * Pure, allocation-free result shared by the injected-Ops scanout path and
+ * the native read-only topology probe. ELIGIBLE authorizes only a later
+ * TEST_ONLY attempt; it is not a display/presentation result.
+ */
+typedef struct {
+    bool topology_hash_valid;
+    bool route_selected;
+    bool plane_selected;
+    MeisoK230dDrmAdmissionReason reason;
+    uint8_t topology_sha256[MEISO_K230D_DRM_SHA256_SIZE];
+    uint32_t connector_index;
+    uint32_t crtc_index;
+    uint32_t plane_index;
+    uint64_t minimum_output_bytes;
+} MeisoK230dDrmTopologyAdmission;
+
 struct MeisoK230dDrmScanout {
     size_t arena_size;
     MeisoK230dDrmOps ops;
@@ -92,6 +116,28 @@ MEISO_K230D_DRM_PRIVATE_API
 bool meiso_k230d_drm_private_topology_sha256(
     const MeisoK230dDrmTopology *topology,
     uint8_t digest[MEISO_K230D_DRM_SHA256_SIZE]
+);
+
+MEISO_K230D_DRM_PRIVATE_API
+MeisoK230dDrmTopologyAdmissionStatus
+meiso_k230d_drm_private_evaluate_topology(
+    const MeisoK230dDrmTopology *topology,
+    MeisoK230dDrmTopologyAdmission *out_admission
+);
+
+/*
+ * Remap drmModePlane.possible_crtcs from libdrm resource order to the
+ * object-id-sorted order required by MeisoK230dDrmTopology. Failure leaves
+ * out_mask unchanged.
+ */
+MEISO_K230D_DRM_PRIVATE_API
+bool meiso_k230d_drm_private_remap_crtc_mask(
+    const uint32_t *resource_order_ids,
+    uint32_t resource_count,
+    const uint32_t *canonical_ids,
+    uint32_t canonical_count,
+    uint32_t resource_order_mask,
+    uint32_t *out_mask
 );
 
 MEISO_K230D_DRM_PRIVATE_API

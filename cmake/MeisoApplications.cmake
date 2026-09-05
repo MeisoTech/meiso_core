@@ -6,6 +6,22 @@ option(
     "Expose the K230D Linux cross-application target set"
     OFF
 )
+option(
+    MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER
+    "Build the explicit K230D read-only libdrm topology admission runner"
+    OFF
+)
+
+set(
+    MEISO_K230D_LIBDRM_INCLUDE_DIR
+    ""
+    CACHE PATH "Explicit libdrm include root for the K230D topology runner"
+)
+set(
+    MEISO_K230D_LIBDRM_LIBRARY
+    ""
+    CACHE FILEPATH "Explicit target libdrm shared library for the K230D topology runner"
+)
 
 if(MEISO_BUILD_K230D_LINUX_APPS)
     if(NOT MEISO_K230_LINUX_TARGET)
@@ -30,6 +46,96 @@ if(MEISO_BUILD_K230D_LINUX_APPS)
     meiso_set_target_folder(
         meiso_k230d_linux_target_contract
         "Meiso/Targets/K230D Linux"
+    )
+endif()
+
+if(MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER)
+    if(NOT MEISO_BUILD_K230D_LINUX_APPS OR
+       NOT MEISO_K230_LINUX_TARGET OR
+       NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+       NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "riscv64")
+        message(
+            FATAL_ERROR
+            "The DRM topology admission runner requires the K230D Linux/riscv64 application contract"
+        )
+    endif()
+    if(NOT IS_ABSOLUTE "${MEISO_K230D_LIBDRM_INCLUDE_DIR}" OR
+       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/xf86drm.h" OR
+       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/xf86drmMode.h" OR
+       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm/drm.h" OR
+       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm/drm_mode.h" OR
+       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm/drm_fourcc.h")
+        message(
+            FATAL_ERROR
+            "MEISO_K230D_LIBDRM_INCLUDE_DIR must be an absolute libdrm source/include root"
+        )
+    endif()
+    if(NOT IS_ABSOLUTE "${MEISO_K230D_LIBDRM_LIBRARY}" OR
+       NOT EXISTS "${MEISO_K230D_LIBDRM_LIBRARY}" OR
+       IS_SYMLINK "${MEISO_K230D_LIBDRM_LIBRARY}" OR
+       IS_DIRECTORY "${MEISO_K230D_LIBDRM_LIBRARY}")
+        message(
+            FATAL_ERROR
+            "MEISO_K230D_LIBDRM_LIBRARY must be an absolute regular target library"
+        )
+    endif()
+
+    add_library(meiso_k230d_target_libdrm SHARED IMPORTED)
+    set_target_properties(
+        meiso_k230d_target_libdrm
+        PROPERTIES IMPORTED_LOCATION "${MEISO_K230D_LIBDRM_LIBRARY}"
+    )
+    target_include_directories(
+        meiso_k230d_target_libdrm
+        SYSTEM INTERFACE
+            "${MEISO_K230D_LIBDRM_INCLUDE_DIR}"
+            "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm"
+    )
+
+    add_library(
+        meiso_k230d_drm_libdrm_topology STATIC
+        targets/k230d-linux/adapters/drm_scanout_libdrm_topology.c
+    )
+    target_include_directories(
+        meiso_k230d_drm_libdrm_topology
+        PRIVATE targets/k230d-linux/adapters
+    )
+    target_link_libraries(
+        meiso_k230d_drm_libdrm_topology
+        PRIVATE
+            meiso_k230d_drm_scanout
+            meiso_k230d_linux_target_contract
+            meiso_k230d_target_libdrm
+    )
+    meiso_enable_warnings(meiso_k230d_drm_libdrm_topology)
+    meiso_set_target_folder(
+        meiso_k230d_drm_libdrm_topology
+        "Meiso/Adapters/Linux/Native"
+    )
+
+    add_executable(
+        meiso_k230d_drm_topology_admission_once
+        targets/k230d-linux/drm_topology_admission_once.c
+    )
+    target_include_directories(
+        meiso_k230d_drm_topology_admission_once
+        PRIVATE targets/k230d-linux/adapters
+    )
+    target_link_libraries(
+        meiso_k230d_drm_topology_admission_once
+        PRIVATE
+            meiso_k230d_drm_libdrm_topology
+            meiso_k230d_drm_scanout
+            meiso_k230d_linux_target_contract
+    )
+    set_target_properties(
+        meiso_k230d_drm_topology_admission_once
+        PROPERTIES SKIP_BUILD_RPATH TRUE
+    )
+    meiso_enable_warnings(meiso_k230d_drm_topology_admission_once)
+    meiso_set_target_folder(
+        meiso_k230d_drm_topology_admission_once
+        "Meiso/Applications/Edge/Evidence"
     )
 endif()
 

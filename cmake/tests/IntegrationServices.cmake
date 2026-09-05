@@ -65,6 +65,32 @@ if(TARGET meiso_k230d_drm_scanout)
         meiso_k230d_drm_scanout_test
         PRIVATE targets/k230d-linux/adapters
     )
+
+    add_executable(
+        meiso_k230d_drm_topology_admission_once_test
+        tests/test_k230d_drm_topology_admission_once.c
+        targets/k230d-linux/drm_topology_admission_once.c
+    )
+    target_compile_definitions(
+        meiso_k230d_drm_topology_admission_once_test
+        PRIVATE MEISO_K230D_DRM_TOPOLOGY_ADMISSION_ONCE_NO_MAIN=1
+    )
+    target_include_directories(
+        meiso_k230d_drm_topology_admission_once_test
+        PRIVATE targets/k230d-linux/adapters
+    )
+    target_link_libraries(
+        meiso_k230d_drm_topology_admission_once_test
+        PRIVATE meiso_k230d_drm_scanout
+    )
+    meiso_enable_warnings(meiso_k230d_drm_topology_admission_once_test)
+    meiso_set_target_folder(
+        meiso_k230d_drm_topology_admission_once_test
+        "Meiso/Tests/target-policy"
+    )
+    meiso_register_target_test(
+        meiso_k230d_drm_topology_admission_once_test "target-policy"
+    )
 endif()
 
 if(TARGET meiso_composition_control_session)

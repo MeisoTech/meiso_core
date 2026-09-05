@@ -103,6 +103,7 @@ if(UNIX)
     add_library(
         meiso_k230d_drm_scanout
         targets/k230d-linux/adapters/drm_scanout_adapter.c
+        targets/k230d-linux/adapters/drm_scanout_admission.c
         targets/k230d-linux/adapters/drm_scanout_cleanup.c
         targets/k230d-linux/adapters/drm_scanout_convert.c
         targets/k230d-linux/adapters/drm_scanout_lifecycle.c

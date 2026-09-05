@@ -2,8 +2,9 @@
 
 > 状态：Profile Catalog、State、呈现证据合同、媒体传输和受控的未认证 UDP 搬运适配器
 > 已经实现。现在也已把相同协议接入两个独立本机进程，以模拟画面源和内存显示接收端验证
-> 进程接线；它不接 Looking Glass、K230D 或真实显示设备。最终带身份认证、机密性与
-> 完整性保护的网络承载、真实 Host/Edge service 和物理端到端路径尚未完成。DRM/KMS 指
+> 进程接线。K230D 侧另有一个 libdrm 拓扑探针，能如实给出显示安全准入阻断，但
+> 还没有提交任何画面。最终带身份认证、机密性与完整性保护的网络承载、真实 Host/Edge
+> service 和物理端到端路径尚未完成。DRM/KMS 指
 > Linux 内核的显示管理和模式设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
@@ -403,11 +404,18 @@ sequence 和双方对完整输入计算的 SHA-256 精确相符。
 与驱动枚举结果逐项核对。
 
 当前仓库已有一层**与 libdrm 无关的设备选择和资源状态逻辑**。主机测试会注入一组
-假设备操作（测试代码模拟打开、提交和事件，不会打开真实 `/dev/dri`），但还没有把这些
-操作接到 K230D 的 libdrm，也没有板端可执行程序或板端结果。因此它不能生成真实 DRM
-证据。收据固定写 `INJECTED_OPS_UNVERIFIED`（表示“由测试注入，未经物理设备验证”）和
-`physical_evidence=false`。即使模拟事件让状态进入 `KMS_LATCHED`，也只证明状态逻辑按
-合同推进，不证明 K230D、HDMI/DSI 链路或屏幕发生过任何事。
+假设备操作（测试代码模拟打开、提交和事件，不会打开真实 `/dev/dri`）。fake scanout
+收据仍固定写 `INJECTED_OPS_UNVERIFIED` 和 `physical_evidence=false`；即使它让状态进入
+`KMS_LATCHED`，也只证明状态逻辑按合同推进。
+
+同一份纯 topology 判定器现在也接到一个显式启用的 K230D 原生拓扑观察程序。它用 libdrm
+完整读取当前 connector、CRTC、plane、format 与属性，规范化后调用共享判定器；它不取得
+显式 master、不建 buffer/FB、不做 TEST_ONLY 或真实 commit。完整拓扑不满足策略时输出
+`ADMISSION_BLOCKED`，满足时最多输出 `TOPOLOGY_ELIGIBLE_NOT_COMMIT_TESTED`。两者都固定
+`actual_running_authorized=false / physical_evidence=false`，不能生成 Display Actual
+RUNNING 或本 Profile 的 `DRM_KMS_PAGE_FLIP` 呈现证据。精确 CLI、收据字段、退出语义、
+默认关闭的 CMake locator 和禁止调用清单由
+[K230D target入口](../../targets/k230d-linux/README.md#drm-scanout-policy-core)拥有。
 
 该策略内核固定以下安全选择，未来 native translation 只能如实提供事实，不能放宽：
 
@@ -448,9 +456,11 @@ event 和资源清理账本；不包含 `/dev/dri/*` 路径、设备序列号或
 整数用 big-endian，定长字符串空余 byte 补零。这个 hash 只防止验收时混淆输入，不提供
 认证、签名或传输完整性保护。
 
-由于当前开发环境没有可用的 K230 Xuantie compiler、xf86drm header 或 libdrm artifact，
-native translation、runner、cross/link 和 board page-flip 都明确为 `PENDING`。在这些门关闭
-以前，Display Actual 不得因本策略内核存在而报告 RUNNING。
+原生 translation、runner 与显式 libdrm cross/link 属于拓扑观察，不是 page-flip。当前
+驱动没有公开可验证的 immutable zpos，因此受控板端观察预期安全返回
+`ADMISSION_BLOCKED / ZPOS_UNPROVABLE`；不能按 plane ID、枚举顺序、Overlay 类型或
+RGB565 支持猜叠放关系。在后续 TEST_ONLY、真实 commit、事件与恢复门全部关闭以前，
+Display Actual 不得因本策略内核或拓扑收据存在而报告 RUNNING。
 
 ## 明确不在第一版里
 
@@ -471,9 +481,9 @@ native translation、runner、cross/link 和 board page-flip 都明确为 `PENDI
 1. **已完成：** DATA route 的 Profile-local `DIFR` codec、两槽媒体状态机和故障矩阵；
 2. **已完成：** 冻结其余三个 schema，实现完整 Catalog、Desired/Actual、evidence
    codec 和只证明协议状态机的双 Runtime fixture；
-3. **部分完成：** K230D 本机 probe 的 portable policy/state machine 与 fake failure matrix
-   已在 Host 验证；native libdrm translation、runner、cross/link 和 exact board page-flip
-   仍待独立切片；
+3. **部分完成：** K230D 的 portable policy/state machine、fake failure matrix，以及原生
+   native libdrm topology/admission runner 已接到同一判定器；exact board topology 收据、
+   TEST_ONLY、真实 page-flip 与恢复仍按独立门推进；
 4. **已完成：** connected UDP 行为适配器；它只关闭有界 connected-datagram 搬运与
    丢包恢复行为，并为后续跨进程/网络 bring-up 提供适配器，不关闭安全 carrier；
 5. **已完成：** 两个本机进程使用真实 TCP 控制、connected UDP 数据、模拟画面源和内存

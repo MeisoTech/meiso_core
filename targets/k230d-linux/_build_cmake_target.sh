@@ -12,6 +12,7 @@ output=$2
 case "$target" in
     meiso_k230d_camera_v4l2_capture_once|\
     meiso_k230d_composition_edge_service|\
+    meiso_k230d_drm_topology_admission_once|\
     meiso_composition_offscreen_runner|\
     meiso_four_kind_lab|\
     meiso_k230d_wifi_runtime_edge)
@@ -63,14 +64,33 @@ cleanup()
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-cmake \
-    -S "$repo_root" \
-    -B "$build_dir" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTING=OFF \
-    -DMEISO_BUILD_APPLICATIONS=ON \
-    -DMEISO_BUILD_K230D_LINUX_APPS=ON \
-    -DCMAKE_TOOLCHAIN_FILE="$repo_root/cmake/toolchains/k230d-linux-xuantie.cmake"
+if [ "$target" = meiso_k230d_drm_topology_admission_once ]; then
+    if [ -z "${MEISO_K230D_LIBDRM_INCLUDE_DIR:-}" ] ||
+       [ -z "${MEISO_K230D_LIBDRM_LIBRARY:-}" ]; then
+        echo "DRM topology build requires explicit libdrm include and library paths" >&2
+        exit 2
+    fi
+    cmake \
+        -S "$repo_root" \
+        -B "$build_dir" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_TESTING=OFF \
+        -DMEISO_BUILD_APPLICATIONS=ON \
+        -DMEISO_BUILD_K230D_LINUX_APPS=ON \
+        -DMEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER=ON \
+        -DMEISO_K230D_LIBDRM_INCLUDE_DIR="$MEISO_K230D_LIBDRM_INCLUDE_DIR" \
+        -DMEISO_K230D_LIBDRM_LIBRARY="$MEISO_K230D_LIBDRM_LIBRARY" \
+        -DCMAKE_TOOLCHAIN_FILE="$repo_root/cmake/toolchains/k230d-linux-xuantie.cmake"
+else
+    cmake \
+        -S "$repo_root" \
+        -B "$build_dir" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_TESTING=OFF \
+        -DMEISO_BUILD_APPLICATIONS=ON \
+        -DMEISO_BUILD_K230D_LINUX_APPS=ON \
+        -DCMAKE_TOOLCHAIN_FILE="$repo_root/cmake/toolchains/k230d-linux-xuantie.cmake"
+fi
 cmake --build "$build_dir" --target "$target"
 
 artifact=$build_dir/$target

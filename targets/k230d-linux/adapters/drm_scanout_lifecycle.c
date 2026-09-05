@@ -1,7 +1,6 @@
 #include "meiso_drm_scanout_private.h"
 
 #include <errno.h>
-#include <limits.h>
 #include <string.h>
 
 static void set_primary_failure(
@@ -35,130 +34,6 @@ static MeisoK230dDrmBeginStatus finish_begin_failure(
     }
     scanout->phase = MEISO_K230D_DRM_PHASE_STOPPED;
     return status;
-}
-
-static bool find_active_route(
-    const MeisoK230dDrmTopology *topology,
-    MeisoK230dDrmConnector *out_connector,
-    MeisoK230dDrmCrtc *out_crtc,
-    uint32_t *out_crtc_index,
-    MeisoK230dDrmAdmissionReason *out_reason
-)
-{
-    uint32_t route_count = 0U;
-    uint32_t connector_index;
-    uint32_t selected_crtc_index = 0U;
-    MeisoK230dDrmConnector selected_connector;
-    MeisoK230dDrmCrtc selected_crtc;
-
-    memset(&selected_connector, 0, sizeof(selected_connector));
-    memset(&selected_crtc, 0, sizeof(selected_crtc));
-    for (connector_index = 0U;
-         connector_index < topology->connector_count;
-         ++connector_index) {
-        const MeisoK230dDrmConnector *connector =
-            &topology->connectors[connector_index];
-        uint32_t crtc_index;
-        if (!connector->connected || connector->encoder_id == 0U ||
-            connector->crtc_id == 0U) {
-            continue;
-        }
-        for (crtc_index = 0U; crtc_index < topology->crtc_count;
-             ++crtc_index) {
-            if (topology->crtcs[crtc_index].crtc_id ==
-                connector->crtc_id) {
-                break;
-            }
-        }
-        if (crtc_index == topology->crtc_count ||
-            !topology->crtcs[crtc_index].active ||
-            !topology->crtcs[crtc_index].mode_valid) {
-            continue;
-        }
-        ++route_count;
-        selected_connector = *connector;
-        selected_crtc = topology->crtcs[crtc_index];
-        selected_crtc_index = crtc_index;
-    }
-    if (route_count == 0U) {
-        *out_reason = MEISO_K230D_DRM_ADMISSION_NO_ACTIVE_ROUTE;
-        return false;
-    }
-    if (route_count != 1U) {
-        *out_reason = MEISO_K230D_DRM_ADMISSION_MULTIPLE_ACTIVE_ROUTES;
-        return false;
-    }
-    *out_connector = selected_connector;
-    *out_crtc = selected_crtc;
-    *out_crtc_index = selected_crtc_index;
-    return true;
-}
-
-static bool plane_unused(const MeisoK230dDrmPlane *plane)
-{
-    return plane->properties[MEISO_K230D_DRM_PLANE_FB_ID].value == 0U &&
-        plane->properties[MEISO_K230D_DRM_PLANE_CRTC_ID].value == 0U;
-}
-
-static bool find_overlay_plane(
-    const MeisoK230dDrmTopology *topology,
-    uint32_t crtc_id,
-    uint32_t crtc_index,
-    MeisoK230dDrmPlane *out_plane,
-    MeisoK230dDrmAdmissionReason *out_reason
-)
-{
-    bool active_present = false;
-    bool active_zpos_valid = true;
-    bool candidate_shape_present = false;
-    bool candidate_selected = false;
-    int64_t maximum_active_zpos = INT64_MIN;
-    MeisoK230dDrmPlane selected;
-    uint32_t index;
-
-    memset(&selected, 0, sizeof(selected));
-    for (index = 0U; index < topology->plane_count; ++index) {
-        const MeisoK230dDrmPlane *plane = &topology->planes[index];
-        const uint64_t attached_crtc =
-            plane->properties[MEISO_K230D_DRM_PLANE_CRTC_ID].value;
-        if (attached_crtc == crtc_id) {
-            active_present = true;
-            if (!plane->type_immutable || !plane->zpos_present ||
-                !plane->zpos_immutable) {
-                active_zpos_valid = false;
-            } else if (plane->zpos > maximum_active_zpos) {
-                maximum_active_zpos = plane->zpos;
-            }
-        }
-    }
-    for (index = 0U; index < topology->plane_count; ++index) {
-        const MeisoK230dDrmPlane *plane = &topology->planes[index];
-        if (plane->type != MEISO_K230D_DRM_PLANE_TYPE_OVERLAY ||
-            !plane->supports_rgb565 || !plane_unused(plane) ||
-            (plane->possible_crtcs & (UINT32_C(1) << crtc_index)) == 0U) {
-            continue;
-        }
-        candidate_shape_present = true;
-        if (!plane->type_immutable || !plane->zpos_present ||
-            !plane->zpos_immutable || !active_zpos_valid ||
-            (active_present && plane->zpos <= maximum_active_zpos)) {
-            continue;
-        }
-        if (!candidate_selected || plane->zpos < selected.zpos ||
-            (plane->zpos == selected.zpos &&
-             plane->plane_id < selected.plane_id)) {
-            selected = *plane;
-            candidate_selected = true;
-        }
-    }
-    if (!candidate_selected) {
-        *out_reason = candidate_shape_present ?
-            MEISO_K230D_DRM_ADMISSION_ZPOS_UNPROVABLE :
-            MEISO_K230D_DRM_ADMISSION_NO_UNUSED_RGB565_OVERLAY;
-        return false;
-    }
-    *out_plane = selected;
-    return true;
 }
 
 static void copy_original_state(MeisoK230dDrmScanout *scanout)
@@ -244,8 +119,9 @@ MeisoK230dDrmBeginStatus meiso_k230d_drm_scanout_begin(
 )
 {
     MeisoK230dDrmAdmissionReason admission_reason;
+    MeisoK230dDrmTopologyAdmission admission;
+    MeisoK230dDrmTopologyAdmissionStatus admission_status;
     MeisoK230dDrmCommitDisposition disposition;
-    uint64_t minimum_output_bytes;
     int candidate_fd;
     int error;
 
@@ -352,75 +228,34 @@ MeisoK230dDrmBeginStatus meiso_k230d_drm_scanout_begin(
             scanout, MEISO_K230D_DRM_BEGIN_OPERATION_FAILED
         );
     }
-    if (scanout->topology.connector_count >
-            MEISO_K230D_DRM_MAX_CONNECTORS ||
-        scanout->topology.crtc_count > MEISO_K230D_DRM_MAX_CRTCS ||
-        scanout->topology.crtc_count > 32U ||
-        scanout->topology.plane_count > MEISO_K230D_DRM_MAX_PLANES) {
-        scanout->scanout_receipt.admission_reason =
-            MEISO_K230D_DRM_ADMISSION_TOPOLOGY_CAPACITY;
-        return finish_begin_failure(
-            scanout, MEISO_K230D_DRM_BEGIN_ADMISSION_BLOCKED
-        );
-    }
-    if (!meiso_k230d_drm_private_topology_valid(&scanout->topology) ||
-        !meiso_k230d_drm_private_topology_sha256(
-            &scanout->topology,
-            scanout->scanout_receipt.topology_sha256
-        )) {
+    admission_status = meiso_k230d_drm_private_evaluate_topology(
+        &scanout->topology, &admission
+    );
+    if (admission_status == MEISO_K230D_DRM_TOPOLOGY_INVALID_ARGUMENT) {
         scanout->scanout_receipt.admission_reason =
             MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL;
         return finish_begin_failure(
             scanout, MEISO_K230D_DRM_BEGIN_ADMISSION_BLOCKED
         );
     }
-    if (!scanout->topology.page_flip_timestamps_monotonic) {
-        scanout->scanout_receipt.admission_reason =
-            MEISO_K230D_DRM_ADMISSION_PAGE_FLIP_CLOCK_UNPROVABLE;
+    scanout->scanout_receipt.admission_reason = admission.reason;
+    if (admission.topology_hash_valid) {
+        memcpy(
+            scanout->scanout_receipt.topology_sha256,
+            admission.topology_sha256,
+            sizeof(scanout->scanout_receipt.topology_sha256)
+        );
+    }
+    if (admission_status == MEISO_K230D_DRM_TOPOLOGY_BLOCKED) {
         return finish_begin_failure(
             scanout, MEISO_K230D_DRM_BEGIN_ADMISSION_BLOCKED
         );
     }
-    admission_reason = MEISO_K230D_DRM_ADMISSION_NONE;
-    if (!find_active_route(
-            &scanout->topology,
-            &scanout->selected_connector,
-            &scanout->selected_crtc,
-            &scanout->selected_crtc_index,
-            &admission_reason
-        ) || !find_overlay_plane(
-            &scanout->topology,
-            scanout->selected_crtc.crtc_id,
-            scanout->selected_crtc_index,
-            &scanout->selected_plane,
-            &admission_reason
-        )) {
-        scanout->scanout_receipt.admission_reason = admission_reason;
-        return finish_begin_failure(
-            scanout, MEISO_K230D_DRM_BEGIN_ADMISSION_BLOCKED
-        );
-    }
-    if (scanout->selected_crtc.mode.hdisplay >
-            MEISO_K230D_DRM_MAX_DIMENSION ||
-        scanout->selected_crtc.mode.vdisplay >
-            MEISO_K230D_DRM_MAX_DIMENSION) {
-        scanout->scanout_receipt.admission_reason =
-            MEISO_K230D_DRM_ADMISSION_MODE_ENVELOPE;
-        return finish_begin_failure(
-            scanout, MEISO_K230D_DRM_BEGIN_ADMISSION_BLOCKED
-        );
-    }
-    minimum_output_bytes =
-        (uint64_t)scanout->selected_crtc.mode.hdisplay *
-        scanout->selected_crtc.mode.vdisplay * UINT64_C(2);
-    if (minimum_output_bytes == 0U ||
-        minimum_output_bytes > MEISO_K230D_DRM_MAX_DUMB_BYTES) {
-        scanout->scanout_receipt.admission_reason =
-            MEISO_K230D_DRM_ADMISSION_BUFFER_ENVELOPE;
-        return finish_begin_failure(
-            scanout, MEISO_K230D_DRM_BEGIN_ADMISSION_BLOCKED
-        );
-    }
+    scanout->selected_connector =
+        scanout->topology.connectors[admission.connector_index];
+    scanout->selected_crtc = scanout->topology.crtcs[admission.crtc_index];
+    scanout->selected_crtc_index = admission.crtc_index;
+    scanout->selected_plane = scanout->topology.planes[admission.plane_index];
     populate_route_receipt(scanout);
 
     error = meiso_k230d_drm_private_call_create_dumb(

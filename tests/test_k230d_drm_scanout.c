@@ -1966,6 +1966,188 @@ static bool test_private_sha256_literal(void)
     return true;
 }
 
+static bool test_topology_evaluator_and_precedence(void)
+{
+    FakeDrm fake;
+    MeisoK230dDrmTopologyAdmission admission;
+    MeisoK230dDrmTopologyAdmission before;
+
+    fake_init(&fake);
+    memset(&admission, 0xa5, sizeof(admission));
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_ELIGIBLE);
+    CHECK(admission.topology_hash_valid && admission.route_selected &&
+          admission.plane_selected &&
+          admission.reason == MEISO_K230D_DRM_ADMISSION_NONE);
+    CHECK(admission.connector_index == 0U && admission.crtc_index == 0U &&
+          admission.plane_index == 1U &&
+          admission.minimum_output_bytes == 32U);
+
+    fake_init(&fake);
+    fake.topology.connector_count = MEISO_K230D_DRM_MAX_CONNECTORS + 1U;
+    fake.topology.driver_name[0] = '\0';
+    fake.topology.page_flip_timestamps_monotonic = false;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason ==
+          MEISO_K230D_DRM_ADMISSION_TOPOLOGY_CAPACITY);
+    CHECK(!admission.topology_hash_valid && !admission.route_selected &&
+          !admission.plane_selected);
+
+    fake_init(&fake);
+    fake.topology.driver_name[0] = '\0';
+    fake.topology.page_flip_timestamps_monotonic = false;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason ==
+          MEISO_K230D_DRM_ADMISSION_TOPOLOGY_NONCANONICAL);
+
+    fake_init(&fake);
+    fake.topology.page_flip_timestamps_monotonic = false;
+    fake.topology.connectors[0].connected = false;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason ==
+          MEISO_K230D_DRM_ADMISSION_PAGE_FLIP_CLOCK_UNPROVABLE);
+    CHECK(admission.topology_hash_valid && !admission.route_selected);
+
+    fake_init(&fake);
+    fake.topology.connectors[0].connected = false;
+    fake.topology.planes[1].supports_rgb565 = false;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason == MEISO_K230D_DRM_ADMISSION_NO_ACTIVE_ROUTE);
+
+    fake_init(&fake);
+    fake.topology.planes[1].supports_rgb565 = false;
+    fake.topology.crtcs[0].mode.hdisplay =
+        MEISO_K230D_DRM_MAX_DIMENSION + 1U;
+    fake.topology.crtcs[0].mode.hsync_start =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.hsync_end =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.htotal =
+        fake.topology.crtcs[0].mode.hdisplay;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason ==
+          MEISO_K230D_DRM_ADMISSION_NO_UNUSED_RGB565_OVERLAY);
+    CHECK(admission.route_selected && !admission.plane_selected);
+
+    fake_init(&fake);
+    fake.topology.planes[1].zpos_present = false;
+    fake.topology.planes[1].zpos_immutable = false;
+    fake.topology.planes[1].zpos = 0;
+    fake.topology.crtcs[0].mode.hdisplay =
+        MEISO_K230D_DRM_MAX_DIMENSION + 1U;
+    fake.topology.crtcs[0].mode.hsync_start =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.hsync_end =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.htotal =
+        fake.topology.crtcs[0].mode.hdisplay;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason == MEISO_K230D_DRM_ADMISSION_ZPOS_UNPROVABLE);
+
+    fake_init(&fake);
+    fake.topology.crtcs[0].mode.hdisplay =
+        MEISO_K230D_DRM_MAX_DIMENSION + 1U;
+    fake.topology.crtcs[0].mode.hsync_start =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.hsync_end =
+        fake.topology.crtcs[0].mode.hdisplay;
+    fake.topology.crtcs[0].mode.htotal =
+        fake.topology.crtcs[0].mode.hdisplay;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, &admission
+          ) == MEISO_K230D_DRM_TOPOLOGY_BLOCKED);
+    CHECK(admission.reason == MEISO_K230D_DRM_ADMISSION_MODE_ENVELOPE);
+    CHECK(admission.route_selected && admission.plane_selected);
+
+    memset(&admission, 0x6d, sizeof(admission));
+    before = admission;
+    CHECK(meiso_k230d_drm_private_evaluate_topology(NULL, &admission) ==
+          MEISO_K230D_DRM_TOPOLOGY_INVALID_ARGUMENT);
+    CHECK(memcmp(&admission, &before, sizeof(admission)) == 0);
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology, NULL
+          ) == MEISO_K230D_DRM_TOPOLOGY_INVALID_ARGUMENT);
+    CHECK(meiso_k230d_drm_private_evaluate_topology(
+              &fake.topology,
+              (MeisoK230dDrmTopologyAdmission *)(void *)&fake.topology
+          ) == MEISO_K230D_DRM_TOPOLOGY_INVALID_ARGUMENT);
+    return true;
+}
+
+static bool test_crtc_mask_remap(void)
+{
+    uint32_t resource_ids[2] = {30U, 20U};
+    uint32_t canonical_ids[2] = {20U, 30U};
+    uint32_t output = 0xa5a5a5a5U;
+    uint32_t resource_before[2];
+
+    CHECK(meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 0U, &output
+    ));
+    CHECK(output == 0U);
+    CHECK(meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 1U, &output
+    ));
+    CHECK(output == 2U);
+    CHECK(meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 2U, &output
+    ));
+    CHECK(output == 1U);
+    CHECK(meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 3U, &output
+    ));
+    CHECK(output == 3U);
+
+    output = 0xa5a5a5a5U;
+    CHECK(!meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 4U, &output
+    ));
+    CHECK(output == 0xa5a5a5a5U);
+    resource_ids[1] = 30U;
+    CHECK(!meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 1U, &output
+    ));
+    CHECK(output == 0xa5a5a5a5U);
+    resource_ids[1] = 40U;
+    CHECK(!meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 1U, &output
+    ));
+    CHECK(output == 0xa5a5a5a5U);
+    resource_ids[1] = 20U;
+    canonical_ids[0] = 30U;
+    canonical_ids[1] = 20U;
+    CHECK(!meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 1U, &output
+    ));
+    CHECK(output == 0xa5a5a5a5U);
+
+    canonical_ids[0] = 20U;
+    canonical_ids[1] = 30U;
+    memcpy(resource_before, resource_ids, sizeof(resource_before));
+    CHECK(!meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 2U, 1U, &resource_ids[0]
+    ));
+    CHECK(memcmp(resource_ids, resource_before, sizeof(resource_ids)) == 0);
+    CHECK(!meiso_k230d_drm_private_remap_crtc_mask(
+        resource_ids, 2U, canonical_ids, 1U, 1U, &output
+    ));
+    CHECK(output == 0xa5a5a5a5U);
+    return true;
+}
+
 int main(void)
 {
     if (!test_successful_rgba_present_and_restore() ||
@@ -1984,7 +2166,9 @@ int main(void)
         !test_release_failure_ledger_and_close_consumption() ||
         !test_init_and_alias_boundaries() ||
         !test_snapshot_output_alias_boundaries() ||
-        !test_private_sha256_literal()) {
+        !test_private_sha256_literal() ||
+        !test_topology_evaluator_and_precedence() ||
+        !test_crtc_mask_remap()) {
         return 1;
     }
     (void)printf("K230D_DRM_SCANOUT_POLICY_TEST_PASSED\n");
