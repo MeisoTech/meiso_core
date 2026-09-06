@@ -274,10 +274,14 @@ static bool receive_host_event(
         !meiso_display_ingress_evidence_supported(
             &service->capability, &evidence, event->production_epoch
         ) ||
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+        evidence.evidence_class != MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP ||
+#else
         evidence.evidence_class != MEISO_DISPLAY_INGRESS_EVIDENCE_SIMULATED ||
         evidence.connector_kind != MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED ||
         evidence.output_width != SERVICE_FRAME_WIDTH ||
         evidence.output_height != SERVICE_FRAME_HEIGHT ||
+#endif
         evidence.media_stream_epoch != service->media_stream_epoch ||
         evidence.displayed_frame_sequence != service->frame_sequence ||
         memcmp(
@@ -293,6 +297,10 @@ static bool receive_host_event(
         sizeof(service->evidence_sha256)
     );
     service->evidence_complete = true;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    service->presentation = evidence;
+    service->presentation_time = event->stream_sample.source_time;
+#endif
     return true;
 }
 

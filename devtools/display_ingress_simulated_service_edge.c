@@ -282,6 +282,11 @@ static bool consume_latest(Service *service)
     service->frame_producer_dropped_frames =
         latest.frame.producer_dropped_frames;
     memmove(service->received_sha256, digest, sizeof(digest));
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    if (!service_drm_present(service, latest.frame.rgba_frame)) {
+        return false;
+    }
+#endif
     if (
         meiso_display_ingress_media_transport_release_latest(
             service->media, &latest.ref
@@ -363,6 +368,9 @@ static bool queue_evidence_if_idle(Service *service)
     evidence.connector_kind = MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED;
     evidence.output_width = SERVICE_FRAME_WIDTH;
     evidence.output_height = SERVICE_FRAME_HEIGHT;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    evidence = service->presentation;
+#endif
     evidence.media_stream_epoch = service->media_stream_epoch;
     evidence.displayed_frame_sequence = service->frame_sequence;
     memmove(
@@ -389,6 +397,9 @@ static bool queue_evidence_if_idle(Service *service)
     sample.source_time = (MeisoTimePoint){
         SERVICE_EVIDENCE_CLOCK_EPOCH, service_now_ns()
     };
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    sample.source_time = service->presentation_time;
+#endif
     sample.payload = (MeisoByteView){payload, payload_size};
     if (!meiso_time_point_valid(sample.source_time)) {
         return service_fail(service, "application", "evidence");

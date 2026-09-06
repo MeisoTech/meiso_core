@@ -1,8 +1,8 @@
 # K230D Linux targets
 
 > 状态：构建目标由 CMake 管理；Linux 显示选择与资源状态逻辑已通过主机测试；原生
-> libdrm 拓扑探针只枚举真实设备并给出安全准入判断，不提交画面。真正的 framebuffer、
-> page-flip 与屏幕验收仍待完成。DRM/KMS 指 Linux 内核的显示管理和模式设置接口。
+> libdrm 拓扑探针保留只读职责。另一个受控 Display Ingress service 已完成真实 framebuffer、
+> page-flip 与跨机呈现反馈；肉眼屏幕验收仍待完成。DRM/KMS 指 Linux 内核的显示管理和模式设置接口。
 > 本页只描述
 > 当前 source graph、入口与验收边界。旧 artifact hash、逐 commit receipt 和开发记录
 > 已[归档](../../docs/archive/k230d-linux-target-development-history.md)。
@@ -38,6 +38,35 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
 
 输出路径必须为 fresh、受控的仓外路径。工具链路径、SDK archive、ELF、
 原始日志、配置、IP 与凭据都不进入公开仓。
+
+## Display Ingress 单帧实机路径
+
+`MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE=ON` 在 Linux 构建
+`meiso_display_ingress_drm_service`。它复用现有 service 协议源文件，新增一个窄的 libdrm 后端；
+不依赖下节的拓扑准入/TEST_ONLY supervisor，也不替换最终 Composition 的层策略。
+合同及失败向量见 [Profile](../../profiles/display_ingress/README.md#受控单帧-drm-service)，
+实测边界见 [2026-09-06 结果](evidence/display-ingress-page-flip-2026-09-06.md)。
+
+交叉构建在既有 CMake 工具链外显式传入：
+
+```text
+-DMEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE=ON
+-DMEISO_DISPLAY_DRM_INCLUDE_DIR=<target directory containing xf86drm.h>
+-DMEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR=<target directory containing drm.h>
+-DMEISO_DISPLAY_DRM_LIBRARY=<target libdrm.so file>
+```
+
+使用完整的工具链 sysroot，保证 ELF interpreter 与目标系统一致。显式 library 文件避免选入
+不同 BSP 的 libc linker script。Host 角色使用同一个源版本的本机 Linux 构建；只有 Edge
+传入 `--drm-device`。调用方先建立 connected/nonblocking TCP、UDP socket，再继承到两个角色：
+
+```text
+host: --role host --control-fd N --media-fd N --frame-fd N
+edge: --role edge --control-fd N --media-fd N --drm-device PATH
+```
+
+Host frame fd 仍按 DIFI 合同提供 64×32 图像和 EOF。service 一帧完成后退出，显示时间很短；
+需单独保持画面作线下观察时使用 lab 静态显示工具。
 
 ## DRM scanout policy core
 

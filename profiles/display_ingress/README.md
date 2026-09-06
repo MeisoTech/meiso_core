@@ -2,9 +2,9 @@
 
 > 状态：Profile Catalog、State、呈现证据合同、媒体传输和受控的未认证 UDP 搬运适配器
 > 已经实现。现在也已把相同协议接入两个独立本机进程，以模拟画面源和内存显示接收端验证
-> 进程接线。K230D 侧另有一个 libdrm 拓扑探针，能如实给出显示安全准入阻断，但
-> 还没有提交任何画面。最终带身份认证、机密性与完整性保护的网络承载、真实 Host/Edge
-> service 和物理端到端路径尚未完成。DRM/KMS 指
+> 进程接线。受控 DRM service 已在服务器 Host 测试端与 K230D 之间完成单帧网络接收、
+> 真实 page-flip 和返回 Host 的呈现证据，见 [实机结果](../../targets/k230d-linux/evidence/display-ingress-page-flip-2026-09-06.md)。
+> 最终安全 carrier、正式应用 Host、连续视频与独立肉眼核验尚待完成。DRM/KMS 指
 > Linux 内核的显示管理和模式设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
@@ -305,6 +305,29 @@ stdout 仍只允许每个角色输出一条终态 NDJSON 收据。引入外部�
 Profile 仍要求两侧 frame metadata 与 SHA 对齐、`media_stream_epoch == production_epoch`，并且
 Edge 只有在 UDP 接收对象完成武装以后才能把 RUNNING Actual 首字节写入 TCP。所有 stdout
 收据固定 `physical_evidence=false`，不得当作物理呈现证据。
+
+### 受控单帧 DRM service
+
+`meiso_display_ingress_drm_service` 是显式启用的 Linux 实验程序，复用上述 service 的
+Session、Runtime、DIFI 输入、固定 64×32 RGBA 帧和 connected TCP/UDP 接线。它支持跨机
+调用方提供的 socket；不提供发现、重连或安全 carrier。它没有 `--pair` 入口，不安装为 SDK。
+Host 参数与模拟角色相同；Edge 另要求 `--drm-device PATH`，由 Edge 本地选择显示设备，
+该路径和 KMS 对象 ID 不进入 Host 协议。
+
+这个变体只发布/接受 `DRM_KMS_PAGE_FLIP` 能力。Edge 在开放协议前确认唯一活动输出、
+所有平面未绑定、无其他 DRM master，选择兼容的 RGB565 overlay，分配最多 5 MiB 的单缓冲。
+它将收到的完整 RGBA 小帧用 nearest-neighbor 铺到当前输出模式，保持输入 SHA 与帧身份；
+仅在收到本次提交 cookie/CRTC 匹配的单调时钟 page-flip 事件后，才发送该帧的呈现证据。
+证据中的 output 尺寸来自实际 CRTC，source_time 来自内核事件。没有事件不能冒充呈现。
+
+显示准入失败、分配失败、TEST_ONLY/提交失败、事件超时或恢复失败均返回失败收据；
+失败不得输出成功的 KMS 证据。恢复使用保存的平面属性，结束后释放本轮缓冲和设备。
+已有活动平面时拒绝这个实验，而不是绕过最终 Composition 层的叠放/安全层要求。
+这里的单帧生命周期没有加入逐帧 ACK，也没有证明持续视频吞吐或完整应用兼容。
+
+变体终态收据使用 `DISPLAY_INGRESS_DRM_SERVICE_RECEIPT_V1`，带角色、Session、输入帧与
+媒体 epoch、SHA、实际输出尺寸、KMS 事件时刻及关闭结果。`physical_observation=false`
+表示肉眼核验独立进行；成功的 KMS 事件本身不证明光学或 splitter 正确。
 
 ## 固定内存与 latest 规则
 

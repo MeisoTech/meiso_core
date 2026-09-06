@@ -46,7 +46,7 @@ bool service_emit_failure(const Service *service)
     const int size = snprintf(
         line,
         sizeof(line),
-        "{\"schema\":\"DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2\","
+        "{\"schema\":\"" SERVICE_RECEIPT_SCHEMA "\","
         "\"role\":\"%s\",\"status\":\"FAILURE\","
         "\"plane\":\"%s\",\"stage\":\"%s\","
         "\"carrier\":\"CONTROLLED_RAW_UDP\","
@@ -90,6 +90,12 @@ bool service_success_ready(const Service *service)
     }
     primary = service->role == MEISO_SESSION_ROLE_HOST ?
         service->input_sha256 : service->received_sha256;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    if (!service->display_closed || !meiso_time_point_valid(service->presentation_time) ||
+        service->presentation.evidence_class != MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP) {
+        return false;
+    }
+#endif
     return memcmp(
         primary, service->evidence_sha256, sizeof(service->evidence_sha256)
     ) == 0;
@@ -113,6 +119,26 @@ bool service_emit_success(const Service *service)
         primary
     );
     digest_hex(service->evidence_sha256, evidence);
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    size = snprintf(
+        line, sizeof(line),
+        "{\"schema\":\"" SERVICE_RECEIPT_SCHEMA "\","
+        "\"role\":\"%s\",\"status\":\"SUCCESS\",\"session_id\":\"%s\","
+        "\"production_epoch\":%" PRIu64 ",\"media_stream_epoch\":%" PRIu64 ","
+        "\"frame_sequence\":%" PRIu64 ",\"input_width\":%u,\"input_height\":%u,"
+        "\"input_sha256\":\"%s\",\"evidence_input_sha256\":\"%s\","
+        "\"evidence_class\":\"DRM_KMS_PAGE_FLIP\",\"connector\":\"%s\","
+        "\"output_width\":%u,\"output_height\":%u,\"page_flip_ns\":%" PRIu64 ","
+        "\"physical_observation\":false,\"link_security\":false,"
+        "\"carrier\":\"CONTROLLED_RAW_UDP\",\"clean_shutdown\":true}\n",
+        service->role_name, session, service->production_epoch, service->media_stream_epoch,
+        service->frame_sequence, service->frame_input_width, service->frame_input_height,
+        primary, evidence,
+        service->presentation.connector_kind == MEISO_DISPLAY_INGRESS_CONNECTOR_DSI ? "DSI" : "HDMI",
+        service->presentation.output_width, service->presentation.output_height,
+        service->presentation_time.monotonic_ns
+    );
+#else
     if (service->role == MEISO_SESSION_ROLE_HOST) {
         size = snprintf(
             line,
@@ -209,5 +235,6 @@ bool service_emit_success(const Service *service)
             service->close_clean ? "true" : "false"
         );
     }
+#endif
     return size > 0 && (size_t)size < sizeof(line) && write_line(line);
 }

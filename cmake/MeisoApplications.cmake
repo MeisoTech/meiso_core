@@ -301,8 +301,7 @@ if(MEISO_BUILD_K230D_LINUX_APPS AND
 endif()
 
 if(UNIX)
-    add_executable(
-        meiso_display_ingress_simulated_service
+    set(MEISO_DISPLAY_INGRESS_SERVICE_SOURCES
         devtools/display_ingress_simulated_service.c
         devtools/display_ingress_simulated_service_bootstrap.c
         devtools/display_ingress_simulated_service_control.c
@@ -310,8 +309,12 @@ if(UNIX)
         devtools/display_ingress_simulated_service_frame_input.c
         devtools/display_ingress_simulated_service_host.c
         devtools/display_ingress_simulated_service_loop.c
-        devtools/display_ingress_simulated_pair_runner.c
         devtools/display_ingress_simulated_service_receipt.c
+    )
+    add_executable(
+        meiso_display_ingress_simulated_service
+        ${MEISO_DISPLAY_INGRESS_SERVICE_SOURCES}
+        devtools/display_ingress_simulated_pair_runner.c
     )
     target_link_libraries(
         meiso_display_ingress_simulated_service
@@ -325,6 +328,28 @@ if(UNIX)
         meiso_display_ingress_simulated_service
         "Meiso/Applications/Lab"
     )
+
+    option(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE "Build the controlled Linux single-frame DRM service" OFF)
+    if(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE)
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            message(FATAL_ERROR "Display Ingress DRM service requires Linux")
+        endif()
+        find_path(MEISO_DISPLAY_DRM_INCLUDE_DIR xf86drm.h REQUIRED)
+        find_path(MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR drm.h PATH_SUFFIXES libdrm REQUIRED)
+        find_library(MEISO_DISPLAY_DRM_LIBRARY drm REQUIRED)
+        add_executable(meiso_display_ingress_drm_service
+            ${MEISO_DISPLAY_INGRESS_SERVICE_SOURCES}
+            devtools/display_ingress_service_drm.c)
+        target_compile_definitions(meiso_display_ingress_drm_service PRIVATE MEISO_DISPLAY_INGRESS_DRM_SERVICE=1)
+        target_include_directories(meiso_display_ingress_drm_service SYSTEM PRIVATE
+            "${MEISO_DISPLAY_DRM_INCLUDE_DIR}" "${MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR}")
+        target_link_libraries(meiso_display_ingress_drm_service PRIVATE
+            meiso_posix_tcp_adapter meiso_display_ingress_media_posix_udp_adapter
+            meiso_display_ingress_host_fixture_input "${MEISO_DISPLAY_DRM_LIBRARY}")
+        set_target_properties(meiso_display_ingress_drm_service PROPERTIES SKIP_BUILD_RPATH TRUE)
+        meiso_enable_warnings(meiso_display_ingress_drm_service)
+        meiso_set_target_folder(meiso_display_ingress_drm_service "Meiso/Applications/Lab")
+    endif()
 
     set(
         MEISO_FOUR_KIND_LAB_APPLICATION_SOURCES

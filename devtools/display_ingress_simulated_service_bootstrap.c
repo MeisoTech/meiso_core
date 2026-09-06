@@ -122,7 +122,7 @@ static bool build_catalog(Service *service)
             60000U,
             SERVICE_FRAME_BYTES,
             MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_MAX_FRAGMENT_BYTES,
-            MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_SIMULATED,
+            SERVICE_EVIDENCE_MASK,
             MEISO_STREAM_DEADLINE_UNSUPPORTED
         }
     };

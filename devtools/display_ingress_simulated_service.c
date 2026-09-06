@@ -19,6 +19,9 @@ typedef struct {
 } Arguments;
 
 static Service service_storage;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+static const char *drm_device_path;
+#endif
 
 static bool signal_input_ready(int *readiness_fd)
 {
@@ -95,6 +98,11 @@ static bool parse_arguments(int argc, char **argv, Arguments *out_arguments)
                    index + 1 < argc && !frame_seen &&
                    parse_fd(argv[++index], &value.frame_fd)) {
             frame_seen = true;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+        } else if (strcmp(argv[index], "--drm-device") == 0 &&
+                   index + 1 < argc && drm_device_path == NULL) {
+            drm_device_path = argv[++index];
+#endif
         } else {
             return false;
         }
@@ -109,6 +117,11 @@ static bool parse_arguments(int argc, char **argv, Arguments *out_arguments)
         return false;
     }
     *out_arguments = value;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    if ((value.role == MEISO_SESSION_ROLE_EDGE) != (drm_device_path != NULL)) {
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -130,6 +143,9 @@ int service_execute_role(
     service_storage.frame_fd = frame_fd;
     service_storage.role = role;
     service_storage.role_name = role_name;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    service_storage.drm_device_path = drm_device_path;
+#endif
     if (service_storage.role == MEISO_SESSION_ROLE_HOST) {
         success = service_read_host_fixture_input(&service_storage);
         service_close_fd(&service_storage.frame_fd);
@@ -142,9 +158,19 @@ int service_execute_role(
         success = true;
     }
     service_close_fd(&readiness_fd);
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    if (success) {
+        success = service_drm_open(&service_storage);
+    }
+#endif
     if (success) {
         success = service_run(&service_storage);
     }
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    if (!service_drm_close(&service_storage)) {
+        success = false;
+    }
+#endif
     service_close_fd(&service_storage.frame_fd);
     service_close_fd(&service_storage.media_fd);
     service_close_fd(&service_storage.control_fd);
@@ -167,14 +193,15 @@ int service_execute_role(
 int main(int argc, char **argv)
 {
     Arguments arguments;
+#ifndef MEISO_DISPLAY_INGRESS_DRM_SERVICE
     int frame_fd = -1;
-
     if (argc == 4 && argv != NULL && argv[0] != NULL &&
         argv[0][0] == '/' && strcmp(argv[1], "--pair") == 0 &&
         strcmp(argv[2], "--frame-fd") == 0 &&
         parse_fd(argv[3], &frame_fd)) {
         return service_execute_pair(frame_fd);
     }
+#endif
     if (!parse_arguments(argc, argv, &arguments)) {
         fputs("E_ARGUMENT\n", stderr);
         return 2;

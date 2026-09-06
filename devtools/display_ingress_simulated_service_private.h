@@ -10,6 +10,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+#define SERVICE_EVIDENCE_MASK MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_DRM_KMS_PAGE_FLIP
+#define SERVICE_RECEIPT_SCHEMA "DISPLAY_INGRESS_DRM_SERVICE_RECEIPT_V1"
+#else
+#define SERVICE_EVIDENCE_MASK MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_SIMULATED
+#define SERVICE_RECEIPT_SCHEMA "DISPLAY_INGRESS_SIMULATED_SERVICE_RECEIPT_V2"
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 #define SERVICE_PRIVATE_API __attribute__((visibility("hidden")))
 #else
@@ -141,7 +149,19 @@ typedef struct {
     bool media_terminated;
     bool descriptors_closed;
     bool close_clean;
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+    const char *drm_device_path;
+    MeisoDisplayIngressPresentationEvidence presentation;
+    MeisoTimePoint presentation_time;
+    bool display_closed;
+#endif
 } Service;
+
+#ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
+SERVICE_PRIVATE_API bool service_drm_open(Service *service);
+SERVICE_PRIVATE_API bool service_drm_present(Service *service, MeisoByteView rgba);
+SERVICE_PRIVATE_API bool service_drm_close(Service *service);
+#endif
 
 SERVICE_PRIVATE_API bool service_fail(
     Service *service,
