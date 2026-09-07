@@ -1,0 +1,31 @@
+#!/bin/sh
+# Deployment process restart for the BusyBox image, which has no service supervisor.
+# The child owns all connection/session/media state. This wrapper owns only its PID.
+set -u
+if [ "$#" -lt 7 ]; then
+    echo "usage: meiso-edge-reconnect LAUNCHER SERVICE HOST_IP TCP_PORT UDP_PORT DRM_PATH EDGE_UDP_PORT [SERVICE_OPTION VALUE ...]" >&2
+    exit 2
+fi
+child=
+stop() {
+    trap '' TERM INT HUP
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+    fi
+    exit 0
+}
+trap stop TERM INT HUP
+while :; do
+    "$@" &
+    child=$!
+    wait "$child"
+    result=$?
+    child=
+    [ "$result" -eq 2 ] && exit 2 # Invalid launcher configuration needs correction.
+    echo "EDGE_CONNECTION_EXIT status=$result; reconnect in 2 seconds" >&2
+    sleep 2 &
+    child=$!
+    wait "$child"
+    child=
+done

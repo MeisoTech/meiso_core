@@ -2,7 +2,8 @@
 
 > 状态：构建目标由 CMake 管理；Linux 显示选择与资源状态逻辑已通过主机测试；原生
 > libdrm 拓扑探针保留只读职责。另一个受控 Display Ingress service 已完成真实 framebuffer、
-> page-flip 与跨机呈现反馈；肉眼屏幕验收仍待完成。DRM/KMS 指 Linux 内核的显示管理和模式设置接口。
+> page-flip 与跨机呈现反馈；连续压缩视频和原生2D有独立构建/安装入口，见下节。
+> DRM/KMS 指 Linux 内核的显示管理和模式设置接口。
 > 本页只描述
 > 当前 source graph、入口与验收边界。旧 artifact hash、逐 commit receipt 和开发记录
 > 已[归档](../../docs/archive/k230d-linux-target-development-history.md)。
@@ -39,7 +40,56 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
 输出路径必须为 fresh、受控的仓外路径。工具链路径、SDK archive、ELF、
 原始日志、配置、IP 与凭据都不进入公开仓。
 
-## Display Ingress 单帧实机路径
+## 连续视频与原生2D：构建、安装和启动
+
+`MEISO_BUILD_K230D_VIDEO_SERVICE=ON` 构建已有 MVX/DRM 视频服务。
+`K230dVideoRuntime` 安装组件只交付该服务、连接启动器和 BusyBox 重连脚本；
+库仍由 SDK 的既有组件拥有。固件不包含在这个组件中，板端需预装匹配的
+MVX/DRM 驱动、libdrm 和 Linux loader。内核/DTB 配对由板级发行配置负责。
+
+使用现有 Xuantie 工具链及显式目标 libdrm（以下路径由部署环境提供）：
+
+```sh
+MEISO_K230_LINUX_CC="$CC" cmake -S . -B build/k230d-video \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/k230d-linux-xuantie.cmake \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+  -DMEISO_BUILD_K230D_VIDEO_SERVICE=ON \
+  -DMEISO_DISPLAY_DRM_INCLUDE_DIR="$DRM_ROOT/usr/include" \
+  -DMEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR="$DRM_ROOT/usr/include/libdrm" \
+  -DMEISO_DISPLAY_DRM_LIBRARY="$DRM_ROOT/usr/lib/libdrm.so"
+cmake --build build/k230d-video --target \
+  meiso_display_ingress_video_edge meiso_display_ingress_edge_launch -j4
+cmake --install build/k230d-video --component K230dVideoRuntime --prefix "$EDGE_STAGE"
+```
+
+将 `EDGE_STAGE` 中的文件部署到 Edge 的隔离前缀。下例在 Edge 执行，`EDGE_PREFIX`
+为实际安装位置，`HOST_IP` 是可路由到的 Host 地址。先启动 Host 的对应监听服务，
+再启动 Edge；两侧的端口和输入宽高必须匹配。当前 720p 输入不改变已有物理输出模式。
+
+```sh
+"$EDGE_PREFIX/bin/meiso-edge-reconnect" \
+  "$EDGE_PREFIX/bin/meiso_display_ingress_edge_launch" \
+  "$EDGE_PREFIX/bin/meiso_display_ingress_video_edge" \
+  "$HOST_IP" 4440 4441 /dev/dri/card0 4442 \
+  --width 1280 --height 720 --native-overlay on --continuous on
+```
+
+启动器仅建立 connected/nonblocking TCP、UDP fd，然后 exec 服务。最后允许最多16对
+服务选项，不能覆盖启动器拥有的 role、control/media fd 和 DRM 路径。
+不需要再生成一个仅为传宽高/overlay选项的 wrapper。IPv4 地址是部署 locator；
+当前示例服务沿用固定的示例 PeerID，并不提供设备注册或身份认证产品流程。
+重连脚本只持有一个子进程 PID，退出后等待2秒，参数错误（退出码2）停止重试。
+不要在已有平台 supervisor 上再叠加此脚本。
+`--continuous on` 让 Edge 媒体服务持续到连接终止或显式停止，不因实验帧数计时退出。
+未选此选项时仍保留 `--frames / 30 + 15` 秒的诊断截止（默认75秒）。
+continuous 不取消协议错误、解码无进展超时、Session 关闭或有界缓冲检查。
+
+正常停止顺序：应用 drain → Host 服务停止并完成远端清理 → Edge 重连脚本停止。
+`VIDEO_RESULT` 中的呈现计数、`restored` 和 `close_clean` 是实际反馈检查入口；
+Host 应用应同时收到视频 source release 和原生2D execution receipt。
+Host 构建/IPC入口属于 Looking Glass 的 `sdc/integrations/meiso/presentation_sink`。
+
+## Display Ingress 单帧实机路径（早期诊断）
 
 `MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE=ON` 在 Linux 构建
 `meiso_display_ingress_drm_service`。它复用现有 service 协议源文件，新增一个窄的 libdrm 后端；

@@ -17,6 +17,7 @@ bool service_overlay_initialize(Service *, MeisoIngressVideo *);
 bool service_overlay_consume(Service *, const MeisoRuntimeEvent *);
 bool service_overlay_poll(Service *);
 void service_overlay_finish(void);
+static bool continuous_edge;
 #endif
 
 /* One controlled video workload; Session, Catalog, State and DIFR remain shared. */
@@ -285,7 +286,7 @@ bool service_run_edge_media(Service *s)
     if (!service_overlay_initialize(s, video)) return false;
     const uint64_t deadline = service_now_ns() + frame_limit * UINT64_C(1000000000) / 30U + UINT64_C(15000000000);
     uint64_t last_progress = service_now_ns(), previous_presented = 0;
-    while (!interrupted && service_now_ns() < deadline) {
+    while (!interrupted && (continuous_edge || service_now_ns() < deadline)) {
         if (!receive_batch(s) || !decode_latest(s) || !poll_presentation(s) || !service_overlay_poll(s)) return false;
         MeisoRuntimeEvent event;
         ServiceControlStep step = service_control_step(s, true, 0, &event);
@@ -340,6 +341,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--video-device") == 0) video_path = argv[i+1];
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+        else if (strcmp(argv[i], "--continuous") == 0 && strcmp(argv[i+1], "on") == 0) continuous_edge=true;
         else if (strcmp(argv[i], "--native-overlay") == 0 && strcmp(argv[i+1], "on") == 0) service.overlay_enabled=true;
 #endif
         else return 2;

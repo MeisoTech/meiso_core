@@ -361,6 +361,13 @@ if(UNIX)
             "${MEISO_DISPLAY_DRM_LIBRARY}")
         set_target_properties(meiso_display_ingress_video_edge PROPERTIES SKIP_BUILD_RPATH TRUE)
         meiso_enable_warnings(meiso_display_ingress_video_edge)
+        add_executable(meiso_display_ingress_edge_launch
+            targets/k230d-linux/display_ingress_edge_launch.c)
+        meiso_enable_warnings(meiso_display_ingress_edge_launch)
+        install(TARGETS meiso_display_ingress_video_edge meiso_display_ingress_edge_launch
+            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT K230dVideoRuntime)
+        install(PROGRAMS targets/k230d-linux/meiso-edge-reconnect
+            DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT K230dVideoRuntime)
     endif()
 
     option(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE "Build the controlled Linux single-frame DRM service" OFF)
