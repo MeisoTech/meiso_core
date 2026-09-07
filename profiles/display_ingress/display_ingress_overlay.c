@@ -141,6 +141,15 @@ bool meiso_display_overlay_configure_session(MeisoSessionConfig *out)
     if (!meiso_session_memory_required(&v)) return false;
     *out=v; return true;
 }
+bool meiso_display_stereo_overlay_configure_session(MeisoSessionConfig *out)
+{
+    if (!out) return false;
+    MeisoSessionConfig v=*out;
+    if (!meiso_display_overlay_configure_session(&v)) return false;
+    v.profile.version=MEISO_DISPLAY_STEREO_OVERLAY_PROFILE_VERSION;
+    if (!meiso_session_memory_required(&v)) return false;
+    *out=v; return true;
+}
 bool meiso_display_overlay_configure_runtime(MeisoRuntimeV4Config *out, MeisoSession *session)
 {
     if (!out || !session) return false;

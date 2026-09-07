@@ -40,6 +40,11 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path,
                                             uint32_t width,
                                             uint32_t height);
 
+/* Select two centered native-size views of one left/right atlas. Call once
+ * before submitting any input. Requires the matching Canaan crop/stride kernel,
+ * two empty nonrotating NV12 planes and input width divisible by 16. */
+int meiso_ingress_video_set_stereo(MeisoIngressVideo *video);
+
 /* AU must be one <=128 KiB H.264 Baseline IDR access unit with SPS/PPS. */
 MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *video,
                                                           uint64_t sequence,

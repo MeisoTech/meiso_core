@@ -7,6 +7,7 @@ extern "C" {
 
 enum {
     MEISO_DISPLAY_OVERLAY_PROFILE_VERSION = 4,
+    MEISO_DISPLAY_STEREO_OVERLAY_PROFILE_VERSION = 5,
     MEISO_DISPLAY_OVERLAY_ENDPOINT_COUNT = 2,
     MEISO_DISPLAY_OVERLAY_ROUTE_COUNT = 7,
     MEISO_DISPLAY_OVERLAY_ROUTE_PLAN = 4,
@@ -61,6 +62,8 @@ bool meiso_display_overlay_plan_supported(const MeisoDisplayOverlayCapability *,
 
 /* Explicit opt-in; v1/v2 helpers and exact graphs are unchanged. */
 bool meiso_display_overlay_configure_session(MeisoSessionConfig *);
+/* Same graph/codecs, explicitly centered native-size left/right video views. */
+bool meiso_display_stereo_overlay_configure_session(MeisoSessionConfig *);
 bool meiso_display_overlay_configure_runtime(MeisoRuntimeV4Config *, MeisoSession *);
 /* Capability storage holds video's 32 bytes then HUD's 32 bytes; endpoint
  * descriptors borrow it until Runtime copies it. No partial output on error. */

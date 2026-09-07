@@ -197,7 +197,9 @@ static bool initialize_session_and_tcp(Service *service)
     session_config.local_incarnation = identity.incarnation;
     session_config.local_nonce = identity.nonce;
     session_config.protocol = (MeisoProtocolVersion){1U, 0U};
-    if (service->overlay_enabled ? !meiso_display_overlay_configure_session(&session_config) :
+    if (service->overlay_enabled ? !(service->stereo_video ?
+        meiso_display_stereo_overlay_configure_session(&session_config) :
+        meiso_display_overlay_configure_session(&session_config)) :
         meiso_display_ingress_configure_session_for_format(&session_config, SERVICE_FRAME_FORMAT) != MEISO_DISPLAY_INGRESS_PROFILE_OK) {
         return service_fail(service, "control", "session");
     }

@@ -344,6 +344,9 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
         else if (strcmp(argv[i], "--continuous") == 0 && strcmp(argv[i+1], "on") == 0) continuous_edge=true;
+        else if (strcmp(argv[i], "--video-layout") == 0 &&
+            (strcmp(argv[i+1], "native") == 0 || strcmp(argv[i+1], "side-by-side") == 0))
+            service.stereo_video=strcmp(argv[i+1], "side-by-side") == 0;
         else if (strcmp(argv[i], "--native-overlay") == 0 && strcmp(argv[i+1], "on") == 0) service.overlay_enabled=true;
 #endif
         else return 2;
@@ -355,6 +358,10 @@ int main(int argc, char **argv)
         return 2;
     }
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+    if (service.stereo_video && !service.overlay_enabled) {
+        fprintf(stderr, "side-by-side video requires native-overlay on (Profile v5)\n");
+        return 2;
+    }
     if (continuous_edge && !local_set) {
         fprintf(stderr, "continuous Edge requires --local-peer and --expected-peer\n");
         return 2;
@@ -367,6 +374,10 @@ int main(int argc, char **argv)
     (void)input;
     video = meiso_ingress_video_open(video_path, drm_path, service_frame_width(&service), service_frame_height(&service));
     if (video == NULL) { fprintf(stderr, "video backend open failed\n"); return 1; }
+    if (service.stereo_video && meiso_ingress_video_set_stereo(video)) {
+        fprintf(stderr, "stereo video output unavailable\n");
+        meiso_ingress_video_close(video); return 1;
+    }
     if (service.overlay_enabled) {
         /* Canaan DRM framebuffers are at least 16x16; VO stride is in 8-byte
          * units, hence an even ARGB width. Publish these actual constraints. */

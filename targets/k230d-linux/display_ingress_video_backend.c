@@ -41,6 +41,7 @@ struct MeisoIngressVideo {
     enum state state;
     uint32_t width, height, output_w, output_h, ystride, uvstride, crtc, plane, prop_ids[NPROPS];
     uint64_t before[NPROPS];
+    struct { uint32_t plane, props[NPROPS]; uint64_t before[NPROPS]; } right;
     MeisoIngressVideoConnectorKind connector;
     struct surface input[INPUT_BUFFERS], dummy[2], capture[CAPTURE_BUFFERS][2];
     uint32_t input_v4l_length[INPUT_BUFFERS], dummy_v4l_length[2], capture_v4l_length[CAPTURE_BUFFERS][2];
@@ -130,9 +131,21 @@ static int atomic_plane_commit(int fd, uint32_t plane, const uint32_t *ids,
     drmModeAtomicFree(req); return rc;
 }
 
-static int atomic_commit(struct MeisoIngressVideo *v, const uint64_t *values, uint32_t flags, void *cookie)
+static int atomic_commit(struct MeisoIngressVideo *v, const uint64_t *left,
+                         const uint64_t *right, uint32_t flags, void *cookie)
 {
-    return atomic_plane_commit(v->drm_fd, v->plane, v->prop_ids, values, flags, cookie);
+    drmModeAtomicReq *req = drmModeAtomicAlloc();
+    if (!req) return -1;
+    const uint32_t planes[2] = {v->plane, v->right.plane};
+    const uint32_t *ids[2] = {v->prop_ids, v->right.props};
+    const uint64_t *values[2] = {left, right};
+    int rc = -1;
+    for (unsigned p = 0; p < 2; ++p) if (planes[p])
+        for (unsigned i = 0; i < NPROPS; ++i)
+            if (drmModeAtomicAddProperty(req, planes[p], ids[p][i], values[p][i]) < 0) goto out;
+    rc = drmModeAtomicCommit(v->drm_fd, req, flags, cookie);
+out:
+    drmModeAtomicFree(req); return rc;
 }
 
 static void page_flip(int fd, unsigned sequence, unsigned sec, unsigned usec,
@@ -340,10 +353,15 @@ static int start_present(struct MeisoIngressVideo *v, unsigned capture_index, co
     if (!pitches[0] || !pitches[1] || drmPrimeFDToHandle(v->drm_fd, v->capture[capture_index][0].fd, &handles[0]) ||
         drmPrimeFDToHandle(v->drm_fd, v->capture[capture_index][1].fd, &handles[1]) ||
         drmModeAddFB2(v->drm_fd, v->width, v->height, DRM_FORMAT_NV12, handles, pitches, offsets, &fb, 0)) goto fail;
-    uint64_t values[NPROPS] = { fb, v->crtc, 0, 0, (uint64_t)v->width << 16, (uint64_t)v->height << 16,
-                                0, 0, v->width, v->height };
-    if (atomic_commit(v, values, DRM_MODE_ATOMIC_TEST_ONLY, NULL) ||
-        atomic_commit(v, values, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, v)) goto fail;
+    const uint32_t w = v->right.plane ? v->width / 2 : v->width;
+    const uint32_t x = v->right.plane ? (v->output_w / 2 - w) / 2 : 0;
+    const uint32_t y = v->right.plane ? (v->output_h - v->height) / 2 : 0;
+    const uint64_t values[NPROPS] = {fb, v->crtc, 0, 0, (uint64_t)w << 16,
+        (uint64_t)v->height << 16, x, y, w, v->height};
+    const uint64_t right[NPROPS] = {fb, v->crtc, (uint64_t)w << 16, 0, (uint64_t)w << 16,
+        (uint64_t)v->height << 16, x + v->output_w / 2, y, w, v->height};
+    if (atomic_commit(v, values, right, DRM_MODE_ATOMIC_TEST_ONLY, NULL) ||
+        atomic_commit(v, values, right, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, v)) goto fail;
     v->flip.pending = 1; v->flip.seen = 0; v->flip.capture_index = (int)capture_index;
     v->flip.fb = fb; v->flip.handles[0] = handles[0]; v->flip.handles[1] = handles[1];
     v->flip.sequence = (uint64_t)b->timestamp.tv_sec * UINT64_C(1000000) + (uint32_t)b->timestamp.tv_usec;
@@ -408,6 +426,47 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
     v->capture_streaming = 1; v->state = WAIT_SOURCE; return v;
 fail:
     meiso_ingress_video_close(v); return NULL;
+}
+
+int meiso_ingress_video_set_stereo(MeisoIngressVideo *v)
+{
+    if (!v || v->state != WAIT_SOURCE || v->source_changed || v->right.plane ||
+        v->width % 16 || v->output_w % 2 || v->width > v->output_w || v->height > v->output_h)
+        return errno = EINVAL, -1;
+    for (unsigned i = 0; i < INPUT_BUFFERS; ++i)
+        if (v->input_busy[i]) return errno = EBUSY, -1;
+    drmModePlaneRes *planes = drmModeGetPlaneResources(v->drm_fd);
+    if (!planes) return -1;
+    uint32_t chosen = 0;
+    for (uint32_t i = 0; i < planes->count_planes && !chosen; ++i) {
+        drmModePlane *p = drmModeGetPlane(v->drm_fd, planes->planes[i]);
+        if (!p) break;
+        int nv12 = 0, rotating = 0;
+        for (uint32_t j = 0; j < p->count_formats; ++j) nv12 |= p->formats[j] == DRM_FORMAT_NV12;
+        if (nv12 && p->plane_id != v->plane && !p->fb_id && !p->crtc_id && (p->possible_crtcs & 1U)) {
+            drmModeObjectProperties *ps = drmModeObjectGetProperties(v->drm_fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
+            if (ps) {
+                for (uint32_t j = 0; j < ps->count_props; ++j) {
+                    drmModePropertyRes *prop = drmModeGetProperty(v->drm_fd, ps->props[j]);
+                    if (!prop) { rotating = 1; break; }
+                    rotating |= !strcmp(prop->name, "rotation");
+                    drmModeFreeProperty(prop);
+                }
+                drmModeFreeObjectProperties(ps);
+                if (!rotating) chosen = p->plane_id;
+            }
+        }
+        drmModeFreePlane(p);
+    }
+    drmModeFreePlaneResources(planes);
+    if (!chosen || read_properties_at(v->drm_fd, chosen, v->right.props, v->right.before))
+        return errno = ENODEV, -1;
+    v->right.plane = chosen;
+    fprintf(stderr, "STEREO_VIDEO_LAYOUT input=%ux%u output=%ux%u eye=%ux%u x=%u,%u y=%u planes=%u,%u extra_pixel_bytes=0\n",
+        v->width, v->height, v->output_w, v->output_h, v->width/2, v->height,
+        (v->output_w-v->width)/4, (v->output_w-v->width)/4+v->output_w/2,
+        (v->output_h-v->height)/2, v->plane, v->right.plane);
+    return 0;
 }
 
 MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, uint64_t sequence,
@@ -603,7 +662,7 @@ int meiso_ingress_video_close(MeisoIngressVideo *v)
     if (v->drm_fd >= 0 && v->overlay.plane &&
         atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props,
                             v->overlay.before, 0, NULL)) rc = -1;
-    if (v->drm_fd >= 0 && v->plane && atomic_commit(v, v->before, 0, NULL)) rc = -1;
+    if (v->drm_fd >= 0 && v->plane && atomic_commit(v, v->before, v->right.before, 0, NULL)) rc = -1;
     if (v->drm_fd >= 0) {
         if (release_fb(v, v->shown_fb, v->shown_handles)) rc = -1;
         if (release_fb(v, v->flip.fb, v->flip.handles)) rc = -1;

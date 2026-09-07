@@ -6,6 +6,19 @@
 
 int main(void)
 {
+    MeisoSessionConfig session={0};
+    session.local_role=MEISO_SESSION_ROLE_HOST;
+    session.local_peer_id=(MeisoPeerId){11,12}; session.expected_peer_id=(MeisoPeerId){21,22};
+    session.local_incarnation=31; session.local_nonce=(MeisoSessionNonce){61,62};
+    session.protocol=(MeisoProtocolVersion){1,0};
+    CHECK(meiso_display_overlay_configure_session(&session));
+    CHECK(session.profile.version==4);
+    const size_t session_bytes=meiso_session_memory_required(&session);
+    CHECK(meiso_display_stereo_overlay_configure_session(&session));
+    CHECK(session.profile.version==5 && meiso_session_memory_required(&session)==session_bytes);
+    CHECK(!meiso_display_stereo_overlay_configure_session(NULL));
+    CHECK(meiso_display_overlay_configure_session(&session) && session.profile.version==4);
+
     MeisoDisplayOverlayCapability cap={1920,1080,65536,48,10,16,16,2,1,3}, decoded_cap;
     MeisoDisplayOverlayPlan plan={0}, decoded;
     plan.generation=501; plan.video_desired_version=3; plan.canvas_width=1920; plan.canvas_height=1080;

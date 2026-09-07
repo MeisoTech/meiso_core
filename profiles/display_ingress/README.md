@@ -698,3 +698,31 @@ canonical text/reserved bytes, off-canvas and oversized regions, distinct
 video/HUD identities, stereo eye bounds, spanning pixel/stride budgets and
 transparent gap rasterization, latest replacement, visible/move/hide feedback, and
 unchanged video production with bounded memory on the target board.
+
+## Display Ingress v5: side-by-side video with native screen content
+
+`DISPLAY_/INGRESS_:v5` explicitly selects a left/right video atlas. It reuses
+v4's exact two-endpoint/seven-route graph and all its resource schemas/codecs;
+v1/v2/v4 selections keep their existing behavior. The Session Profile version
+makes the different video placement explicit before accepting the catalog.
+The video content is two ordered `VIEW Quad` regions of the same decoded frame,
+followed by the independently updated native screen content. Both video views
+belong to one frame/production epoch and one atomic display commit on the same
+output; its physical receipt covers that combined video update.
+
+For input W×H and advertised physical output O×P, W and O are even, W≤O and
+H≤P. Each source view is W/2×H: left starts at (0,0), right at (W/2,0).
+They are displayed without scaling, centered in each output eye. The left
+origin is (floor((O/2-W/2)/2), floor((P-H)/2)); the right origin adds O/2 to x.
+The unused area stays outside these views. This preserves the complete images
+at native pixel size; it does not claim full-screen upscaling or calibrated
+optics. Host rejects a catalog whose output cannot contain the requested pair.
+The native screen coordinates continue to refer to O×P, independently of W×H.
+
+K230D uses the two nonrotating NV12 planes, one shared framebuffer and the
+existing decoder surfaces. Each frame retains both views until their common
+page flip; no additional pixel surfaces or CPU repacking are introduced.
+Its selected input width must be divisible by 16 for two 8-pixel-aligned crops.
+The matching kernel must implement video source crops and framebuffer stride;
+unsupported scaling, crop alignment and unequal Y/UV pitches are rejected.
+Normal close restores both video planes before releasing the shared buffers.

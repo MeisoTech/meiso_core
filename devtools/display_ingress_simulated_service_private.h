@@ -124,7 +124,7 @@ typedef struct {
     MeisoOwnerScope host_owner;
     MeisoOwnerScope edge_owner;
     MeisoDisplayIngressCapability capability;
-    bool overlay_enabled;
+    bool overlay_enabled, stereo_video;
     uint32_t selected_input_width, selected_input_height;
     MeisoDisplayOverlayCapability overlay_capability;
     uint8_t capability_wire[64];
