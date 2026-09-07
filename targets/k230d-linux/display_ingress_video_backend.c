@@ -2,6 +2,7 @@
 #include "display_ingress_video_backend.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <fcntl.h>
 #include <linux/dma-buf.h>
 #include <linux/videodev2.h>
@@ -28,7 +29,7 @@
 #endif
 enum { INPUT_BUFFERS = 2, CAPTURE_BUFFERS = 7, AU_LIMIT = 128 * 1024,
        INPUT_BYTES = 1024 * 1024, DUMMY_BYTES = 4096, NPROPS = 10,
-       OVERLAY_BYTES = 256 * 1024 };
+       OVERLAY_BYTES = 256 * 1024, CAPTURE_POOL_BYTES = 10 * 1024 * 1024 };
 enum state { WAIT_SOURCE, READY, FAILED };
 
 struct surface { int fd; uint32_t handle; void *map; size_t bytes; };
@@ -189,7 +190,7 @@ static int request_buffers(struct MeisoIngressVideo *v, enum v4l2_buf_type type,
     if (ioctl(v->video_fd, VIDIOC_REQBUFS, &r)) return -1;
     if (type == V4L2_BUF_TYPE_VIDEO_OUTPUT) v->output_buffers_requested = r.count != 0;
     else if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) v->capture_buffers_requested = r.count != 0;
-    return count && r.count < count ? (errno = ENOMEM, -1) : 0;
+    return count && r.count != count ? (errno = ENOMEM, -1) : 0;
 }
 
 static int sync_for_cpu_write(int fd, int start)
@@ -273,14 +274,29 @@ static int reconfigure_capture(struct MeisoIngressVideo *v)
     v->ystride = fmt.fmt.pix_mp.plane_fmt[0].bytesperline;
     v->uvstride = fmt.fmt.pix_mp.plane_fmt[1].bytesperline;
     if (v->ystride < v->width || v->uvstride < v->width) { errno = EPROTO; return -1; }
-    if (request_buffers(v, type, CAPTURE_BUFFERS)) return -1;
-    for (int i = 0; i < CAPTURE_BUFFERS; ++i) {
-        if (query_buffer(v, type, i, NULL, v->capture_v4l_length[i]) ||
-            make_surface(v->drm_fd, v->capture_v4l_length[i][0], 0, &v->capture[i][0]) ||
+    struct v4l2_control minimum = { .id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE };
+    if (ioctl(v->video_fd, VIDIOC_G_CTRL, &minimum)) return -1;
+    /* Keep one surface for the shown frame beyond the decoder minimum.
+     * During a pending flip the decoder may wait; the old shown surface is
+     * returned as soon as that flip completes, rather than reserving another. */
+    if (minimum.value < 1 || minimum.value > CAPTURE_BUFFERS - 1) { errno = ENOSPC; return -1; }
+    const unsigned count = (unsigned)minimum.value + 1;
+    if (request_buffers(v, type, count)) return -1;
+    size_t pool_bytes = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        if (query_buffer(v, type, i, NULL, v->capture_v4l_length[i])) return -1;
+        for (unsigned p = 0; p < 2; ++p)
+            pool_bytes += ((size_t)v->capture_v4l_length[i][p] + 4095) & ~(size_t)4095;
+    }
+    fprintf(stderr,"CAPTURE_BUDGET width=%u height=%u minimum=%d count=%u bytes=%zu limit=%u\n",
+        v->width,v->height,minimum.value,count,pool_bytes,CAPTURE_POOL_BYTES);
+    if (pool_bytes > CAPTURE_POOL_BYTES) { errno = ENOSPC; return -1; }
+    for (unsigned i = 0; i < count; ++i) {
+        if (make_surface(v->drm_fd, v->capture_v4l_length[i][0], 0, &v->capture[i][0]) ||
             make_surface(v->drm_fd, v->capture_v4l_length[i][1], 0, &v->capture[i][1]) ||
             queue_capture(v, i)) return -1;
     }
-    v->capture_count = CAPTURE_BUFFERS;
+    v->capture_count = count;
     if (stream(v, type, 1)) return -1;
     v->capture_streaming = 1; v->state = READY;
     return 0;

@@ -216,6 +216,20 @@ static bool decode_latest(Service *s)
         service_fail(s, "media", "video-release");
 }
 
+static void observe_memory(void)
+{
+    char text[2048];
+    int fd=open("/proc/meminfo",O_RDONLY|O_CLOEXEC);
+    if(fd<0) return;
+    ssize_t n=read(fd,text,sizeof(text)-1); close(fd);
+    if(n<=0) return;
+    text[n]=0;
+    const char *available=strstr(text,"MemAvailable:");
+    const char *cma=strstr(text,"CmaFree:");
+    if(available && cma) fprintf(stderr,"MEMORY_PROGRESS available_kib=%lu cma_free_kib=%lu\n",
+        strtoul(available+13,NULL,10),strtoul(cma+8,NULL,10));
+}
+
 static bool poll_presentation(Service *s)
 {
     MeisoIngressVideoPresentation p;
@@ -236,9 +250,11 @@ static bool poll_presentation(Service *s)
     memcpy(pending.input_frame_sha256, ledger[slot].digest, 32);
     ledger[slot].sequence = 0; --ledger_count;
     last_evidence_sequence = p.sequence; ++presented;
-    if (s->overlay_enabled && presented%30==0)
+    if (s->overlay_enabled && (presented==1 || presented%30==0)) {
+        observe_memory();
         fprintf(stderr,"VIDEO_PROGRESS frame=%"PRIu64" epoch=%"PRIu64" presented=%"PRIu64" flip_ns=%"PRIu64"\n",
             p.sequence,s->production_epoch,presented,p.page_flip_monotonic_ns);
+    }
     pending_time = p.page_flip_monotonic_ns; pending_valid = true;
     return true;
 }
@@ -318,6 +334,8 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--media-fd") == 0 && number(argv[i+1], 1048575U, &n)) service.media_fd = (int)n;
         else if (strcmp(argv[i], "--frames") == 0 && number(argv[i+1], 18000U, &n) && n != 0) frame_limit = n;
         else if (strcmp(argv[i], "--role") == 0 && strcmp(argv[i+1], service.role_name) == 0) { /* Explicit role must match this build. */ }
+        else if (strcmp(argv[i], "--width") == 0 && number(argv[i+1], 1920U, &n) && n >= 16 && n%8 == 0) service.selected_input_width=(uint32_t)n;
+        else if (strcmp(argv[i], "--height") == 0 && number(argv[i+1], 1080U, &n) && n >= 16 && n%2 == 0) service.selected_input_height=(uint32_t)n;
         else if (strcmp(argv[i], "--source") == 0) input = argv[i+1];
         else if (strcmp(argv[i], "--video-device") == 0) video_path = argv[i+1];
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
@@ -331,7 +349,7 @@ int main(int argc, char **argv)
     if (service.control_fd < 0 || service.media_fd < 0 || service.control_fd == service.media_fd) return 2;
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
     (void)input;
-    video = meiso_ingress_video_open(video_path, drm_path, SERVICE_FRAME_WIDTH, SERVICE_FRAME_HEIGHT);
+    video = meiso_ingress_video_open(video_path, drm_path, service_frame_width(&service), service_frame_height(&service));
     if (video == NULL) { fprintf(stderr, "video backend open failed\n"); return 1; }
     if (service.overlay_enabled) {
         /* Canaan DRM framebuffers are at least 16x16; VO stride is in 8-byte

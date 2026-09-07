@@ -625,7 +625,7 @@ Socket connection/peer selection belongs to the launcher; SSH carries maintenanc
 The source is an Annex B file with SPS/PPS and one Baseline IDR slice per picture,
 up to 4096 pictures/128 MiB on Host and 128 KiB per AU. The file reader splits on repeated SPS;
 AUD-delimited files should be normalized first. The Host loops that source at 30 frames/s without
-waiting for presentation. Edge has two bounded media slots, two input DMA buffers, seven NV12
+waiting for presentation. Edge has two bounded media slots, two input DMA buffers, a bounded pool of NV12
 capture surfaces and a 16-entry identity/digest ledger. V4L2 timestamps carry the submitted frame
 identity into capture; only an actual DRM page-flip produces success evidence. Display uses the
 video's native dimensions in the top-left of the current output mode, with no extra RGB surface.
@@ -664,3 +664,27 @@ pose correction, OpenXR integration, a secure carrier or an end-to-end latency b
 Validation for this display unit is the five Display Ingress tests, native/target builds and the
 same two-endpoint physical display/evidence/cleanup result; the separate Composition checks above
 remain applicable to Composition changes.
+
+
+The compressed-video service accepts `--width` and `--height` (defaults
+1280×720) to select the same input dimensions in its decoder, capability,
+Desired/Actual and media binding. Width is 16..1920 in multiples of eight;
+height is even and 16..1080. These CLI limits are not a claim that every
+combination fits the board's memory. The Canaan video plane currently presents
+at native input size; it does not implement output scaling. A full output uses
+matching input and physical dimensions, subject to decoder buffer admission.
+
+At source change, capture allocation uses the decoder's
+`V4L2_CID_MIN_BUFFERS_FOR_CAPTURE` plus one surface for the shown frame.
+Decoding may pause during a pending flip until the previous shown frame is
+returned. Allocation is capped at seven surfaces and 10 MiB in page-rounded
+DMA storage.
+The backend rejects a larger requirement before allocating any capture
+surface. This replaces the fixed seven-surface allocation; encoded input,
+HUD and firmware/system memory remain separate costs. The pool does not grow
+in response to queue pressure.
+
+With native overlay enabled, periodic `MEMORY_PROGRESS` lines sample
+`MemAvailable` and `CmaFree` inside the existing video process. They avoid a
+separate on-board sampler. `CmaFree` is not the allocatable CMA budget; use
+actual DMA allocations and board-wide memory observations together.

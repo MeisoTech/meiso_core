@@ -117,8 +117,8 @@ static bool build_catalog(Service *service)
     const MeisoDisplayIngressCatalogConfig config = {
         1U,
         {
-            SERVICE_FRAME_WIDTH,
-            SERVICE_FRAME_HEIGHT,
+            service_frame_width(service),
+            service_frame_height(service),
             60000U,
             SERVICE_FRAME_BYTES,
             MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_MAX_FRAGMENT_BYTES,
@@ -312,8 +312,8 @@ bool service_arm_media(Service *service)
     memset(&media_config, 0, sizeof(media_config));
     media_config.local_role = service->role;
     media_config.binding = service->binding;
-    media_config.input_width = SERVICE_FRAME_WIDTH;
-    media_config.input_height = SERVICE_FRAME_HEIGHT;
+    media_config.input_width = service_frame_width(service);
+    media_config.input_height = service_frame_height(service);
     media_config.max_fragment_payload_bytes =
         MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_MAX_FRAGMENT_BYTES;
     media_config.frame_format = SERVICE_FRAME_FORMAT;

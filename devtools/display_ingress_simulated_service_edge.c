@@ -61,10 +61,10 @@ static bool offer_catalog(Service *service)
     return true;
 }
 
-static bool desired_is_fixture_value(const MeisoDisplayIngressDesired *value)
+static bool desired_is_fixture_value(const Service *service, const MeisoDisplayIngressDesired *value)
 {
-    return value->input_width == SERVICE_FRAME_WIDTH &&
-        value->input_height == SERVICE_FRAME_HEIGHT &&
+    return value->input_width == service_frame_width(service) &&
+        value->input_height == service_frame_height(service) &&
         value->maximum_frame_rate_millihz == 30000U;
 }
 
@@ -99,7 +99,7 @@ static bool receive_desired(Service *service)
             MEISO_DISPLAY_INGRESS_PROFILE_OK ||
         !meiso_display_ingress_desired_supported(
             &service->capability, &profile
-        ) || !desired_is_fixture_value(&profile) ||
+        ) || !desired_is_fixture_value(service, &profile) ||
         desired.profile.size != sizeof(service->applied_desired_profile)) {
         if (meiso_runtime_commit_state_receive(
                 service->runtime,
@@ -177,8 +177,8 @@ static bool queue_running_actual_and_arm(Service *service)
     size_t profile_size = 0U;
 
     memset(&profile, 0, sizeof(profile));
-    profile.effective_input_width = SERVICE_FRAME_WIDTH;
-    profile.effective_input_height = SERVICE_FRAME_HEIGHT;
+    profile.effective_input_width = service_frame_width(service);
+    profile.effective_input_height = service_frame_height(service);
     profile.effective_maximum_frame_rate_millihz = 30000U;
     if (!random_channel_nonce(&profile.channel_nonce) ||
         meiso_display_ingress_actual_encode(
@@ -273,9 +273,9 @@ static bool consume_latest(Service *service)
         )) {
         return service_fail(service, "media", "transfer");
     }
-    service->frame_input_width = SERVICE_FRAME_WIDTH;
-    service->frame_input_height = SERVICE_FRAME_HEIGHT;
-    service->frame_row_pitch_bytes = SERVICE_FRAME_WIDTH * 4U;
+    service->frame_input_width = service_frame_width(service);
+    service->frame_input_height = service_frame_height(service);
+    service->frame_row_pitch_bytes = service_frame_width(service) * 4U;
     service->frame_rgba_bytes = SERVICE_FRAME_BYTES;
     service->frame_sequence = latest.frame.frame_sequence;
     service->frame_source_time = latest.frame.source_time;
@@ -367,8 +367,8 @@ static bool queue_evidence_if_idle(Service *service)
     memset(&evidence, 0, sizeof(evidence));
     evidence.evidence_class = MEISO_DISPLAY_INGRESS_EVIDENCE_SIMULATED;
     evidence.connector_kind = MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED;
-    evidence.output_width = SERVICE_FRAME_WIDTH;
-    evidence.output_height = SERVICE_FRAME_HEIGHT;
+    evidence.output_width = service_frame_width(service);
+    evidence.output_height = service_frame_height(service);
 #ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
     evidence = service->presentation;
 #endif

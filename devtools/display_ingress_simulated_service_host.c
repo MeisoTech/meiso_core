@@ -58,7 +58,7 @@ static bool accept_catalog(Service *service)
 static bool publish_desired(Service *service)
 {
     const MeisoDisplayIngressDesired desired = {
-        SERVICE_FRAME_WIDTH, SERVICE_FRAME_HEIGHT, 30000U
+        service_frame_width(service), service_frame_height(service), 30000U
     };
     uint8_t runtime_wire[
         MEISO_DISPLAY_INGRESS_PROFILE_DESIRED_STATE_MAX_PAYLOAD_SIZE
@@ -280,8 +280,8 @@ static bool receive_host_event(
 #else
         evidence.evidence_class != MEISO_DISPLAY_INGRESS_EVIDENCE_SIMULATED ||
         evidence.connector_kind != MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED ||
-        evidence.output_width != SERVICE_FRAME_WIDTH ||
-        evidence.output_height != SERVICE_FRAME_HEIGHT ||
+        evidence.output_width != service_frame_width(service) ||
+        evidence.output_height != service_frame_height(service) ||
 #endif
         evidence.media_stream_epoch != service->media_stream_epoch ||
         evidence.displayed_frame_sequence != service->frame_sequence ||
@@ -312,9 +312,9 @@ bool service_run_host_media(Service *service)
 
     if (service == NULL || !service->frame_input_complete ||
         service->frame_fd != -1 ||
-        service->frame_input_width != SERVICE_FRAME_WIDTH ||
-        service->frame_input_height != SERVICE_FRAME_HEIGHT ||
-        service->frame_row_pitch_bytes != SERVICE_FRAME_WIDTH * 4U ||
+        service->frame_input_width != service_frame_width(service) ||
+        service->frame_input_height != service_frame_height(service) ||
+        service->frame_row_pitch_bytes != service_frame_width(service) * 4U ||
         service->frame_rgba_bytes != SERVICE_FRAME_BYTES) {
         return service_fail(service, "application", "input");
     }

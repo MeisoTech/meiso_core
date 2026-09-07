@@ -123,6 +123,7 @@ typedef struct {
     MeisoOwnerScope edge_owner;
     MeisoDisplayIngressCapability capability;
     bool overlay_enabled;
+    uint32_t selected_input_width, selected_input_height;
     MeisoDisplayOverlayCapability overlay_capability;
     uint8_t capability_wire[64];
     MeisoRuntimeEndpointDescriptor endpoints[2];
@@ -169,6 +170,11 @@ typedef struct {
     bool display_closed;
 #endif
 } Service;
+
+static inline uint32_t service_frame_width(const Service *s)
+{ return s->selected_input_width ? s->selected_input_width : SERVICE_FRAME_WIDTH; }
+static inline uint32_t service_frame_height(const Service *s)
+{ return s->selected_input_height ? s->selected_input_height : SERVICE_FRAME_HEIGHT; }
 
 static inline size_t service_endpoint_count(const Service *s) { return s->overlay_enabled ? 2U : 1U; }
 static inline size_t service_route_count(const Service *s) { return s->overlay_enabled ? 7U : 4U; }
