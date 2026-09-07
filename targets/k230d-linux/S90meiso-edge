@@ -1,0 +1,56 @@
+#!/bin/sh
+# BusyBox init integration; the existing reconnect process owns its single child.
+set -u
+umask 077
+config=/etc/meiso/edge.conf
+pidfile=/run/meiso-edge.pid
+[ -r "$config" ] || { echo "Missing $config" >&2; exit 2; }
+. "$config"
+: "${MEISO_PREFIX:?}" "${MEISO_HOST_IP:?}" "${MEISO_LOCAL_PEER:?}" "${MEISO_EXPECTED_PEER:?}"
+runner="$MEISO_PREFIX/bin/meiso-edge-reconnect"
+running() {
+    [ -r "$pidfile" ] || return 1
+    pid=$(cat "$pidfile")
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    # -x alone matches the shell interpreter. Check the script argument too,
+    # so an obsolete PID file cannot select an unrelated shell process.
+    script=$(tr '\000' '\n' < "/proc/$pid/cmdline" | sed -n '2p')
+    [ "$script" = "$runner" ] && start-stop-daemon -K -t -q -p "$pidfile" -x /bin/sh
+}
+
+start() {
+    running && { echo "Meiso Edge already running"; return 0; }
+    [ -x "$runner" ] && [ -x "$MEISO_PREFIX/bin/meiso_display_ingress_edge_launch" ] &&
+        [ -x "$MEISO_PREFIX/bin/meiso_display_ingress_video_edge" ] || return 2
+    rm -f "$pidfile"
+    start-stop-daemon -S -b -m -p "$pidfile" -x /bin/sh -O /dev/console -- "$runner" \
+        "$MEISO_PREFIX/bin/meiso_display_ingress_edge_launch" \
+        "$MEISO_PREFIX/bin/meiso_display_ingress_video_edge" \
+        "$MEISO_HOST_IP" "${MEISO_CONTROL_PORT:-4440}" "${MEISO_MEDIA_PORT:-4441}" \
+        "${MEISO_DRM_DEVICE:-/dev/dri/card0}" "${MEISO_EDGE_MEDIA_PORT:-4442}" \
+        --width "${MEISO_WIDTH:-1280}" --height "${MEISO_HEIGHT:-720}" \
+        --native-overlay on --continuous on --video-layout "${MEISO_VIDEO_LAYOUT:-side-by-side}" \
+        --local-peer "$MEISO_LOCAL_PEER" --expected-peer "$MEISO_EXPECTED_PEER"
+}
+
+stop() {
+    if running; then
+        start-stop-daemon -K -q -p "$pidfile" -x /bin/sh || return 1
+        attempts=0
+        while running; do
+            attempts=$((attempts + 1))
+            [ "$attempts" -lt 20 ] || { echo "Meiso Edge still stopping" >&2; return 1; }
+            sleep 1
+        done
+    fi
+    rm -f "$pidfile"
+}
+
+case "${1:-}" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop && start ;;
+    status) if running; then echo "Meiso Edge running"; else echo "Meiso Edge stopped"; exit 3; fi ;;
+    *) echo "usage: $0 {start|stop|restart|status}" >&2; exit 2 ;;
+esac

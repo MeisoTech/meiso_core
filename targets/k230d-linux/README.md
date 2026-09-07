@@ -43,7 +43,7 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
 ## 连续视频与原生2D：构建、安装和启动
 
 `MEISO_BUILD_K230D_VIDEO_SERVICE=ON` 构建已有 MVX/DRM 视频服务。
-`K230dVideoRuntime` 安装组件只交付该服务、连接启动器和 BusyBox 重连脚本；
+`K230dVideoRuntime` 安装组件交付该服务、连接启动器、BusyBox 重连脚本及可选init模板；
 库仍由 SDK 的既有组件拥有。固件不包含在这个组件中，板端需预装匹配的
 MVX/DRM 驱动、libdrm 和 Linux loader。内核/DTB 配对由板级发行配置负责。
 
@@ -72,6 +72,7 @@ cmake --install build/k230d-video --component K230dVideoRuntime --prefix "$EDGE_
   "$EDGE_PREFIX/bin/meiso_display_ingress_video_edge" \
   "$HOST_IP" 4440 4441 /dev/dri/card0 4442 \
   --width 1280 --height 720 --native-overlay on --continuous on \
+  --video-layout side-by-side \
   --local-peer "$EDGE_PEER" --expected-peer "$HOST_PEER"
 ```
 
@@ -92,6 +93,28 @@ continuous 不取消协议错误、解码无进展超时、Session 关闭或有�
 `VIDEO_RESULT` 中的呈现计数、`restored` 和 `close_clean` 是实际反馈检查入口；
 Host 应用应同时收到视频 source release 和原生2D execution receipt。
 Host 构建/IPC入口属于 Looking Glass 的 `sdc/integrations/meiso/presentation_sink`。
+
+### BusyBox 开机服务
+
+同一安装组件在 `share/meiso/` 交付 `edge.conf.example` 和 `init.d/S90meiso-edge`。
+对于使用 `/etc/init.d/rcS` / `rcK` 的 BusyBox 板，部署者先将配置复制为
+`/etc/meiso/edge.conf`（root拥有、目录700、文件600），填写可执行安装前缀、Host地址与
+配对PeerID，再将启动文件以755权限安装为 `/etc/init.d/S90meiso-edge`。
+配置是root维护的shell赋值，不包含Wi-Fi凭据；720p与side-by-side是初步默认值。
+驱动需支持NV12源裁剪/步长，两端共同选择Profile v5。现有物理输出模式不在此修改。
+
+```sh
+/etc/init.d/S90meiso-edge start
+/etc/init.d/S90meiso-edge status
+/etc/init.d/S90meiso-edge stop
+```
+
+安装到该init目录即参与下次启动/关闭；需要停用开机启动时，停止后将脚本移出该目录。
+`start`复用单PID重连器，网络暂未就绪时后台等待；`status`只表示重连进程存活，
+真正可用仍由Host应用发现与远端Actual/呈现回执确认。脚本核对PID和脚本参数后停止，
+最多等待20秒清理，不强杀显示持有者。更换配置或安装前缀前先正常停止两端。
+日志写 `/dev/console`，不向板端内存文件系统无限追加；维护时通过串口保存需要的区间。
+这只安装产品进程的生命周期入口，不修改内核、Wi-Fi或路由，也不叠加新的supervisor。
 
 ## Display Ingress 单帧实机路径（早期诊断）
 
@@ -695,13 +718,17 @@ longer read after admission. Disable restores the original plane state;
 close restores both planes before releasing buffers. No buffers are added to
 video-only use. This private adapter API does not add or advertise a HUD
 Resource in Display Ingress v2. `--native-overlay on` explicitly selects
-[Display Ingress v3](../../profiles/display_ingress/README.md#display-ingress-v3-compressed-video-with-a-native-screen-layer)
+[Display Ingress v4](../../profiles/display_ingress/README.md)
 and accepts Host plans through the same Runtime. It publishes physical output
 dimensions, 16×16 minimum region and 2×1 alignment, 65536 pixels, 48 built-in
 label characters and 10 updates/s. A 256 KiB CPU scratch region is allocated
 only in this mode. Hidden plans flip a transparent 16×16 region. HUD Actual
 and exact-plan page-flip evidence have their own endpoint/production epoch;
-video stays on its original binding. Both peers must select v3.
+video stays on its original binding. Both peers must select the same Profile.
+With `--video-layout side-by-side`, both select v5: two native-size video views
+share the decoder framebuffer and are centered in the physical eye regions.
+This requires the common-plane source crop/stride driver fix. The Profile owns
+the layout equations; it does not imply scaling or optical calibration.
 
 On 2026-09-07, real aarch64 Jetson Host and K230D ran two 1800-frame sessions with independent-IDR
 animation (mean 9.38 Mbps, largest AU 62078 bytes). The first presented/verified 1788 frames; the

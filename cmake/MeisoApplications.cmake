@@ -369,6 +369,10 @@ if(UNIX)
             RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT K230dVideoRuntime)
         install(PROGRAMS targets/k230d-linux/meiso-edge-reconnect
             DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT K230dVideoRuntime)
+        install(PROGRAMS targets/k230d-linux/S90meiso-edge
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/meiso/init.d" COMPONENT K230dVideoRuntime)
+        install(FILES targets/k230d-linux/edge.conf.example
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/meiso" COMPONENT K230dVideoRuntime)
     endif()
 
     option(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE "Build the controlled Linux single-frame DRM service" OFF)
