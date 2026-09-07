@@ -17,6 +17,25 @@ static const MeisoPeerId EDGE_PEER = {
     UINT64_C(0x454447455f53494d), UINT64_C(0x554c415445445f31)
 };
 
+bool service_parse_peer_id(const char *text, MeisoPeerId *out)
+{
+    if (text == NULL || out == NULL || strlen(text) != 32U) return false;
+    MeisoPeerId value = {0U, 0U};
+    for (size_t i = 0U; i < 32U; ++i) {
+        unsigned digit;
+        const char c = text[i];
+        if (c >= '0' && c <= '9') digit = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') digit = (unsigned)(c - 'a') + 10U;
+        else if (c >= 'A' && c <= 'F') digit = (unsigned)(c - 'A') + 10U;
+        else return false;
+        uint64_t *part = i < 16U ? &value.high : &value.low;
+        *part = (*part << 4U) | digit;
+    }
+    if (!meiso_peer_id_valid(value)) return false;
+    *out = value;
+    return true;
+}
+
 bool service_fail(Service *service, const char *plane, const char *stage)
 {
     if (service != NULL && service->failure_plane == NULL) {
@@ -171,10 +190,10 @@ static bool initialize_session_and_tcp(Service *service)
     }
     memset(&session_config, 0, sizeof(session_config));
     session_config.local_role = service->role;
-    session_config.local_peer_id = service->role == MEISO_SESSION_ROLE_HOST ?
-        HOST_PEER : EDGE_PEER;
-    session_config.expected_peer_id = service->role == MEISO_SESSION_ROLE_HOST ?
-        EDGE_PEER : HOST_PEER;
+    session_config.local_peer_id = meiso_peer_id_valid(service->local_peer) ?
+        service->local_peer : (service->role == MEISO_SESSION_ROLE_HOST ? HOST_PEER : EDGE_PEER);
+    session_config.expected_peer_id = meiso_peer_id_valid(service->expected_peer) ?
+        service->expected_peer : (service->role == MEISO_SESSION_ROLE_HOST ? EDGE_PEER : HOST_PEER);
     session_config.local_incarnation = identity.incarnation;
     session_config.local_nonce = identity.nonce;
     session_config.protocol = (MeisoProtocolVersion){1U, 0U};

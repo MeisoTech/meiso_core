@@ -332,6 +332,8 @@ int main(int argc, char **argv)
         if (i + 1 == argc) return 2;
         uint64_t n;
         if (strcmp(argv[i], "--control-fd") == 0 && number(argv[i+1], 1048575U, &n)) service.control_fd = (int)n;
+        else if (strcmp(argv[i], "--local-peer") == 0 && service_parse_peer_id(argv[i+1], &service.local_peer)) { }
+        else if (strcmp(argv[i], "--expected-peer") == 0 && service_parse_peer_id(argv[i+1], &service.expected_peer)) { }
         else if (strcmp(argv[i], "--media-fd") == 0 && number(argv[i+1], 1048575U, &n)) service.media_fd = (int)n;
         else if (strcmp(argv[i], "--frames") == 0 && number(argv[i+1], 18000U, &n) && n != 0) frame_limit = n;
         else if (strcmp(argv[i], "--role") == 0 && strcmp(argv[i+1], service.role_name) == 0) { /* Explicit role must match this build. */ }
@@ -346,6 +348,18 @@ int main(int argc, char **argv)
 #endif
         else return 2;
     }
+    const bool local_set = meiso_peer_id_valid(service.local_peer);
+    const bool expected_set = meiso_peer_id_valid(service.expected_peer);
+    if (local_set != expected_set || (local_set && meiso_peer_id_equal(service.local_peer, service.expected_peer))) {
+        fprintf(stderr, "local/expected peer IDs must be supplied together and differ\n");
+        return 2;
+    }
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+    if (continuous_edge && !local_set) {
+        fprintf(stderr, "continuous Edge requires --local-peer and --expected-peer\n");
+        return 2;
+    }
+#endif
     signal(SIGPIPE, SIG_IGN); signal(SIGINT, on_signal); signal(SIGTERM, on_signal);
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (service.control_fd < 0 || service.media_fd < 0 || service.control_fd == service.media_fd) return 2;

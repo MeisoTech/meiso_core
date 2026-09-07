@@ -104,6 +104,8 @@ typedef struct {
     int media_fd;
     int frame_fd;
     MeisoSessionRole role;
+    MeisoPeerId local_peer;
+    MeisoPeerId expected_peer;
     const char *role_name;
     const char *failure_plane;
     const char *failure_stage;
@@ -234,6 +236,7 @@ SERVICE_PRIVATE_API bool service_consume_optional_accept(
 );
 SERVICE_PRIVATE_API void service_cleanup_failure(Service *service);
 SERVICE_PRIVATE_API bool service_run(Service *service);
+SERVICE_PRIVATE_API bool service_parse_peer_id(const char *text, MeisoPeerId *out);
 
 /*
  * Runs one fork-isolated role with caller-owned inherited descriptors. The

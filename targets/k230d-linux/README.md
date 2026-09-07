@@ -71,13 +71,17 @@ cmake --install build/k230d-video --component K230dVideoRuntime --prefix "$EDGE_
   "$EDGE_PREFIX/bin/meiso_display_ingress_edge_launch" \
   "$EDGE_PREFIX/bin/meiso_display_ingress_video_edge" \
   "$HOST_IP" 4440 4441 /dev/dri/card0 4442 \
-  --width 1280 --height 720 --native-overlay on --continuous on
+  --width 1280 --height 720 --native-overlay on --continuous on \
+  --local-peer "$EDGE_PEER" --expected-peer "$HOST_PEER"
 ```
 
 启动器仅建立 connected/nonblocking TCP、UDP fd，然后 exec 服务。最后允许最多16对
 服务选项，不能覆盖启动器拥有的 role、control/media fd 和 DRM 路径。
 不需要再生成一个仅为传宽高/overlay选项的 wrapper。IPv4 地址是部署 locator；
-当前示例服务沿用固定的示例 PeerID，并不提供设备注册或身份认证产品流程。
+PeerID 由 `--local-peer` 与 `--expected-peer` 配置，各为32位十六进制（高64位在前），
+均非零且彼此不同，必须成对提供。continuous入口要求显式配置；有限诊断负载在
+两项均省略时保留原示例身份。对端将自己的local与另一侧expected交换配置，
+匹配由现有Core Session握手检查。这是对等身份声明，不提供密码学认证或设备注册。
 重连脚本只持有一个子进程 PID，退出后等待2秒，参数错误（退出码2）停止重试。
 不要在已有平台 supervisor 上再叠加此脚本。
 `--continuous on` 让 Edge 媒体服务持续到连接终止或显式停止，不因实验帧数计时退出。
