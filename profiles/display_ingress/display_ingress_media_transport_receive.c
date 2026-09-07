@@ -78,6 +78,24 @@ static void publish_primary(
     transport->unread_latest_frames_dropped = latest_drops;
 }
 
+static MeisoDisplayIngressMediaTransportStatus publish_validated_primary(
+    MeisoDisplayIngressMediaTransport *transport,
+    uint64_t sequence_gaps,
+    uint64_t latest_drops
+)
+{
+    if (transport->frame_format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR &&
+        !meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){
+            transport->primary.bytes, transport->primary.metadata.frame_bytes
+        })) {
+        transport->primary.occupied = false;
+        transport->primary_offset = 0U;
+        return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_MALFORMED;
+    }
+    publish_primary(transport, sequence_gaps, latest_drops);
+    return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAME_PUBLISHED;
+}
+
 static MeisoDisplayIngressMediaTransportStatus expire_frame(
     MeisoDisplayIngressMediaTransport *transport,
     const MeisoDisplayIngressMediaFrameMetadata *metadata
@@ -192,9 +210,11 @@ meiso_display_ingress_media_transport_receive_packet(
         return status;
     }
     if (packet.delivery != MEISO_RUNTIME_DELIVERY_EXTERNAL_MEDIA ||
-        packet.metadata.frame_bytes != transport->frame_bytes ||
+        packet.metadata.frame_bytes > transport->frame_bytes ||
         packet.fragment.size > transport->max_fragment_payload_bytes ||
-        !rgba_fragment_opaque(packet.fragment, packet.fragment_offset)) {
+        (transport->frame_format == MEISO_DISPLAY_INGRESS_FRAME_RGBA8888 &&
+         (packet.metadata.frame_bytes != transport->frame_bytes ||
+          !rgba_fragment_opaque(packet.fragment, packet.fragment_offset)))) {
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_MALFORMED;
     }
     if (!packet_sequence_admissible(transport, &packet.metadata)) {
@@ -218,7 +238,7 @@ meiso_display_ingress_media_transport_receive_packet(
     }
 
     end_offset = packet.fragment_offset + (uint32_t)packet.fragment.size;
-    finish = end_offset == transport->frame_bytes;
+    finish = end_offset == packet.metadata.frame_bytes;
     if (!transport->primary.occupied) {
         if (packet.fragment_offset != 0U) {
             return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_DISCONTINUITY;
@@ -237,8 +257,7 @@ meiso_display_ingress_media_transport_receive_packet(
         transport->primary.occupied = true;
         transport->primary_offset = end_offset;
         if (finish) {
-            publish_primary(transport, sequence_gaps, latest_drops);
-            return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAME_PUBLISHED;
+            return publish_validated_primary(transport, sequence_gaps, latest_drops);
         }
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAGMENT_ACCEPTED;
     }
@@ -269,8 +288,7 @@ meiso_display_ingress_media_transport_receive_packet(
         );
         transport->primary_offset = end_offset;
         if (finish) {
-            publish_primary(transport, sequence_gaps, latest_drops);
-            return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAME_PUBLISHED;
+            return publish_validated_primary(transport, sequence_gaps, latest_drops);
         }
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAGMENT_ACCEPTED;
     }
@@ -301,8 +319,7 @@ meiso_display_ingress_media_transport_receive_packet(
     transport->primary_offset = end_offset;
     transport->reassembly_frames_dropped = reassembly_drops;
     if (finish) {
-        publish_primary(transport, sequence_gaps, latest_drops);
-        return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAME_PUBLISHED;
+        return publish_validated_primary(transport, sequence_gaps, latest_drops);
     }
     return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_REASSEMBLY_REPLACED;
 }

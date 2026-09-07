@@ -195,6 +195,7 @@ bool service_run_host(Service *service)
         receive_running_actual(service);
 }
 
+#ifndef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
 static bool progress_host_media(Service *service)
 {
     const MeisoDisplayIngressMediaPosixUdpPrepareStatus prepare =
@@ -374,3 +375,5 @@ bool service_run_host_media(Service *service)
     }
     return service_finish_local_close(service);
 }
+
+#endif

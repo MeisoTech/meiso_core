@@ -161,7 +161,8 @@ static MeisoDisplayIngressCapability codec_capability(void)
         8192U,
         1024U,
         MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_ALL,
-        MEISO_STREAM_DEADLINE_UNSUPPORTED
+        MEISO_STREAM_DEADLINE_UNSUPPORTED,
+        MEISO_DISPLAY_INGRESS_FRAME_RGBA8888
     };
     return value;
 }
@@ -1347,6 +1348,40 @@ static bool test_config_requires_ready(void)
     return true;
 }
 
+static bool test_h264_catalog_selection(void)
+{
+    Catalog catalog;
+    MeisoDisplayIngressCapability decoded;
+    MeisoDisplayIngressCatalogConfig config = {0};
+    MeisoDisplayIngressDesired desired = {1280U, 720U, 30000U};
+    config.endpoint_incarnation = 1U;
+    config.capability = codec_capability();
+    config.capability.max_input_width = 1280U;
+    config.capability.max_input_height = 720U;
+    config.capability.max_frame_bytes = 131072U;
+    config.capability.frame_format = MEISO_DISPLAY_INGRESS_FRAME_H264_IDR;
+    CHECK(meiso_display_ingress_profile_for_format(config.capability.frame_format)->version == 2U);
+    CHECK(meiso_display_ingress_desired_supported(&config.capability, &desired));
+    CHECK(meiso_display_ingress_build_catalog(&config,
+        (MeisoMutableBuffer){catalog.capability, sizeof(catalog.capability)},
+        catalog.endpoints, 1U, catalog.routes, 4U) == MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    CHECK(catalog.capability[25] == 1U && catalog.endpoints[0].capability_schema.version == 2U);
+    CHECK(catalog.routes[2].route.resource.schema.version == 2U);
+    CHECK(catalog.routes[3].route.resource.schema.version == 2U);
+    CHECK(catalog.routes[0].route.resource.schema.version == 1U);
+    CHECK(meiso_display_ingress_validate_catalog(catalog.endpoints, 1U,
+        catalog.routes, 4U, &decoded) == MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    CHECK(decoded.frame_format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR);
+    catalog.endpoints[0].capability_schema.version = 1U;
+    CHECK(meiso_display_ingress_validate_catalog(catalog.endpoints, 1U,
+        catalog.routes, 4U, &decoded) == MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_MISMATCH);
+    catalog.endpoints[0].capability_schema.version = 2U;
+    catalog.routes[2].route.resource.schema.version = 1U;
+    CHECK(meiso_display_ingress_validate_catalog(catalog.endpoints, 1U,
+        catalog.routes, 4U, &decoded) == MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_MISMATCH);
+    return true;
+}
+
 int main(void)
 {
     Catalog catalog;
@@ -1359,7 +1394,7 @@ int main(void)
     const MeisoDisplayIngressDesired desired = desired_two();
 
     if (!desired_state_fixture_init(&desired_state, true, &desired) ||
-        !test_canonical_codecs() || !test_catalog_contract(&catalog) ||
+        !test_canonical_codecs() || !test_h264_catalog_selection() || !test_catalog_contract(&catalog) ||
         !test_config_requires_ready() || !init_pair(&pair, 900U) ||
         !test_runtime_gate(&pair, &catalog, &replicas) ||
         !test_evidence_flow(&pair, &catalog) ||

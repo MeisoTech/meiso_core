@@ -86,6 +86,7 @@ typedef struct {
     uint32_t input_height;
     uint32_t max_fragment_payload_bytes;
     MeisoStreamDeadlinePolicy deadline_policy;
+    MeisoDisplayIngressFrameFormat frame_format;
 } MeisoDisplayIngressMediaTransportConfig;
 
 /* One complete, independent, row-major R,G,B,A byte image. */
@@ -95,7 +96,10 @@ typedef struct {
     MeisoDeadline sender_deadline;
     /* Upstream producer drops; transport latest replacements are added. */
     uint64_t producer_dropped_frames;
-    MeisoByteView rgba_frame;
+    union {
+        MeisoByteView access_unit;
+        MeisoByteView rgba_frame; /* RAW v1 source compatibility. */
+    };
 } MeisoDisplayIngressMediaFrame;
 
 typedef struct {
@@ -129,7 +133,7 @@ typedef struct {
     MeisoStreamDeadlinePolicy deadline_policy;
     uint32_t input_width;
     uint32_t input_height;
-    uint32_t frame_bytes;
+    uint32_t frame_bytes; /* Slot capacity; variable encoded AU size is in latest.frame. */
     uint32_t max_fragment_payload_bytes;
     size_t arena_bytes;
     bool outbound_packet_pending;
@@ -158,8 +162,9 @@ typedef struct {
 /*
  * Config must name exact DISPLAY_/INGR_END + DISPLAY_/DATA_MED,
  * Stream/DATA, Host owner, equal nonzero production/media epochs, a nonzero
- * nonce and Host producer incarnation. The frame envelope is exactly
- * width*height*4 and may not exceed the Runtime Resource maximum unit size.
+ * nonce and Host producer incarnation. RAW v1 requires width*height*4 bytes.
+ * H264_IDR v2 uses the Resource maximum unit size as each slot capacity;
+ * each submitted access unit may be smaller. Schema and format must agree.
  *
  * For an aligned arena, the exact requirement is:
  *   2048 + 2 * frame_bytes + 224 + max_fragment_payload_bytes.

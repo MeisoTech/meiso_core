@@ -239,7 +239,8 @@ static bool capability_equal(
         lhs->max_frame_bytes == rhs->max_frame_bytes &&
         lhs->max_fragment_payload_bytes == rhs->max_fragment_payload_bytes &&
         lhs->evidence_classes == rhs->evidence_classes &&
-        lhs->deadline_policy == rhs->deadline_policy;
+        lhs->deadline_policy == rhs->deadline_policy &&
+        lhs->frame_format == rhs->frame_format;
 }
 
 bool service_validate_staged_catalog(Service *service)

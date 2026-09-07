@@ -329,6 +329,39 @@ if(UNIX)
         "Meiso/Applications/Lab"
     )
 
+    set(MEISO_VIDEO_SERVICE_SOURCES
+        devtools/display_ingress_video_service.c
+        devtools/display_ingress_simulated_service_bootstrap.c
+        devtools/display_ingress_simulated_service_control.c
+        devtools/display_ingress_simulated_service_edge.c
+        devtools/display_ingress_simulated_service_host.c
+        devtools/display_ingress_simulated_service_loop.c)
+    add_executable(meiso_display_ingress_video_host ${MEISO_VIDEO_SERVICE_SOURCES})
+    target_compile_definitions(meiso_display_ingress_video_host PRIVATE MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1)
+    target_link_libraries(meiso_display_ingress_video_host PRIVATE meiso_posix_tcp_adapter
+        meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input)
+    meiso_enable_warnings(meiso_display_ingress_video_host)
+    option(MEISO_BUILD_K230D_VIDEO_SERVICE "Build native K230D MVX/DRM video service" OFF)
+    if(MEISO_BUILD_K230D_VIDEO_SERVICE)
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            message(FATAL_ERROR "K230D video service requires Linux")
+        endif()
+        find_path(MEISO_DISPLAY_DRM_INCLUDE_DIR xf86drm.h REQUIRED)
+        find_path(MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR drm.h PATH_SUFFIXES libdrm REQUIRED)
+        find_library(MEISO_DISPLAY_DRM_LIBRARY drm REQUIRED)
+        add_executable(meiso_display_ingress_video_edge ${MEISO_VIDEO_SERVICE_SOURCES}
+            targets/k230d-linux/display_ingress_video_backend.c)
+        target_compile_definitions(meiso_display_ingress_video_edge PRIVATE
+            MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1)
+        target_include_directories(meiso_display_ingress_video_edge SYSTEM PRIVATE
+            "${MEISO_DISPLAY_DRM_INCLUDE_DIR}" "${MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR}")
+        target_link_libraries(meiso_display_ingress_video_edge PRIVATE meiso_posix_tcp_adapter
+            meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
+            "${MEISO_DISPLAY_DRM_LIBRARY}")
+        set_target_properties(meiso_display_ingress_video_edge PROPERTIES SKIP_BUILD_RPATH TRUE)
+        meiso_enable_warnings(meiso_display_ingress_video_edge)
+    endif()
+
     option(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE "Build the controlled Linux single-frame DRM service" OFF)
     if(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

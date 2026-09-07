@@ -123,7 +123,8 @@ static bool build_catalog(Service *service)
             SERVICE_FRAME_BYTES,
             MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_MAX_FRAGMENT_BYTES,
             SERVICE_EVIDENCE_MASK,
-            MEISO_STREAM_DEADLINE_UNSUPPORTED
+            MEISO_STREAM_DEADLINE_UNSUPPORTED,
+            SERVICE_FRAME_FORMAT
         }
     };
 
@@ -174,7 +175,7 @@ static bool initialize_session_and_tcp(Service *service)
     session_config.local_incarnation = identity.incarnation;
     session_config.local_nonce = identity.nonce;
     session_config.protocol = (MeisoProtocolVersion){1U, 0U};
-    if (meiso_display_ingress_configure_session(&session_config) !=
+    if (meiso_display_ingress_configure_session_for_format(&session_config, SERVICE_FRAME_FORMAT) !=
         MEISO_DISPLAY_INGRESS_PROFILE_OK) {
         return service_fail(service, "control", "session");
     }
@@ -313,6 +314,7 @@ bool service_arm_media(Service *service)
     media_config.input_height = SERVICE_FRAME_HEIGHT;
     media_config.max_fragment_payload_bytes =
         MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_MAX_FRAGMENT_BYTES;
+    media_config.frame_format = SERVICE_FRAME_FORMAT;
     media_config.deadline_policy = MEISO_STREAM_DEADLINE_UNSUPPORTED;
     if (meiso_display_ingress_media_transport_memory_required(
             &media_config, &media_required, &alignment

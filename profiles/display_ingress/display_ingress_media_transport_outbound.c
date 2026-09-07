@@ -77,8 +77,10 @@ meiso_display_ingress_media_transport_submit(
         (frame->sender_deadline.present &&
          frame->sender_deadline.value.clock_epoch !=
              frame->source_time.clock_epoch) ||
-        frame->rgba_frame.size != transport->frame_bytes ||
-        !rgba_frame_opaque(frame->rgba_frame)) {
+        (transport->frame_format == MEISO_DISPLAY_INGRESS_FRAME_RGBA8888
+            ? frame->access_unit.size != transport->frame_bytes || !rgba_frame_opaque(frame->access_unit)
+            : frame->access_unit.size > transport->frame_bytes ||
+              !meiso_display_ingress_h264_idr_access_unit_valid(frame->access_unit))) {
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_MALFORMED;
     }
 
@@ -101,10 +103,10 @@ meiso_display_ingress_media_transport_submit(
         transport->outbound_packet_ref.packet_bytes >
             MEISO_DISPLAY_INGRESS_MEDIA_PACKET_HEADER_WIRE_SIZE &&
         transport->outbound_packet_ref.fragment_offset <
-            transport->frame_bytes &&
+            transport->primary.metadata.frame_bytes &&
         transport->outbound_packet_ref.packet_bytes -
                 MEISO_DISPLAY_INGRESS_MEDIA_PACKET_HEADER_WIRE_SIZE <
-            transport->frame_bytes -
+            transport->primary.metadata.frame_bytes -
                 transport->outbound_packet_ref.fragment_offset;
     new_transport_drops = transport->transport_whole_frames_dropped;
     if (replace_latest &&
@@ -178,7 +180,7 @@ static void packet_from_slot(
         out_packet->flags |= MEISO_DISPLAY_INGRESS_MEDIA_PACKET_BEGIN |
             MEISO_DISPLAY_INGRESS_MEDIA_PACKET_RECOVERY;
     }
-    if (fragment_bytes == transport->frame_bytes - offset) {
+    if (fragment_bytes == metadata->frame_bytes - offset) {
         out_packet->flags |= MEISO_DISPLAY_INGRESS_MEDIA_PACKET_END;
     }
 }
@@ -232,11 +234,11 @@ meiso_display_ingress_media_transport_next_outbound(
     if (!transport->primary.occupied) {
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_NO_PACKET;
     }
-    if (transport->primary_offset >= transport->frame_bytes ||
+    if (transport->primary_offset >= transport->primary.metadata.frame_bytes ||
         !meiso_display_ingress_media_private_checked_add_u64(
             transport->outbound_packet_serial_high_water, 1U, &serial
         )) {
-        return transport->primary_offset >= transport->frame_bytes
+        return transport->primary_offset >= transport->primary.metadata.frame_bytes
             ? MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_INVALID_STATE
             : MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_COUNTER_EXHAUSTED;
     }
@@ -259,7 +261,7 @@ meiso_display_ingress_media_transport_next_outbound(
     if (boundary_preempt) {
         packet_metadata.producer_dropped_frames = preempt_latest_drops;
     }
-    remaining = transport->frame_bytes - packet_offset;
+    remaining = packet_metadata.frame_bytes - packet_offset;
     fragment_bytes = remaining < transport->max_fragment_payload_bytes
         ? remaining
         : transport->max_fragment_payload_bytes;
@@ -362,7 +364,7 @@ meiso_display_ingress_media_transport_complete_outbound(
         transport->primary.metadata.frame_sequence !=
             expected_packet->frame_sequence ||
         transport->primary_offset != expected_packet->fragment_offset ||
-        fragment_bytes > transport->frame_bytes - transport->primary_offset) {
+        fragment_bytes > transport->primary.metadata.frame_bytes - transport->primary_offset) {
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_INVALID_STATE;
     }
     next_offset = transport->primary_offset + fragment_bytes;
@@ -378,7 +380,7 @@ meiso_display_ingress_media_transport_complete_outbound(
         promote_latest_to_primary(transport);
     } else {
         transport->primary_offset = next_offset;
-        if (next_offset == transport->frame_bytes) {
+        if (next_offset == transport->primary.metadata.frame_bytes) {
             promote_latest_to_primary(transport);
         }
     }

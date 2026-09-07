@@ -47,7 +47,8 @@ struct MeisoDisplayIngressMediaTransport {
     MeisoDisplayIngressMediaBinding binding;
     uint32_t input_width;
     uint32_t input_height;
-    uint32_t frame_bytes;
+    uint32_t frame_bytes; /* slot capacity; actual bytes live in slot metadata */
+    MeisoDisplayIngressFrameFormat frame_format;
     uint32_t max_fragment_payload_bytes;
     uint8_t *arena_begin;
     size_t arena_extent;

@@ -79,7 +79,9 @@ bool meiso_display_ingress_private_capability_valid(
     const MeisoDisplayIngressCapability *value
 )
 {
-    return value != NULL && value->max_input_width >= 1U &&
+    return value != NULL &&
+        value->frame_format <= MEISO_DISPLAY_INGRESS_FRAME_H264_IDR &&
+        value->max_input_width >= 1U &&
         value->max_input_width <= MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION &&
         value->max_input_height >= 1U &&
         value->max_input_height <= MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION &&
@@ -165,7 +167,9 @@ bool meiso_display_ingress_desired_supported(
         return false;
     }
     frame_bytes = (uint64_t)desired->input_width * desired->input_height * 4U;
-    return frame_bytes <= capability->max_frame_bytes;
+    return capability->frame_format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR
+        ? !(desired->input_width & 1U) && !(desired->input_height & 1U)
+        : frame_bytes <= capability->max_frame_bytes;
 }
 
 bool meiso_display_ingress_actual_matches_desired(
@@ -283,6 +287,7 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_capability_encode(
         candidate + 20U, value->evidence_classes
     );
     candidate[24U] = value->deadline_policy;
+    candidate[25U] = value->frame_format;
     memmove(output.data, candidate, sizeof(candidate));
     *out_size = sizeof(candidate);
     return MEISO_DISPLAY_INGRESS_PROFILE_OK;
@@ -316,7 +321,8 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_capability_decode(
     candidate.evidence_classes =
         meiso_display_ingress_private_get_u32(input.data + 20U);
     candidate.deadline_policy = input.data[24U];
-    if (!meiso_display_ingress_private_bytes_zero(input.data + 25U, 7U) ||
+    candidate.frame_format = input.data[25U];
+    if (!meiso_display_ingress_private_bytes_zero(input.data + 26U, 6U) ||
         !meiso_display_ingress_private_capability_valid(&candidate)) {
         return MEISO_DISPLAY_INGRESS_PROFILE_MALFORMED;
     }
@@ -536,4 +542,50 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_decode(
     }
     *out_value = candidate;
     return MEISO_DISPLAY_INGRESS_PROFILE_OK;
+}
+
+/* Annex B framing and independent-picture structure only; no heap or decoder. */
+static size_t h264_start_code(MeisoByteView unit, size_t at)
+{
+    if (at > unit.size || unit.size - at < 3U || unit.data[at] || unit.data[at+1U]) return 0U;
+    if (unit.data[at+2U] == 1U) return 3U;
+    return unit.size - at >= 4U && unit.data[at+2U] == 0U && unit.data[at+3U] == 1U ? 4U : 0U;
+}
+
+bool meiso_display_ingress_h264_idr_access_unit_valid(MeisoByteView unit)
+{
+    size_t at = 0U;
+    unsigned sps = 0U, pps = 0U, idr = 0U, aud = 0U;
+    if (unit.data == NULL || unit.size == 0U) return false;
+    while (at < unit.size) {
+        const size_t start = h264_start_code(unit, at);
+        size_t end;
+        uint8_t type;
+        if (!start || unit.size - at <= start) return false;
+        at += start;
+        if (unit.data[at] & 0x80U) return false;
+        type = unit.data[at] & 31U;
+        for (end = at + 1U; end < unit.size && !h264_start_code(unit, end); ++end) {}
+        if (end - at < 2U) return false;
+        switch (type) {
+        case 7U:
+            if (sps++ || pps || idr || end - at < 4U || unit.data[at+1U] != 66U) return false;
+            break;
+        case 8U:
+            if (!sps || pps++ || idr) return false;
+            break;
+        case 5U:
+            if (!sps || !pps || idr++) return false;
+            break;
+        case 9U:
+            if (aud++ || sps || pps || idr) return false;
+            break;
+        case 6U: case 12U:
+            if (idr) return false;
+            break;
+        default: return false;
+        }
+        at = end;
+    }
+    return sps == 1U && pps == 1U && idr == 1U;
 }

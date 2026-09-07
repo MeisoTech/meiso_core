@@ -4,12 +4,45 @@
 > 已经实现。现在也已把相同协议接入两个独立本机进程，以模拟画面源和内存显示接收端验证
 > 进程接线。受控 DRM service 已在服务器 Host 测试端与 K230D 之间完成单帧网络接收、
 > 真实 page-flip 和返回 Host 的呈现证据，见 [实机结果](../../targets/k230d-linux/evidence/display-ingress-page-flip-2026-09-06.md)。
-> 最终安全 carrier、正式应用 Host、连续视频与独立肉眼核验尚待完成。DRM/KMS 指
+> H.264 v2 已在真实 Jetson→K230D 完成连续视频、异步呈现反馈与相机观察，见
+> [受控视频服务](../../targets/k230d-linux/README.md#controlled-h264-display-ingress-service)。
+> 最终安全 carrier 与正式 Looking Glass 应用 Host 尚待完成。DRM/KMS 指
 > Linux 内核的显示管理和模式设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
 
 ## 这条 Profile 解决什么
+
+### 压缩扩展：`DISPLAY_/INGRESS_:v2`
+
+v1 RAW 的 wire 和行为保持不变。v2 选择 `H264_IDR`：一个 access unit 是独立的
+Annex B、8-bit 4:2:0 Baseline H.264 图像，包含 SPS、PPS 和恰好一个 IDR slice。
+不接受依赖旧帧的 VCL NAL；每帧都是恢复点，因此沿用 direct latest、缺口丢弃和异步证据，
+不引入逐帧 ACK/重传或第二套 Session。该首版压缩选择不承诺支持所有 H.264 编码模式。
+
+v2 保留一个 endpoint/四 route 及 Desired、Actual 的 v1 schema。Capability、FRAME 和
+PRES_EVT 使用同名 schema 的 v2；Session Profile version 为 2。Capability 仍是 32 bytes，
+byte 25 是格式（0=RAW，仅 v1；1=H264_IDR，仅 v2），26..31 为零。格式是 catalog 内的
+不可变能力选择；Desired/Actual 的尺寸、帧率属于该格式。v1/v2 schema 与格式混搭拒绝，
+调用方必须把 catalog 格式和本次 Session 选择核对一致，不能隐式降级。
+
+`max_frame_bytes` 在 v2 表示编码 AU 上限，不再要求能容纳 RGBA 原图。每帧长度为
+1..max_frame_bytes；DIFR packet layout 仍为 v1，header 中的 full-frame bytes 是该 AU 的
+实际长度，所有 fragment 必须一致。内存依然只有接收重组和 latest 两槽，按上限分配；
+下一个完整 IDR 可替换旧图。压缩输入的结构验证要求 SPS/PPS 在 IDR 前、无第二个图像、
+无非 IDR VCL；完整码流合法性和实际解码尺寸仍由 decoder 检查，失败不产生呈现成功。
+packet binding 的 FRAME schema 必须与当前格式匹配，不能把压缩字节当 RAW 校验或发布。
+
+v2 呈现证据沿用 64-byte 布局，32..63 为输入编码 AU 的 SHA-256，而不是解码后像素摘要。
+帧身份必须由实际解码输出关联到提交的 sequence，再绑定真实 page-flip；无法关联或没有
+实际事件时不得发成功证据。旧 `rgba_frame`/`input_rgba_sha256` C 字段别名仅供兼容，
+新 caller 使用 `access_unit`/`input_frame_sha256`。接收、解码输入排队、呈现和证据是不同阶段。
+
+失败向量包括：旧 schema 携带新格式、AU 超限、变长 AU 的末片/替换边界、fragment 长度
+冲突、缺 SPS/PPS、非 IDR VCL、多个 IDR、decode 尺寸不匹配和错帧证据。RAW 的既有
+golden/failure vectors 必须继续通过；本版本不改变原受控 carrier 的安全能力。
+
+以下既有段落描述 v1 RAW，v2 仅以上述差异替换对应约束。
 
 Host 已经有一张完整应用画面时，把它作为可过期的连续媒体交给 Edge。Edge 只保留
 正在接收的一张和最新完成的一张，随后把最新合法画面交给本机显示后端。显示后端在

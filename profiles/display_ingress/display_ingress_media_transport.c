@@ -77,9 +77,16 @@ static bool config_valid(
     expected_resource = meiso_display_ingress_resource_id(
         MEISO_DISPLAY_INGRESS_ROUTE_MEDIA
     );
-    expected_schema = meiso_display_ingress_resource_schema(
-        MEISO_DISPLAY_INGRESS_ROUTE_MEDIA
+    expected_schema = meiso_display_ingress_resource_schema_for_format(
+        MEISO_DISPLAY_INGRESS_ROUTE_MEDIA, config->frame_format
     );
+    if (config->frame_format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR) {
+        if (config->input_width & 1U || config->input_height & 1U ||
+            binding->runtime.resource.max_payload_size == 0U ||
+            binding->runtime.resource.max_payload_size > MEISO_DISPLAY_INGRESS_PROFILE_MAX_FRAME_BYTES)
+            return false;
+        frame_bytes = (uint32_t)binding->runtime.resource.max_payload_size;
+    }
     if (!session_id_valid(binding->runtime.session_id) ||
         expected_endpoint == NULL || expected_resource == NULL ||
         expected_schema == NULL ||
@@ -234,6 +241,7 @@ meiso_display_ingress_media_transport_init(
     value.input_width = config->input_width;
     value.input_height = config->input_height;
     value.frame_bytes = frame_bytes;
+    value.frame_format = config->frame_format;
     value.max_fragment_payload_bytes =
         config->max_fragment_payload_bytes;
     value.arena_begin = arena.data;

@@ -604,3 +604,45 @@ combined board E2E 仍待收口。拓扑收据不能替代 frame、TEST_ONLY、�
 验收定义见
 [K230D Composition E2E](../../docs/k230d-composition-e2e.md)。Cross-build 不证明板端运行；
 CPU off-screen 不证明 DRM/DSI/fence/vblank/panel；单 camera probe 不证明 combined E2E。
+
+## Controlled H.264 Display Ingress service
+
+`meiso_display_ingress_video_host` and optional `meiso_display_ingress_video_edge`
+exercise [Display Ingress v2](../../profiles/display_ingress/README.md) through the existing
+Session/Runtime catalog, Desired/Actual, DIFR UDP adapter and asynchronous presentation stream.
+This is the controlled 1280×720@30 workload; it is not the Looking Glass application integration.
+RAW v1 and the single-frame service remain available.
+
+Build Host with `MEISO_BUILD_APPLICATIONS=ON`. Cross-build Edge with
+`MEISO_BUILD_K230D_VIDEO_SERVICE=ON`, the target C compiler and caller-supplied
+`MEISO_DISPLAY_DRM_INCLUDE_DIR`, `MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR`,
+`MEISO_DISPLAY_DRM_LIBRARY`. Both executables accept inherited, connected, nonblocking
+`--control-fd` TCP and `--media-fd` UDP descriptors. Host additionally takes
+`--source animation.h264`; `--frames 1800` is the default for both endpoints.
+Edge accepts `--video-device /dev/video0 --drm-device /dev/dri/card0`.
+Socket connection/peer selection belongs to the launcher; SSH carries maintenance commands only.
+
+The source is an Annex B file with SPS/PPS and one Baseline IDR slice per picture,
+up to 4096 pictures/128 MiB on Host and 128 KiB per AU. The file reader splits on repeated SPS;
+AUD-delimited files should be normalized first. The Host loops that source at 30 frames/s without
+waiting for presentation. Edge has two bounded media slots, two input DMA buffers, seven NV12
+capture surfaces and a 16-entry identity/digest ledger. V4L2 timestamps carry the submitted frame
+identity into capture; only an actual DRM page-flip produces success evidence. Display uses the
+video's native dimensions in the top-left of the current output mode, with no extra RGB surface.
+Driver requirements include MVX DMABUF import/coherency and correct VO per-plane DMA addresses.
+
+On 2026-09-07, real aarch64 Jetson Host and K230D ran two 1800-frame sessions with independent-IDR
+animation (mean 9.38 Mbps, largest AU 62078 bytes). The first presented/verified 1788 frames; the
+second 1795, ending at source frame 1800. Both sides exited successfully with display restoration,
+no pending decoder ledger and no new MVX error. In the second run, 38 datagrams were rejected,
+3 partial frames discarded and 2 unread latest frames replaced; loss did not create a decode
+reference dependency. Mac camera observations confirmed changing cube/airplane images and
+recognizable colors on the physical screen. The output mode was 1920×1080 with a 1280×720 video area.
+
+Edge ELF BSS was 606160 bytes. A 15-second in-run sample reached MemAvailable 11860 KiB and
+CmaFree 0 KiB; no concurrent camera/compositor budget is established. This result uses a routed
+USB/server/Wi-Fi path, not direct Jetson Wi-Fi. It does not establish full-screen stereo,
+pose correction, OpenXR integration, a secure carrier or an end-to-end latency bound.
+Validation for this display unit is the five Display Ingress tests, native/target builds and the
+same two-endpoint physical display/evidence/cleanup result; the separate Composition checks above
+remain applicable to Composition changes.

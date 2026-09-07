@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #define MEISO_DISPLAY_INGRESS_PROFILE_VERSION 1U
+#define MEISO_DISPLAY_INGRESS_H264_PROFILE_VERSION 2U
 #define MEISO_DISPLAY_INGRESS_PROFILE_RUNTIME_WIRE_VERSION 4U
 #define MEISO_DISPLAY_INGRESS_PROFILE_ENDPOINT_COUNT 1U
 #define MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT 4U
@@ -67,6 +68,12 @@ enum {
     MEISO_DISPLAY_INGRESS_CONNECTOR_DSI = 2
 };
 
+typedef uint8_t MeisoDisplayIngressFrameFormat;
+enum {
+    MEISO_DISPLAY_INGRESS_FRAME_RGBA8888 = 0,
+    MEISO_DISPLAY_INGRESS_FRAME_H264_IDR = 1
+};
+
 /* Catalog-embedded immutable truth for one accepted catalog generation. */
 typedef struct {
     uint32_t max_input_width;
@@ -76,6 +83,7 @@ typedef struct {
     uint32_t max_fragment_payload_bytes;
     MeisoDisplayIngressEvidenceClassMask evidence_classes;
     MeisoStreamDeadlinePolicy deadline_policy;
+    MeisoDisplayIngressFrameFormat frame_format;
 } MeisoDisplayIngressCapability;
 
 /* Profile suffix of the Host-owned Runtime Desired State. */
@@ -106,7 +114,10 @@ typedef struct {
     uint32_t output_height;
     uint64_t media_stream_epoch;
     uint64_t displayed_frame_sequence;
-    uint8_t input_rgba_sha256[32U];
+    union {
+        uint8_t input_frame_sha256[32U];
+        uint8_t input_rgba_sha256[32U]; /* RAW v1 source compatibility. */
+    };
 } MeisoDisplayIngressPresentationEvidence;
 
 typedef struct {
@@ -135,6 +146,18 @@ enum {
 };
 
 const MeisoProfileRef *meiso_display_ingress_profile(void);
+/* Format is fixed by the selected Session/Profile and catalog, not per packet. */
+const MeisoProfileRef *meiso_display_ingress_profile_for_format(
+    MeisoDisplayIngressFrameFormat format);
+const MeisoSchemaRef *meiso_display_ingress_capability_schema_for_format(
+    MeisoDisplayIngressFrameFormat format);
+const MeisoSchemaRef *meiso_display_ingress_resource_schema_for_format(
+    MeisoDisplayIngressProfileRoute route, MeisoDisplayIngressFrameFormat format);
+MeisoDisplayIngressProfileStatus meiso_display_ingress_configure_session_for_format(
+    MeisoSessionConfig *in_out_config, MeisoDisplayIngressFrameFormat format);
+/* Structural independent-AU check; decoder validates full syntax and dimensions. */
+bool meiso_display_ingress_h264_idr_access_unit_valid(MeisoByteView unit);
+
 const MeisoEndpointId *meiso_display_ingress_endpoint(void);
 const MeisoSchemaRef *meiso_display_ingress_capability_schema(void);
 const MeisoResourceId *meiso_display_ingress_resource_id(

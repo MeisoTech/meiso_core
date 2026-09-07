@@ -255,6 +255,7 @@ bool service_run_edge(Service *service)
         queue_running_actual_and_arm(service);
 }
 
+#ifndef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
 static bool consume_latest(Service *service)
 {
     MeisoDisplayIngressMediaLatestView latest;
@@ -463,3 +464,5 @@ bool service_run_edge_media(Service *service)
     }
     return true;
 }
+
+#endif

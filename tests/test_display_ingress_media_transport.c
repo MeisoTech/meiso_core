@@ -1271,9 +1271,104 @@ static bool test_explicit_terminal_no_resurrection(void)
     return true;
 }
 
+static bool pump_h264_frame(MediaPair *pair, bool corrupt_idr, bool replacing)
+{
+    for (;;) {
+        OwnedPacket packet;
+        CHECK(capture_packet(pair->host, &packet));
+        const bool end = (get_u16(packet.bytes + 6U) & MEISO_DISPLAY_INGRESS_MEDIA_PACKET_END) != 0U;
+        const uint32_t offset = packet.ref.fragment_offset;
+        if (corrupt_idr && offset <= 19U && 19U < offset + packet.size - 224U)
+            packet.bytes[224U + 19U - offset] = 0x61U;
+        CHECK(complete_and_receive(pair->host, pair->edge, &packet, NULL,
+            end ? (corrupt_idr ? MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_MALFORMED :
+                MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAME_PUBLISHED) :
+                (replacing && offset == 0U ? MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_REASSEMBLY_REPLACED :
+                 MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAGMENT_ACCEPTED)));
+        if (end) return true;
+    }
+}
+
+static bool test_h264_variable_units_and_recovery(void)
+{
+    MediaPair pair;
+    size_t required, alignment;
+    uint8_t a[64], b[37];
+    const uint8_t prefix[] = {0,0,0,1,0x67,66,0xc0,31,0xaa,
+        0,0,0,1,0x68,0x80,0,0,0,1,0x65,0x88,0x84};
+    MeisoDisplayIngressMediaLatestView latest;
+    memset(&pair, 0, sizeof(pair));
+    memset(a, 0x55, sizeof(a)); memcpy(a, prefix, sizeof(prefix));
+    memcpy(b, a, sizeof(b));
+    CHECK(meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){a,sizeof(a)}));
+    b[19] = 0x61;
+    CHECK(!meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){b,sizeof(b)}));
+    b[19] = 0x65;
+    CHECK(!meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){NULL, sizeof(a)}));
+    CHECK(!meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){a, 19U}));
+    CHECK(!meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){a + 9U, sizeof(a) - 9U}));
+    b[13] = 0x6c; /* Filler cannot replace PPS. */
+    CHECK(!meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){b, sizeof(b)}));
+    b[13] = 0x68;
+    uint8_t two_pictures[128];
+    memcpy(two_pictures, a, sizeof(a)); memcpy(two_pictures + sizeof(a), a, sizeof(a));
+    CHECK(!meiso_display_ingress_h264_idr_access_unit_valid((MeisoByteView){two_pictures, sizeof(two_pictures)}));
+    pair.host_config = transport_config(MEISO_SESSION_ROLE_HOST, 1280U, 720U, 8U,
+        MEISO_STREAM_DEADLINE_UNSUPPORTED);
+    pair.host_config.frame_format = MEISO_DISPLAY_INGRESS_FRAME_H264_IDR;
+    pair.host_config.binding.runtime.resource.max_payload_size = 96U;
+    CHECK(meiso_display_ingress_media_transport_memory_required(&pair.host_config,
+        &required, &alignment) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_INVALID_CONFIG);
+    pair.host_config.binding.runtime.resource.schema.version = 2U;
+    pair.edge_config = pair.host_config;
+    pair.edge_config.local_role = MEISO_SESSION_ROLE_EDGE;
+    CHECK(meiso_display_ingress_media_transport_memory_required(&pair.host_config,
+        &required, &alignment) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+    CHECK(required <= TEST_ARENA_CAPACITY);
+    CHECK(meiso_display_ingress_media_transport_init(&pair.host_config,
+        (MeisoMutableBuffer){pair.host_arena.bytes, required}, &pair.host) == 0);
+    CHECK(meiso_display_ingress_media_transport_init(&pair.edge_config,
+        (MeisoMutableBuffer){pair.edge_arena.bytes, required}, &pair.edge) == 0);
+    uint8_t oversized[97];
+    memset(oversized, 0x55, sizeof(oversized)); memcpy(oversized, prefix, sizeof(prefix));
+    MeisoDisplayIngressMediaFrame frame = frame_value(oversized, sizeof(oversized), 1U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(pair.host, &frame, NULL) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_MALFORMED);
+    frame = frame_value(a, sizeof(a), 1U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(pair.host, &frame, NULL) == 0);
+    OwnedPacket borrowed;
+    CHECK(capture_packet(pair.host, &borrowed));
+    frame = frame_value(b, sizeof(b), 2U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(pair.host, &frame, NULL) == 0);
+    CHECK(complete_and_receive(pair.host, pair.edge, &borrowed, NULL,
+        MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAGMENT_ACCEPTED));
+    CHECK(pump_h264_frame(&pair, false, true));
+    CHECK(meiso_display_ingress_media_transport_latest(pair.edge, &latest) == 0);
+    CHECK(latest.frame.frame_sequence == 2U && latest.frame.access_unit.size == sizeof(b));
+    CHECK(!memcmp(latest.frame.access_unit.data, b, sizeof(b)));
+    CHECK(meiso_display_ingress_media_transport_release_latest(pair.edge, &latest.ref) == 0);
+    frame = frame_value(a, sizeof(a), 3U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(pair.host, &frame, NULL) == 0);
+    CHECK(pump_h264_frame(&pair, false, false));
+    CHECK(meiso_display_ingress_media_transport_latest(pair.edge, &latest) == 0);
+    CHECK(latest.frame.access_unit.size == sizeof(a));
+    CHECK(meiso_display_ingress_media_transport_release_latest(pair.edge, &latest.ref) == 0);
+    frame = frame_value(a, sizeof(a), 4U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(pair.host, &frame, NULL) == 0);
+    CHECK(pump_h264_frame(&pair, true, false));
+    CHECK(meiso_display_ingress_media_transport_latest(pair.edge, &latest) ==
+        MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_NO_FRAME);
+    frame = frame_value(b, sizeof(b), 5U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(pair.host, &frame, NULL) == 0);
+    CHECK(pump_h264_frame(&pair, false, false));
+    CHECK(meiso_display_ingress_media_transport_latest(pair.edge, &latest) == 0);
+    CHECK(latest.frame.frame_sequence == 5U);
+    return true;
+}
+
 int main(void)
 {
-    if (!test_memory_init_exact_profile_and_alias_contract() ||
+    if (!test_h264_variable_units_and_recovery() ||
+        !test_memory_init_exact_profile_and_alias_contract() ||
         !test_golden_packet_idempotence_and_exact_refs() ||
         !test_fragment_boundary_preemption_latest_and_release() ||
         !test_discontinuity_recovery_and_separate_counters() ||

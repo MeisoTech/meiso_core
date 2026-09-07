@@ -16,9 +16,11 @@ bool service_terminate_media(
             service->media, &before
         ) != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK ||
         before.phase != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_ACTIVE ||
+#ifndef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
         before.outbound_packet_pending || before.outbound_preemption_pending ||
         before.send_in_flight || before.send_latest ||
         before.receive_reassembly || before.receive_latest ||
+#endif
         meiso_display_ingress_media_posix_udp_terminate(
             service->udp, reason, 0
         ) != MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_TERMINATE_OK ||
@@ -57,6 +59,11 @@ bool service_consume_optional_accept(
     const MeisoRuntimeEvent *event
 )
 {
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
+    if (service != NULL && event != NULL && service->role == MEISO_SESSION_ROLE_HOST &&
+        event->type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE)
+        return service_video_host_event(service, event);
+#endif
     MeisoRuntimeRouteKey expected_route;
     MeisoOwnerScope expected_owner;
     uint64_t expected_generation;

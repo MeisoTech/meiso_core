@@ -158,7 +158,8 @@ static MeisoResourceDescriptor expected_resource(
     memset(&value, 0, sizeof(value));
     value.id = DISPLAY_INGRESS_RESOURCE_IDS[route_index];
     value.kind = DISPLAY_INGRESS_RESOURCE_KINDS[route_index];
-    value.schema = DISPLAY_INGRESS_RESOURCE_SCHEMAS[route_index];
+    value.schema = *meiso_display_ingress_resource_schema_for_format(
+        (MeisoDisplayIngressProfileRoute)route_index, capability->frame_format);
     value.owner = DISPLAY_INGRESS_RESOURCE_OWNERS[route_index];
     value.max_payload_size = expected_max_payload(route_index, capability);
     return value;
@@ -183,7 +184,46 @@ static bool capability_equal(
         lhs->max_fragment_payload_bytes ==
             rhs->max_fragment_payload_bytes &&
         lhs->evidence_classes == rhs->evidence_classes &&
-        lhs->deadline_policy == rhs->deadline_policy;
+        lhs->deadline_policy == rhs->deadline_policy &&
+        lhs->frame_format == rhs->frame_format;
+}
+
+const MeisoProfileRef *meiso_display_ingress_profile_for_format(
+    MeisoDisplayIngressFrameFormat format)
+{
+    static const MeisoProfileRef h264 = {
+        {UINT64_C(0x444953504c41595f), UINT64_C(0x494e47524553535f)}, 2U
+    };
+    return format == MEISO_DISPLAY_INGRESS_FRAME_RGBA8888 ? &DISPLAY_INGRESS_PROFILE :
+        format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR ? &h264 : NULL;
+}
+
+const MeisoSchemaRef *meiso_display_ingress_capability_schema_for_format(
+    MeisoDisplayIngressFrameFormat format)
+{
+    static const MeisoSchemaRef h264 = {
+        {UINT64_C(0x444953505f534348), UINT64_C(0x4341504142494c5f)}, 2U
+    };
+    return format == MEISO_DISPLAY_INGRESS_FRAME_RGBA8888 ? &DISPLAY_INGRESS_CAPABILITY_SCHEMA :
+        format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR ? &h264 : NULL;
+}
+
+const MeisoSchemaRef *meiso_display_ingress_resource_schema_for_format(
+    MeisoDisplayIngressProfileRoute route, MeisoDisplayIngressFrameFormat format)
+{
+    static const MeisoSchemaRef media = {
+        {UINT64_C(0x444953505f534348), UINT64_C(0x4652414d455f5f5f)}, 2U
+    };
+    static const MeisoSchemaRef evidence = {
+        {UINT64_C(0x444953505f534348), UINT64_C(0x505245535f455654)}, 2U
+    };
+    if (format > MEISO_DISPLAY_INGRESS_FRAME_H264_IDR ||
+        route >= MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT) return NULL;
+    if (format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR) {
+        if (route == MEISO_DISPLAY_INGRESS_ROUTE_MEDIA) return &media;
+        if (route == MEISO_DISPLAY_INGRESS_ROUTE_PRESENTATION_EVIDENCE) return &evidence;
+    }
+    return &DISPLAY_INGRESS_RESOURCE_SCHEMAS[route];
 }
 
 const MeisoProfileRef *meiso_display_ingress_profile(void)
@@ -218,7 +258,14 @@ const MeisoSchemaRef *meiso_display_ingress_resource_schema(
 }
 
 MeisoDisplayIngressProfileStatus meiso_display_ingress_configure_session(
-    MeisoSessionConfig *in_out_config
+    MeisoSessionConfig *in_out_config)
+{
+    return meiso_display_ingress_configure_session_for_format(
+        in_out_config, MEISO_DISPLAY_INGRESS_FRAME_RGBA8888);
+}
+
+MeisoDisplayIngressProfileStatus meiso_display_ingress_configure_session_for_format(
+    MeisoSessionConfig *in_out_config, MeisoDisplayIngressFrameFormat format
 )
 {
     MeisoSessionConfig candidate;
@@ -227,7 +274,9 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_configure_session(
         return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_ARGUMENT;
     }
     candidate = *in_out_config;
-    candidate.profile = DISPLAY_INGRESS_PROFILE;
+    const MeisoProfileRef *profile = meiso_display_ingress_profile_for_format(format);
+    if (profile == NULL) return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_VALUE;
+    candidate.profile = *profile;
     candidate.limits = (MeisoSessionLimits){
         MEISO_DISPLAY_INGRESS_PROFILE_MAX_SESSION_FRAME_BYTES,
         MEISO_DISPLAY_INGRESS_PROFILE_MAX_RUNTIME_PAYLOAD_BYTES,
@@ -357,7 +406,7 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_build_catalog(
     endpoint_candidate[0].id = DISPLAY_INGRESS_ENDPOINT;
     endpoint_candidate[0].incarnation = config->endpoint_incarnation;
     endpoint_candidate[0].capability_schema =
-        DISPLAY_INGRESS_CAPABILITY_SCHEMA;
+        *meiso_display_ingress_capability_schema_for_format(config->capability.frame_format);
     endpoint_candidate[0].capability = (MeisoByteView){
         capability_storage.data, sizeof(capability_candidate)
     };
@@ -415,14 +464,13 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_validate_catalog(
     }
     if (!meiso_endpoint_id_equal(endpoints[0].id, DISPLAY_INGRESS_ENDPOINT) ||
         endpoints[0].incarnation == 0U ||
-        !meiso_schema_ref_equal(
-            endpoints[0].capability_schema,
-            DISPLAY_INGRESS_CAPABILITY_SCHEMA
-        ) || endpoints[0].capability.size !=
+        endpoints[0].capability.size !=
             MEISO_DISPLAY_INGRESS_PROFILE_CAPABILITY_WIRE_SIZE ||
         meiso_display_ingress_capability_decode(
             endpoints[0].capability, &capability_candidate
-        ) != MEISO_DISPLAY_INGRESS_PROFILE_OK) {
+        ) != MEISO_DISPLAY_INGRESS_PROFILE_OK ||
+        !meiso_schema_ref_equal(endpoints[0].capability_schema,
+            *meiso_display_ingress_capability_schema_for_format(capability_candidate.frame_format))) {
         return MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_MISMATCH;
     }
     for (index = 0U;
@@ -594,7 +642,8 @@ meiso_display_ingress_media_binding_from_runtime(
     }
     if (!meiso_endpoint_id_equal(endpoint.id, DISPLAY_INGRESS_ENDPOINT) ||
         endpoint.incarnation == 0U || !meiso_schema_ref_equal(
-            endpoint.capability_schema, DISPLAY_INGRESS_CAPABILITY_SCHEMA
+            endpoint.capability_schema,
+            *meiso_display_ingress_capability_schema_for_format(capability->frame_format)
         ) || endpoint.capability.size !=
             MEISO_DISPLAY_INGRESS_PROFILE_CAPABILITY_WIRE_SIZE ||
         meiso_display_ingress_capability_decode(
