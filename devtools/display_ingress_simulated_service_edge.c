@@ -46,10 +46,10 @@ static bool offer_catalog(Service *service)
     if (meiso_runtime_v4_offer_catalog(
             service->runtime,
             SERVICE_CATALOG_GENERATION,
-            &service->endpoint,
-            MEISO_DISPLAY_INGRESS_PROFILE_ENDPOINT_COUNT,
+            service->endpoints,
+            service_endpoint_count(service),
             service->routes,
-            MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT
+            service_route_count(service)
         ) != MEISO_RUNTIME_OK || !service_flush_control(service) ||
         !wait_event(service, &event, "catalog") ||
         event.type != MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED ||

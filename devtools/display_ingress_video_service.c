@@ -13,6 +13,10 @@
 #include <unistd.h>
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
 #include "../targets/k230d-linux/display_ingress_video_backend.h"
+bool service_overlay_initialize(Service *, MeisoIngressVideo *);
+bool service_overlay_consume(Service *, const MeisoRuntimeEvent *);
+bool service_overlay_poll(Service *);
+void service_overlay_finish(void);
 #endif
 
 /* One controlled video workload; Session, Catalog, State and DIFR remain shared. */
@@ -232,6 +236,9 @@ static bool poll_presentation(Service *s)
     memcpy(pending.input_frame_sha256, ledger[slot].digest, 32);
     ledger[slot].sequence = 0; --ledger_count;
     last_evidence_sequence = p.sequence; ++presented;
+    if (s->overlay_enabled && presented%30==0)
+        fprintf(stderr,"VIDEO_PROGRESS frame=%"PRIu64" epoch=%"PRIu64" presented=%"PRIu64" flip_ns=%"PRIu64"\n",
+            p.sequence,s->production_epoch,presented,p.page_flip_monotonic_ns);
     pending_time = p.page_flip_monotonic_ns; pending_valid = true;
     return true;
 }
@@ -259,17 +266,18 @@ static bool queue_presentation(Service *s)
 
 bool service_run_edge_media(Service *s)
 {
+    if (!service_overlay_initialize(s, video)) return false;
     const uint64_t deadline = service_now_ns() + frame_limit * UINT64_C(1000000000) / 30U + UINT64_C(15000000000);
     uint64_t last_progress = service_now_ns(), previous_presented = 0;
     while (!interrupted && service_now_ns() < deadline) {
-        if (!receive_batch(s) || !decode_latest(s) || !poll_presentation(s)) return false;
+        if (!receive_batch(s) || !decode_latest(s) || !poll_presentation(s) || !service_overlay_poll(s)) return false;
         MeisoRuntimeEvent event;
         ServiceControlStep step = service_control_step(s, true, 0, &event);
         if (step == SERVICE_CONTROL_PEER_CLOSED) {
             if (presented == 0) return service_fail(s, "application", "video-no-presentation");
             return service_terminate_media(s, MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_CONTROL_SESSION) && service_finish_peer_close(s);
         }
-        if (step == SERVICE_CONTROL_FAILED || (step == SERVICE_CONTROL_EVENT && !service_consume_optional_accept(s, &event))) return false;
+        if (step == SERVICE_CONTROL_FAILED || (step == SERVICE_CONTROL_EVENT && !service_overlay_consume(s, &event))) return false;
         if (!queue_presentation(s)) return false;
         if (presented != previous_presented || ledger_count == 0) last_progress = service_now_ns();
         previous_presented = presented;
@@ -313,6 +321,9 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--source") == 0) input = argv[i+1];
         else if (strcmp(argv[i], "--video-device") == 0) video_path = argv[i+1];
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+        else if (strcmp(argv[i], "--native-overlay") == 0 && strcmp(argv[i+1], "on") == 0) service.overlay_enabled=true;
+#endif
         else return 2;
     }
     signal(SIGPIPE, SIG_IGN); signal(SIGINT, on_signal); signal(SIGTERM, on_signal);
@@ -322,6 +333,13 @@ int main(int argc, char **argv)
     (void)input;
     video = meiso_ingress_video_open(video_path, drm_path, SERVICE_FRAME_WIDTH, SERVICE_FRAME_HEIGHT);
     if (video == NULL) { fprintf(stderr, "video backend open failed\n"); return 1; }
+    if (service.overlay_enabled) {
+        /* Canaan DRM framebuffers are at least 16x16; VO stride is in 8-byte
+         * units, hence an even ARGB width. Publish these actual constraints. */
+        service.overlay_capability=(MeisoDisplayOverlayCapability){0,0,65536,48,10,16,16,2,1};
+        if (meiso_ingress_video_output_size(video,&service.overlay_capability.output_width,
+                &service.overlay_capability.output_height)) { meiso_ingress_video_close(video); return 1; }
+    }
 #else
     (void)video_path; (void)drm_path;
     if (input == NULL || !open_source(input)) { fprintf(stderr, "invalid H264 IDR source\n"); return 2; }
@@ -333,6 +351,7 @@ int main(int argc, char **argv)
     if (service.media != NULL) (void)meiso_display_ingress_media_transport_snapshot(service.media, &media_state);
     int restored = 1;
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+    service_overlay_finish();
     restored = meiso_ingress_video_close(video) == 0;
 #else
     if (source != NULL) munmap(source, source_size);

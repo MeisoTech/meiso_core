@@ -50,6 +50,8 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *vide
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *video,
                                                       MeisoIngressVideoPresentation *presentation);
 
+int meiso_ingress_video_output_size(const MeisoIngressVideo *video, uint32_t *width, uint32_t *height);
+
 /* Private Edge-rendered screen region, packed native 0xAARRGGBB. This does not
  * add a Host resource or advertise an overlay in Display Ingress v2.
  * At most 256 KiB of pixels and two 256 KiB DMA surfaces, allocated lazily.

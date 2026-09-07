@@ -640,8 +640,14 @@ are polled separately. A pending update returns busy, and source bytes are no
 longer read after admission. Disable restores the original plane state;
 close restores both planes before releasing buffers. No buffers are added to
 video-only use. This private adapter API does not add or advertise a HUD
-Resource in Display Ingress v2; Host-driven native overlays require a Profile
-which declares their Composition meaning, bounded content and actual state.
+Resource in Display Ingress v2. `--native-overlay on` explicitly selects
+[Display Ingress v3](../../profiles/display_ingress/README.md#display-ingress-v3-compressed-video-with-a-native-screen-layer)
+and accepts Host plans through the same Runtime. It publishes physical output
+dimensions, 16×16 minimum region and 2×1 alignment, 65536 pixels, 48 built-in
+label characters and 10 updates/s. A 256 KiB CPU scratch region is allocated
+only in this mode. Hidden plans flip a transparent 16×16 region. HUD Actual
+and exact-plan page-flip evidence have their own endpoint/production epoch;
+video stays on its original binding. Both peers must select v3.
 
 On 2026-09-07, real aarch64 Jetson Host and K230D ran two 1800-frame sessions with independent-IDR
 animation (mean 9.38 Mbps, largest AU 62078 bytes). The first presented/verified 1788 frames; the

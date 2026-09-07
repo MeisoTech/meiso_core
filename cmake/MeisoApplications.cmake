@@ -350,6 +350,7 @@ if(UNIX)
         find_path(MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR drm.h PATH_SUFFIXES libdrm REQUIRED)
         find_library(MEISO_DISPLAY_DRM_LIBRARY drm REQUIRED)
         add_executable(meiso_display_ingress_video_edge ${MEISO_VIDEO_SERVICE_SOURCES}
+            devtools/display_ingress_video_overlay.c
             targets/k230d-linux/display_ingress_video_backend.c)
         target_compile_definitions(meiso_display_ingress_video_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1)

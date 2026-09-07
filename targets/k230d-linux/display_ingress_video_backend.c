@@ -449,6 +449,12 @@ fail:
     v->state = FAILED; return MEISO_INGRESS_VIDEO_POLL_ERROR;
 }
 
+int meiso_ingress_video_output_size(const MeisoIngressVideo *v, uint32_t *width, uint32_t *height)
+{
+    if (!v || !width || !height || v->state == FAILED) return -1;
+    *width=v->output_w; *height=v->output_h; return 0;
+}
+
 static int setup_overlay(struct MeisoIngressVideo *v)
 {
     if (v->overlay.plane) return 0;

@@ -5,6 +5,7 @@
 #include <meiso/adapters/posix/tcp.h>
 #include <meiso/host/display_ingress_fixture_input.h>
 #include <meiso/profiles/display_ingress/profile.h>
+#include <meiso/profiles/display_ingress/overlay.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -121,11 +122,11 @@ typedef struct {
     MeisoOwnerScope host_owner;
     MeisoOwnerScope edge_owner;
     MeisoDisplayIngressCapability capability;
-    uint8_t capability_wire[MEISO_DISPLAY_INGRESS_PROFILE_CAPABILITY_WIRE_SIZE];
-    MeisoRuntimeEndpointDescriptor endpoint;
-    MeisoRuntimeV4RouteDescriptor routes[
-        MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT
-    ];
+    bool overlay_enabled;
+    MeisoDisplayOverlayCapability overlay_capability;
+    uint8_t capability_wire[64];
+    MeisoRuntimeEndpointDescriptor endpoints[2];
+    MeisoRuntimeV4RouteDescriptor routes[MEISO_DISPLAY_OVERLAY_ROUTE_COUNT];
     MeisoRuntimeDesiredState applied_desired;
     uint8_t applied_desired_profile[
         MEISO_DISPLAY_INGRESS_PROFILE_DESIRED_WIRE_SIZE
@@ -168,6 +169,9 @@ typedef struct {
     bool display_closed;
 #endif
 } Service;
+
+static inline size_t service_endpoint_count(const Service *s) { return s->overlay_enabled ? 2U : 1U; }
+static inline size_t service_route_count(const Service *s) { return s->overlay_enabled ? 7U : 4U; }
 
 #ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
 SERVICE_PRIVATE_API bool service_drm_open(Service *service);

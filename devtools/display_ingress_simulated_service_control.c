@@ -216,7 +216,7 @@ MeisoRuntimeRouteKey service_route_key(
     const MeisoRuntimeRouteDescriptor *descriptor;
 
     memset(&key, 0, sizeof(key));
-    if (service == NULL || route >= MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT) {
+    if (service == NULL || route >= service_route_count(service)) {
         return key;
     }
     descriptor = &service->routes[route].route;

@@ -120,6 +120,7 @@ add_library(
 add_library(
     meiso_display_ingress_profile
     profiles/display_ingress/display_ingress_profile.c
+    profiles/display_ingress/display_ingress_overlay.c
     profiles/display_ingress/display_ingress_profile_codec.c
 )
 meiso_configure_public_target(

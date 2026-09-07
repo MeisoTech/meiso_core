@@ -6,7 +6,7 @@
 > 真实 page-flip 和返回 Host 的呈现证据，见 [实机结果](../../targets/k230d-linux/evidence/display-ingress-page-flip-2026-09-06.md)。
 > H.264 v2 已在真实 Jetson→K230D 完成连续视频、异步呈现反馈与相机观察，见
 > [受控视频服务](../../targets/k230d-linux/README.md#controlled-h264-display-ingress-service)。
-> 最终安全 carrier 与正式 Looking Glass 应用 Host 尚待完成。DRM/KMS 指
+> 正式native Host应用链及可选本地叠加见下方v3；最终安全carrier仍待完成。DRM/KMS 指
 > Linux 内核的显示管理和模式设置接口。
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
@@ -624,3 +624,67 @@ Display Actual 不得因本策略内核或拓扑收据存在而报告 RUNNING。
 9. 可选左右眼 atlas。
 
 第 8 步以前不得声称“Host 应用已经显示到 Edge 实屏”。
+## Display Ingress v3: compressed video with a native screen layer
+
+`DISPLAY_/INGRESS_:v3` explicitly selects two ordered `VIEW Quad` layers: the
+unchanged v2 H.264 video layer, then one Edge-native screen region. It uses the
+same MSL0/Runtime v4 connection, the four existing video routes, and a second
+endpoint with Host PresentationPlan Desired, Edge PresentationStatus Actual,
+and an independent Edge page-flip evidence Stream. v1/v2 graphs stay unchanged.
+The second endpoint is `DISPLAY_/HUD_END_`, with `DISP_SCH/HUD_CAP_:v1`
+capability. Its ordered Resource IDs are `DISPLAY_/HUD_PLAN`, `HUD_STAT`,
+and `HUD_PRES`; schemas use the corresponding suffix under `DISP_SCH`, v1.
+All three routes are inline; the first two are State Desired/Actual, the
+last is Stream Data. This exact graph uses nine registry entries.
+State delivery generation is 9; HUD evidence uses Stream epoch 1 with
+increasing sequence across HUD production epochs within this session.
+
+The complete PresentationPlan selects this fixed layer order, references the
+same Host owner's video Desired version, names a nonzero immutable plan
+generation, and supplies the native region and label. The referenced video
+configuration must already be active and remain unchanged in this session.
+Canvas dimensions must match the advertised physical output. A later plan
+may replace the native content without restarting the video production epoch.
+This selects direct latest for the independently updated native layer; there
+is no prepared token or cross-layer atomic frame promise. The Host keeps one offered plan until its matching physical evidence or terminal failure,
+and one coalesced latest candidate before publication. The Edge retains old
+content until the pending flip; a second unresolved wire plan is a Profile
+violation. This bounded State activation policy does not gate video frames.
+Each applied HUD plan advances only the HUD production epoch, because Runtime
+binds an active epoch to one applied Desired configuration.
+Session termination invalidates both layers; no offline lease is selected.
+
+The native renderer is a bounded frame/fill plus one line of built-in 5x7 text
+(`A-Z`, `0-9`, space, `-`, `.`, `:`, `/`). This first capability does not claim
+arbitrary fonts, Unicode subtitles, world tracking, or optical correction.
+Coordinates are physical output pixels. Colors are straight `0xAARRGGBB`;
+text fits inside the border at integer scale 1–8. Hidden content keeps the
+renderer enabled and presents transparent pixels, so hiding has its own
+physical evidence without disabling the renderer. The next plan uses a new HUD epoch; the video epoch stays fixed.
+
+All integers below are big endian; reserved and unused text bytes are zero.
+HUD capability is 32 bytes: output width/height, maximum pixel count (at most
+65536), maximum label bytes (at most 48), maximum updates per second (1–60),
+then minimum width/height and width/height alignment (four u16), and four
+reserved bytes. K230D selects minima 16×16 and alignment 2×1 because Canaan
+DRM has a 16-pixel framebuffer minimum and VO uses 8-byte stride units. Plan suffix is 112 bytes: generation:u64, video
+Desired version:u64, canvas width/height:u32, x/y/width/height:u32,
+border/fill/text ARGB:u32, border width:u16, text scale:u8, visible:u8,
+text length:u8, seven reserved bytes, and 48 label bytes. Visible content
+must fit the canvas, pixel budget and text extent; hidden content has zero
+geometry, colors, border, scale and text. The Runtime Desired stays enabled.
+
+RUNNING HUD Actual has an 8-byte applied plan generation suffix. Its observed
+and applied Desired references retain Runtime meaning; activation status is
+not physical proof. The separate 56-byte evidence payload is evidence
+class:u8 (DRM page flip=2), seven reserved bytes, plan generation:u64,
+Host Desired version:u64, and SHA-256 of the exact 112-byte plan suffix.
+The containing Stream binds the Edge owner/production epoch and supplies
+the actual page-flip clock/time. Receipts must match this full identity.
+Skipping a superseded plan does not manufacture a receipt. Control ACKs and
+HUD physical receipts never gate the next video frame.
+
+Acceptance vectors cover exact catalog selection, nonzero generations,
+canonical text/reserved bytes, off-canvas and oversized regions, distinct
+video/HUD identities, latest replacement, visible/move/hide feedback, and
+unchanged video production with bounded memory on the target board.
