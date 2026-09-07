@@ -27,7 +27,8 @@
 #define V4L2_BUF_FLAG_MVX_BUFFER_NEED_REALLOC 0x20000000U
 #endif
 enum { INPUT_BUFFERS = 2, CAPTURE_BUFFERS = 7, AU_LIMIT = 128 * 1024,
-       INPUT_BYTES = 1024 * 1024, DUMMY_BYTES = 4096, NPROPS = 10 };
+       INPUT_BYTES = 1024 * 1024, DUMMY_BYTES = 4096, NPROPS = 10,
+       OVERLAY_BYTES = 256 * 1024 };
 enum state { WAIT_SOURCE, READY, FAILED };
 
 struct surface { int fd; uint32_t handle; void *map; size_t bytes; };
@@ -45,6 +46,12 @@ struct MeisoIngressVideo {
     int input_busy[INPUT_BUFFERS], capture_count, held_capture;
     uint32_t shown_fb, shown_handles[2];
     struct flip flip;
+    struct {
+        uint32_t plane, props[NPROPS], fb[2], width[2], height[2];
+        uint64_t before[NPROPS], sequence, last_sequence, ns;
+        struct surface surfaces[2];
+        int front, target, pending, seen;
+    } overlay;
 };
 
 static const char *const property_names[NPROPS] = {
@@ -92,13 +99,13 @@ static int make_surface(int drm_fd, size_t bytes, int map, struct surface *s)
     return 0;
 }
 
-static int read_properties(struct MeisoIngressVideo *v, uint32_t *ids, uint64_t *values)
+static int read_properties_at(int fd, uint32_t plane, uint32_t *ids, uint64_t *values)
 {
-    drmModeObjectProperties *ps = drmModeObjectGetProperties(v->drm_fd, v->plane, DRM_MODE_OBJECT_PLANE);
+    drmModeObjectProperties *ps = drmModeObjectGetProperties(fd, plane, DRM_MODE_OBJECT_PLANE);
     unsigned found = 0;
     if (!ps) return -1;
     for (uint32_t i = 0; i < ps->count_props; ++i) {
-        drmModePropertyRes *p = drmModeGetProperty(v->drm_fd, ps->props[i]);
+        drmModePropertyRes *p = drmModeGetProperty(fd, ps->props[i]);
         if (!p) continue;
         for (unsigned j = 0; j < NPROPS; ++j) if (!strcmp(p->name, property_names[j])) {
             ids[j] = p->prop_id; values[j] = ps->prop_values[i]; ++found;
@@ -109,16 +116,22 @@ static int read_properties(struct MeisoIngressVideo *v, uint32_t *ids, uint64_t 
     return found == NPROPS ? 0 : -1;
 }
 
-static int atomic_commit(struct MeisoIngressVideo *v, const uint64_t *values, uint32_t flags, void *cookie)
+static int atomic_plane_commit(int fd, uint32_t plane, const uint32_t *ids,
+                               const uint64_t *values, uint32_t flags, void *cookie)
 {
     drmModeAtomicReq *req = drmModeAtomicAlloc();
     if (!req) return -1;
     for (unsigned i = 0; i < NPROPS; ++i)
-        if (drmModeAtomicAddProperty(req, v->plane, v->prop_ids[i], values[i]) < 0) {
+        if (drmModeAtomicAddProperty(req, plane, ids[i], values[i]) < 0) {
             drmModeAtomicFree(req); return -1;
         }
-    int rc = drmModeAtomicCommit(v->drm_fd, req, flags, cookie);
+    int rc = drmModeAtomicCommit(fd, req, flags, cookie);
     drmModeAtomicFree(req); return rc;
+}
+
+static int atomic_commit(struct MeisoIngressVideo *v, const uint64_t *values, uint32_t flags, void *cookie)
+{
+    return atomic_plane_commit(v->drm_fd, v->plane, v->prop_ids, values, flags, cookie);
 }
 
 static void page_flip(int fd, unsigned sequence, unsigned sec, unsigned usec,
@@ -126,6 +139,11 @@ static void page_flip(int fd, unsigned sequence, unsigned sec, unsigned usec,
 {
     struct MeisoIngressVideo *v = cookie;
     (void)sequence;
+    if (v && fd == v->drm_fd && crtc == v->crtc && v->overlay.pending && !v->overlay.seen) {
+        v->overlay.seen = 1;
+        v->overlay.ns = (uint64_t)sec * UINT64_C(1000000000) + (uint64_t)usec * 1000;
+        return;
+    }
     if (v && fd == v->drm_fd && crtc == v->crtc && v->flip.pending && !v->flip.seen) {
         v->flip.seen = 1;
         v->flip.ns = (uint64_t)sec * UINT64_C(1000000000) + (uint64_t)usec * 1000;
@@ -232,7 +250,7 @@ static int setup_display(struct MeisoIngressVideo *v)
                 if (p->formats[j] == DRM_FORMAT_NV12) v->plane = p->plane_id;
         drmModeFreePlane(p);
     }
-    if (!v->plane || read_properties(v, v->prop_ids, v->before)) goto fail;
+    if (!v->plane || read_properties_at(v->drm_fd, v->plane, v->prop_ids, v->before)) goto fail;
     drmModeFreePlaneResources(planes); drmModeFreeCrtc(crtc); drmModeFreeResources(res); return 0;
 fail:
     if (planes) drmModeFreePlaneResources(planes);
@@ -340,6 +358,8 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
     enum v4l2_buf_type out = V4L2_BUF_TYPE_VIDEO_OUTPUT, cap = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     if (!v) { errno = ENOMEM; goto fail; }
     v->video_fd = v->drm_fd = -1; v->held_capture = -1;
+    v->overlay.front = v->overlay.target = -1;
+    v->overlay.surfaces[0].fd = v->overlay.surfaces[1].fd = -1;
     for (int i = 0; i < INPUT_BUFFERS; ++i) v->input[i].fd = -1;
     for (int i = 0; i < CAPTURE_BUFFERS; ++i) { v->capture[i][0].fd = -1; v->capture[i][1].fd = -1; }
     v->dummy[0].fd = v->dummy[1].fd = -1;
@@ -399,14 +419,17 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v, Meiso
 {
     if (!v || !out || v->state == FAILED) return MEISO_INGRESS_VIDEO_POLL_ERROR;
     if (reap_output(v) || service_source_change(v)) goto fail;
-    if (v->flip.pending) {
+    if (v->flip.pending || v->overlay.pending) {
+        if (v->overlay.pending && v->overlay.seen) return MEISO_INGRESS_VIDEO_NONE;
         struct pollfd p = { .fd = v->drm_fd, .events = POLLIN };
         int n = poll(&p, 1, 33);
         if (n < 0 && errno != EINTR) goto fail;
+        if (n > 0 && (p.revents & (POLLERR | POLLHUP | POLLNVAL))) goto fail;
         if (n > 0 && (p.revents & POLLIN)) {
             drmEventContext e = { .version = 3, .page_flip_handler2 = page_flip };
             if (drmHandleEvent(v->drm_fd, &e)) goto fail;
         }
+        if (v->overlay.pending) return MEISO_INGRESS_VIDEO_NONE;
         int done = finish_flip(v, out); if (done < 0) goto fail;
         return done ? MEISO_INGRESS_VIDEO_PRESENTED : MEISO_INGRESS_VIDEO_NONE;
     }
@@ -423,6 +446,116 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v, Meiso
     if (start_present(v, b.index, &b)) goto fail;
     return meiso_ingress_video_poll(v, out);
 fail:
+    v->state = FAILED; return MEISO_INGRESS_VIDEO_POLL_ERROR;
+}
+
+static int setup_overlay(struct MeisoIngressVideo *v)
+{
+    if (v->overlay.plane) return 0;
+    drmModePlaneRes *planes = drmModeGetPlaneResources(v->drm_fd);
+    if (!planes) return -1;
+    uint32_t chosen = 0;
+    for (uint32_t i = 0; i < planes->count_planes && !chosen; ++i) {
+        drmModePlane *p = drmModeGetPlane(v->drm_fd, planes->planes[i]);
+        if (!p) continue;
+        int argb = 0, is_overlay = 0;
+        for (uint32_t j = 0; j < p->count_formats; ++j)
+            if (p->formats[j] == DRM_FORMAT_ARGB8888) argb = 1;
+        drmModeObjectProperties *props = drmModeObjectGetProperties(
+            v->drm_fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
+        if (props) for (uint32_t j = 0; j < props->count_props; ++j) {
+            drmModePropertyRes *prop = drmModeGetProperty(v->drm_fd, props->props[j]);
+            if (prop && !strcmp(prop->name, "type") && props->prop_values[j] == DRM_PLANE_TYPE_OVERLAY)
+                is_overlay = 1;
+            if (prop) drmModeFreeProperty(prop);
+        }
+        if (props) drmModeFreeObjectProperties(props);
+        if (argb && is_overlay && !p->fb_id && !p->crtc_id && (p->possible_crtcs & 1U))
+            chosen = p->plane_id;
+        drmModeFreePlane(p);
+    }
+    drmModeFreePlaneResources(planes);
+    if (!chosen || read_properties_at(v->drm_fd, chosen, v->overlay.props, v->overlay.before)) return -1;
+    v->overlay.plane = chosen;
+    return 0;
+}
+
+MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
+    MeisoIngressVideo *v, uint64_t sequence, uint32_t x, uint32_t y,
+    uint32_t width, uint32_t height, const uint32_t *pixels, size_t bytes)
+{
+    if (!v || v->state == FAILED || !sequence || sequence <= v->overlay.last_sequence)
+        return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if (v->flip.pending || v->overlay.pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
+    const int disable = width == 0 && height == 0 && pixels == NULL && bytes == 0;
+    const uint64_t needed = (uint64_t)width * height * 4;
+    if ((!disable && (!pixels || !width || !height || needed > OVERLAY_BYTES || bytes != needed ||
+            width > v->output_w || height > v->output_h ||
+            x > v->output_w - width || y > v->output_h - height)) ||
+        (disable && (v->overlay.front < 0 || x || y))) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if (setup_overlay(v)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    uint64_t values[NPROPS];
+    int target = -1;
+    if (disable) memcpy(values, v->overlay.before, sizeof(values));
+    else {
+        target = v->overlay.front == 0 ? 1 : 0;
+        for (int i = 0; i < 2; ++i)
+            if (v->overlay.surfaces[i].fd < 0 &&
+                make_surface(v->drm_fd, OVERLAY_BYTES, 1, &v->overlay.surfaces[i]))
+                return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+        struct surface *surface = &v->overlay.surfaces[target];
+        if (sync_for_cpu_write(surface->fd, 1)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+        memcpy(surface->map, pixels, bytes);
+        if (sync_for_cpu_write(surface->fd, 0)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+        if (v->overlay.fb[target] &&
+            (v->overlay.width[target] != width || v->overlay.height[target] != height)) {
+            if (drmModeRmFB(v->drm_fd, v->overlay.fb[target])) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+            v->overlay.fb[target] = 0;
+        }
+        if (!v->overlay.fb[target]) {
+            uint32_t handles[4] = {surface->handle}, pitches[4] = {width * 4}, offsets[4] = {0};
+            if (drmModeAddFB2(v->drm_fd, width, height, DRM_FORMAT_ARGB8888,
+                    handles, pitches, offsets, &v->overlay.fb[target], 0))
+                return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+            v->overlay.width[target] = width; v->overlay.height[target] = height;
+        }
+        const uint64_t candidate[NPROPS] = {v->overlay.fb[target], v->crtc, 0, 0,
+            (uint64_t)width << 16, (uint64_t)height << 16, x, y, width, height};
+        memcpy(values, candidate, sizeof(values));
+    }
+    if (atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props, values,
+                            DRM_MODE_ATOMIC_TEST_ONLY, NULL) ||
+        atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props, values,
+                            DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, v))
+        return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    v->overlay.target = target; v->overlay.sequence = sequence; v->overlay.last_sequence = sequence;
+    v->overlay.pending = 1; v->overlay.seen = 0;
+    return MEISO_INGRESS_VIDEO_ACCEPTED;
+}
+
+MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(
+    MeisoIngressVideo *v, MeisoIngressVideoPresentation *out)
+{
+    if (!v || !out || v->state == FAILED) return MEISO_INGRESS_VIDEO_POLL_ERROR;
+    if (!v->overlay.pending) return MEISO_INGRESS_VIDEO_NONE;
+    if (!v->overlay.seen) {
+        struct pollfd p = { .fd = v->drm_fd, .events = POLLIN };
+        const int n = poll(&p, 1, 0);
+        if ((n < 0 && errno != EINTR) || (n > 0 && (p.revents & (POLLERR | POLLHUP | POLLNVAL))))
+            goto fail;
+        if (n > 0 && (p.revents & POLLIN)) {
+            drmEventContext e = { .version = 3, .page_flip_handler2 = page_flip };
+            if (drmHandleEvent(v->drm_fd, &e)) goto fail;
+        }
+    }
+    if (!v->overlay.seen) return MEISO_INGRESS_VIDEO_NONE;
+    *out = (MeisoIngressVideoPresentation){v->overlay.sequence, v->overlay.ns,
+        v->output_w, v->output_h, v->connector};
+    v->overlay.front = v->overlay.target; v->overlay.pending = 0; v->overlay.seen = 0;
+    return MEISO_INGRESS_VIDEO_PRESENTED;
+fail:
+    /* DRM is shared with video. Preserve unknown scanout ownership until
+     * close restores it; continuing video here would stall on pending HUD. */
     v->state = FAILED; return MEISO_INGRESS_VIDEO_POLL_ERROR;
 }
 
@@ -445,6 +578,9 @@ int meiso_ingress_video_close(MeisoIngressVideo *v)
         }
     }
     /* No decoder queue retains the DMA-BUFs before replacing the scanout plane. */
+    if (v->drm_fd >= 0 && v->overlay.plane &&
+        atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props,
+                            v->overlay.before, 0, NULL)) rc = -1;
     if (v->drm_fd >= 0 && v->plane && atomic_commit(v, v->before, 0, NULL)) rc = -1;
     if (v->drm_fd >= 0) {
         if (release_fb(v, v->shown_fb, v->shown_handles)) rc = -1;
@@ -456,6 +592,10 @@ int meiso_ingress_video_close(MeisoIngressVideo *v)
         if (destroy_surface(v->drm_fd, &v->capture[i][1])) rc = -1;
     }
     for (int i = 0; i < INPUT_BUFFERS; ++i) if (destroy_surface(v->drm_fd, &v->input[i])) rc = -1;
+    for (int i = 0; i < 2; ++i) {
+        if (v->overlay.fb[i] && drmModeRmFB(v->drm_fd, v->overlay.fb[i])) rc = -1;
+        if (destroy_surface(v->drm_fd, &v->overlay.surfaces[i])) rc = -1;
+    }
     if (destroy_surface(v->drm_fd, &v->dummy[0])) rc = -1;
     if (destroy_surface(v->drm_fd, &v->dummy[1])) rc = -1;
     if (v->drm_fd >= 0 && close(v->drm_fd)) rc = -1;

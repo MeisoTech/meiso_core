@@ -50,6 +50,23 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *vide
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *video,
                                                       MeisoIngressVideoPresentation *presentation);
 
+/* Private Edge-rendered screen region, packed native 0xAARRGGBB. This does not
+ * add a Host resource or advertise an overlay in Display Ingress v2.
+ * At most 256 KiB of pixels and two 256 KiB DMA surfaces, allocated lazily.
+ * width=height=0, x=y=bytes=0 and pixels=NULL disables an active region;
+ * disabling an already hidden region is rejected (there is no new page flip).
+ * Coordinates use output pixels; sequence must increase after each admission.
+ * Source pixels are copied during submit; one pending flip, no pixel FIFO. */
+MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
+    MeisoIngressVideo *video, uint64_t sequence, uint32_t x, uint32_t y,
+    uint32_t width, uint32_t height, const uint32_t *pixels, size_t bytes);
+
+/* Nonblocking observation of the separate overlay page flip. Keep calling the
+ * regular video poll too; it serializes both planes on their shared CRTC.
+ * sequence=the exact overlay update, not the decoded video frame identity. */
+MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(
+    MeisoIngressVideo *video, MeisoIngressVideoPresentation *presentation);
+
 /* Restores the selected plane, stops MVX, releases all exported DMA-BUFs and closes fds.
  * Returns 0 only when all requested recovery operations succeeded. */
 int meiso_ingress_video_close(MeisoIngressVideo *video);

@@ -631,6 +631,18 @@ identity into capture; only an actual DRM page-flip produces success evidence. D
 video's native dimensions in the top-left of the current output mode, with no extra RGB surface.
 Driver requirements include MVX DMABUF import/coherency and correct VO per-plane DMA addresses.
 
+The private video backend also exposes an optional Edge-rendered ARGB8888
+screen region. It selects a free RGB overlay plane under the same DRM master,
+lazily allocates two 256 KiB DMA surfaces, and copies at most 256 KiB per update.
+Coordinates use the active output mode without scaling. Video and overlay
+commits share one CRTC and are serialized; their exact page-flip identities
+are polled separately. A pending update returns busy, and source bytes are no
+longer read after admission. Disable restores the original plane state;
+close restores both planes before releasing buffers. No buffers are added to
+video-only use. This private adapter API does not add or advertise a HUD
+Resource in Display Ingress v2; Host-driven native overlays require a Profile
+which declares their Composition meaning, bounded content and actual state.
+
 On 2026-09-07, real aarch64 Jetson Host and K230D ran two 1800-frame sessions with independent-IDR
 animation (mean 9.38 Mbps, largest AU 62078 bytes). The first presented/verified 1788 frames; the
 second 1795, ending at source frame 1800. Both sides exited successfully with display restoration,
