@@ -1,5 +1,6 @@
 #include "display_ingress_simulated_service_private.h"
 #include "../targets/k230d-linux/display_ingress_video_backend.h"
+#include "../targets/k230d-linux/display_ingress_overlay_raster.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,7 @@ static struct {
     MeisoStateReplica *replica;
     ServiceStateArena arena;
     uint32_t *pixels;
+    uint32_t raster_width, raster_height;
     MeisoDisplayOverlayPlan plan;
     MeisoDisplayOverlayEvidence evidence;
     uint64_t desired_version, last_generation, last_submit_ns, flip_ns;
@@ -28,45 +30,6 @@ static bool route_is(Service *s, MeisoRuntimeRouteKey got, unsigned i)
     return got.catalog_generation==r.catalog_generation && got.endpoint_incarnation==r.endpoint_incarnation &&
         got.facet==r.facet && meiso_endpoint_id_equal(got.endpoint_id,r.endpoint_id) &&
         meiso_resource_id_equal(got.resource_id,r.resource_id);
-}
-
-/* Built-in bitmap glyphs, intentionally limited by the selected capability. */
-static const uint8_t font[36][7]={
- {14,17,17,31,17,17,17},{30,17,17,30,17,17,30},{14,17,16,16,16,17,14},
- {30,17,17,17,17,17,30},{31,16,16,30,16,16,31},{31,16,16,30,16,16,16},
- {14,17,16,23,17,17,15},{17,17,17,31,17,17,17},{31,4,4,4,4,4,31},
- {7,2,2,2,18,18,12},{17,18,20,24,20,18,17},{16,16,16,16,16,16,31},
- {17,27,21,21,17,17,17},{17,25,21,19,17,17,17},{14,17,17,17,17,17,14},
- {30,17,17,30,16,16,16},{14,17,17,17,21,18,13},{30,17,17,30,20,18,17},
- {15,16,16,14,1,1,30},{31,4,4,4,4,4,4},{17,17,17,17,17,17,14},
- {17,17,17,17,17,10,4},{17,17,17,21,21,21,10},{17,17,10,4,10,17,17},
- {17,17,10,4,4,4,4},{31,1,2,4,8,16,31},
- {14,17,19,21,25,17,14},{4,12,4,4,4,4,14},{14,17,1,2,4,8,31},
- {30,1,1,14,1,1,30},{2,6,10,18,31,2,2},{31,16,16,30,1,1,30},
- {14,16,16,30,17,17,14},{31,1,2,4,8,8,8},{14,17,17,14,17,17,14},{14,17,17,15,1,1,14}
-};
-static unsigned glyph(char c, unsigned row)
-{
-    if(c>='A' && c<='Z') return font[c-'A'][row];
-    if(c>='0' && c<='9') return font[26+c-'0'][row];
-    if(c=='-') return row==3?31:0;
-    if(c=='.') return row==6?4:0;
-    if(c==':') return row==2 || row==5?4:0;
-    if(c=='/') return 1U<<(row*4/6);
-    return 0;
-}
-static void draw(void)
-{
-    const MeisoDisplayOverlayPlan *p=&hud.plan;
-    if(!p->visible) { memset(hud.pixels,0,16*16*sizeof(uint32_t)); return; }
-    for(unsigned y=0;y<p->height;++y) for(unsigned x=0;x<p->width;++x)
-        hud.pixels[y*p->width+x]=(x<p->border_width || y<p->border_width ||
-            x>=p->width-p->border_width || y>=p->height-p->border_width)?p->border_argb:p->fill_argb;
-    for(unsigned g=0;g<p->text_size;++g) for(unsigned y=0;y<7;++y) for(unsigned x=0;x<5;++x)
-        if(glyph(p->text[g],y)&(1U<<(4-x)))
-            for(unsigned yy=0;yy<p->text_scale;++yy) for(unsigned xx=0;xx<p->text_scale;++xx)
-                hud.pixels[(p->border_width+y*p->text_scale+yy)*p->width+
-                    p->border_width+(g*6+x)*p->text_scale+xx]=p->text_argb;
 }
 
 bool service_overlay_initialize(Service *s, MeisoIngressVideo *video)
@@ -133,11 +96,16 @@ bool service_overlay_poll(Service *s)
     if(!hud.submitted) {
         uint64_t now=service_now_ns();
         if(now-hud.last_submit_ns<UINT64_C(1000000000)/s->overlay_capability.max_updates_per_second) return true;
-        if(!hud.drawn) { draw(); hud.drawn=true; }
+        if(!hud.drawn) {
+            if(!meiso_k230d_overlay_raster(&s->overlay_capability,&hud.plan,hud.pixels,
+                    MEISO_DISPLAY_OVERLAY_MAX_PIXELS,&hud.raster_width,&hud.raster_height))
+                return service_fail(s,"hud","raster");
+            hud.drawn=true;
+        }
         const MeisoDisplayOverlayPlan *p=&hud.plan;
         MeisoIngressVideoSubmitResult r=meiso_ingress_video_overlay_submit(hud.video,hud.desired_version,
-            p->visible?p->x:0,p->visible?p->y:0,p->visible?p->width:16,p->visible?p->height:16,
-            hud.pixels,p->visible?(size_t)p->width*p->height*4:16*16*4);
+            p->visible?p->x:0,p->visible?p->y:0,hud.raster_width,hud.raster_height,
+            hud.pixels,(size_t)hud.raster_width*hud.raster_height*4);
         if(r==MEISO_INGRESS_VIDEO_WOULD_BLOCK) return true;
         if(r!=MEISO_INGRESS_VIDEO_ACCEPTED) return service_fail(s,"hud","submit");
         hud.submitted=true; hud.last_submit_ns=now;
@@ -166,8 +134,8 @@ bool service_overlay_poll(Service *s)
     sample.source_time=(MeisoTimePoint){SERVICE_EVIDENCE_CLOCK_EPOCH,hud.flip_ns}; sample.payload=(MeisoByteView){wire,56};
     if(meiso_runtime_send_stream_sample(s->runtime,service_route_key(s,MEISO_DISPLAY_OVERLAY_ROUTE_EVIDENCE),hud.epoch,&sample)!=MEISO_RUNTIME_OK)
         return service_fail(s,"hud","evidence-send");
-    fprintf(stderr,"HUD_PRESENTED version=%"PRIu64" plan=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" visible=%u\n",
-        hud.desired_version,get64(wire+8),hud.epoch,hud.flip_ns,hud.plan.visible);
+    fprintf(stderr,"HUD_PRESENTED version=%"PRIu64" plan=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" visible=%u layout=%u x=%u y=%u width=%u height=%u\n",
+        hud.desired_version,get64(wire+8),hud.epoch,hud.flip_ns,hud.plan.visible,hud.plan.layout,hud.plan.x,hud.plan.y,hud.raster_width,hud.raster_height);
     hud.pending=false; return true;
 }
 void service_overlay_finish(void)

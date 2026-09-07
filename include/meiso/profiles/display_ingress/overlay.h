@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 enum {
-    MEISO_DISPLAY_OVERLAY_PROFILE_VERSION = 3,
+    MEISO_DISPLAY_OVERLAY_PROFILE_VERSION = 4,
     MEISO_DISPLAY_OVERLAY_ENDPOINT_COUNT = 2,
     MEISO_DISPLAY_OVERLAY_ROUTE_COUNT = 7,
     MEISO_DISPLAY_OVERLAY_ROUTE_PLAN = 4,
@@ -17,23 +17,29 @@ enum {
     MEISO_DISPLAY_OVERLAY_STATUS_BYTES = 8,
     MEISO_DISPLAY_OVERLAY_EVIDENCE_BYTES = 56,
     MEISO_DISPLAY_OVERLAY_MAX_PIXELS = 65536,
+    MEISO_DISPLAY_OVERLAY_LAYOUT_SINGLE = 0,
+    MEISO_DISPLAY_OVERLAY_LAYOUT_SIDE_BY_SIDE = 1,
     MEISO_DISPLAY_OVERLAY_MAX_TEXT = 48
 };
 
 typedef struct {
     uint32_t output_width, output_height, max_pixels, max_text, max_updates_per_second;
     uint16_t min_width, min_height, width_alignment, height_alignment;
+    uint32_t layouts; /* bit 0 single, bit 1 side-by-side repetition */
 } MeisoDisplayOverlayCapability;
 
 /* Complete fixed two-layer plan; video reference has the containing State's
  * Host owner. Generation identifies immutable content, separately from State
- * version. Pixels are produced on Edge, never carried in this State. */
+ * version. Pixels are produced on Edge, never carried in this State. For
+ * side-by-side layout, x/width describe one eye; the right copy is offset by
+ * half the canvas width. The spanning surface, including its transparent gap,
+ * consumes the advertised pixel budget and must meet width alignment. */
 typedef struct {
     uint64_t generation, video_desired_version;
     uint32_t canvas_width, canvas_height, x, y, width, height;
     uint32_t border_argb, fill_argb, text_argb;
     uint16_t border_width;
-    uint8_t text_scale, visible, text_size;
+    uint8_t text_scale, visible, text_size, layout;
     char text[MEISO_DISPLAY_OVERLAY_MAX_TEXT];
 } MeisoDisplayOverlayPlan;
 

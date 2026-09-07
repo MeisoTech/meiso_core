@@ -370,7 +370,7 @@ int main(int argc, char **argv)
     if (service.overlay_enabled) {
         /* Canaan DRM framebuffers are at least 16x16; VO stride is in 8-byte
          * units, hence an even ARGB width. Publish these actual constraints. */
-        service.overlay_capability=(MeisoDisplayOverlayCapability){0,0,65536,48,10,16,16,2,1};
+        service.overlay_capability=(MeisoDisplayOverlayCapability){0,0,65536,48,10,16,16,2,1,3};
         if (meiso_ingress_video_output_size(video,&service.overlay_capability.output_width,
                 &service.overlay_capability.output_height)) { meiso_ingress_video_close(video); return 1; }
     }
