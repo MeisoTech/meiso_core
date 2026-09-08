@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "display_ingress_simulated_service_private.h"
+#include <meiso/profiles/display_ingress/projection.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -48,7 +49,7 @@ static bool add_unit(size_t begin, size_t end)
     return true;
 }
 
-/* This source reader accepts a repeated-SPS Annex B file, not an IPC wire format. */
+/* Independent Annex B pictures start with optional AUD followed by repeated SPS. */
 static bool open_source(const char *path)
 {
     struct stat st;
@@ -61,7 +62,7 @@ static bool open_source(const char *path)
     close(fd);
     if (source == MAP_FAILED) { source = NULL; return false; }
     size_t begin = 0;
-    bool found = false;
+    bool found = false, have_sps = false;
     for (size_t i = 0; i + 4U < source_size;) {
         size_t n = 0;
         if (source[i] == 0 && source[i+1] == 0) {
@@ -69,10 +70,15 @@ static bool open_source(const char *path)
             else if (source[i+2] == 0 && source[i+3] == 1) n = 4;
         }
         if (n != 0) {
-            if ((source[i+n] & 31U) == 7U) {
+            const unsigned type=source[i+n] & 31U;
+            if (type==9U || type==7U) {
                 if (!found && i != 0) return false;
-                if (found && !add_unit(begin, i)) return false;
-                begin = i; found = true;
+                if (found && (type==9U || have_sps)) {
+                    if (!add_unit(begin, i)) return false;
+                    begin=i; have_sps=false;
+                }
+                found=true;
+                if (type==7U) have_sps=true;
             }
             i += n + 1U;
         } else ++i;
@@ -170,7 +176,8 @@ bool service_run_host_media(Service *s)
 bool service_run_edge_media(Service *s) { return service_fail(s, "application", "host-only"); }
 #else
 static MeisoIngressVideo *video;
-static struct { uint64_t sequence; uint8_t digest[32]; } ledger[16];
+static struct { uint64_t sequence; uint8_t digest[32];
+    bool projection_present; MeisoDisplayProjection projection; } ledger[16];
 static MeisoDisplayIngressPresentationEvidence pending;
 static uint64_t pending_time, evidence_sequence;
 static bool pending_valid;
@@ -205,11 +212,17 @@ static bool decode_latest(Service *s)
     unsigned slot = 0;
     while (slot < 16 && ledger[slot].sequence != 0) ++slot;
     if (slot == 16) return true;
+    bool projection_present=false;
+    MeisoDisplayProjection projection={0};
+    if (meiso_display_projection_sei_read(latest.frame.access_unit,&projection_present,&projection)
+        != MEISO_DISPLAY_INGRESS_PROFILE_OK) return service_fail(s,"media","projection-sei-invalid");
     MeisoIngressVideoSubmitResult r = meiso_ingress_video_submit(video, latest.frame.frame_sequence,
         latest.frame.access_unit.data, latest.frame.access_unit.size);
     if (r == MEISO_INGRESS_VIDEO_WOULD_BLOCK) return true;
     if (r != MEISO_INGRESS_VIDEO_ACCEPTED) return service_fail(s, "decoder", "submit");
     ledger[slot].sequence = latest.frame.frame_sequence;
+    ledger[slot].projection_present=projection_present;
+    ledger[slot].projection=projection;
     if (!meiso_display_ingress_host_fixture_input_sha256(latest.frame.access_unit, ledger[slot].digest))
         return service_fail(s, "application", "video-digest");
     ++ledger_count; ++submitted;
@@ -249,6 +262,16 @@ static bool poll_presentation(Service *s)
     pending.media_stream_epoch = s->media_stream_epoch;
     pending.displayed_frame_sequence = p.sequence;
     memcpy(pending.input_frame_sha256, ledger[slot].digest, 32);
+    if (ledger[slot].projection_present && (presented==0 || presented%30==0)) {
+        const MeisoDisplayProjection *v=&ledger[slot].projection;
+        fprintf(stderr,"PROJECTION_PRESENTED frame=%"PRIu64" views=%u space=%u/%"PRIu64"/%"PRIu64
+            " render_target=%"PRIu64"/%"PRIu64" view_x=%g,%g first_fov=%g,%g,%g,%g correction=none\n",
+            p.sequence,v->view_count,v->space_class,v->source_space_id,v->source_space_epoch,
+            v->target_time.clock_epoch,v->target_time.monotonic_ns,
+            (double)v->views[0].position_meters[0],(double)v->views[1].position_meters[0],
+            (double)v->views[0].fov_left_right_up_down[0],(double)v->views[0].fov_left_right_up_down[1],
+            (double)v->views[0].fov_left_right_up_down[2],(double)v->views[0].fov_left_right_up_down[3]);
+    }
     ledger[slot].sequence = 0; --ledger_count;
     last_evidence_sequence = p.sequence; ++presented;
     if (s->overlay_enabled && (presented==1 || presented%30==0)) {

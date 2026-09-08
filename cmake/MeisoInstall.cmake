@@ -116,6 +116,7 @@ install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/profile.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/overlay.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/projection.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/media_transport.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/profiles/display_ingress"
     COMPONENT Profiles

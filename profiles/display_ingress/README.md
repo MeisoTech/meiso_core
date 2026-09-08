@@ -44,6 +44,38 @@ golden/failure vectors 必须继续通过；本版本不改变原受控 carrier 
 
 以下既有段落描述 v1 RAW，v2 仅以上述差异替换对应约束。
 
+### 可选的逐帧投影描述：H.264 SEI v1
+
+压缩 AU 可以包含一个 `user_data_unregistered` SEI（payload type 5），UUID 为
+`d4e0ea40-6084-4f31-bb01-96bed49bf4a1`，后接下表的128-byte描述。它记录**Host实际用于
+渲染的源视图**；一视图表示一个源视图，两视图按左眼、右眼排序，不能把一张合成图凭空
+解释成两个有独立姿态的视图。坐标为右手系、米，朝向四元数xyzw，视锥角度为弧度。
+
+| 字节（UUID之后） | 内容 |
+|---|---|
+| 0..3 | version=1、view_count=1或2、target_time_present=0或1、space_class（1=head、2=application、3=world） |
+| 4..7 | 全零 |
+| 8..23 | source_space_id、source_space_epoch，各u64，非零 |
+| 24..39 | 目标时间clock_epoch、monotonic_ns，各u64；未提供时均为零 |
+| 40..83 / 84..127 | 每视图11个binary32：朝向xyzw、位置xyz、FOV left/right/up/down；未用视图全零 |
+
+整数和浮点位模式均大端。浮点必须有限，四元数平方模在0.999..1.001，FOV角度严格在
+−π/2..π/2内且left<right、down<up。source空间归Host生产者及本次Session所有，epoch在
+基准定义变化时递增；它不是物理校准或追踪有效性的证明。目标时间同属Host生产者时钟，
+不暗示与Edge时钟可比，也不是新的deadline字段。没有真实源事实时省略SEI，不填默认姿态。
+
+SEI使用标准RBSP转义，位于该AU的IDR之前，新增NAL不超过256bytes。`max_frame_bytes`
+仍约束含SEI的完整AU；DIFR、latest/drop、既有AU SHA-256和呈现证据保持原定义，因此描述
+与图像一起被接收、丢弃和关联。无新增控制State、逐帧ACK或第二条数据通道。未知UUID由
+投影reader跳过；同一AU重复本UUID、错误版本/长度/数值均拒绝解读，输出保持不变。
+
+`projection.h`提供无堆分配的写入、读取和插入函数；插入保留原有AUD/SPS/PPS顺序。
+这项可选描述不改变旧Profile协商，不要求旧接收端执行它；没有描述时仍按既有视频显示。
+当前Edge读取元数据但不执行姿态微调，呈现证据也不宣称修正已应用。未来启用修正仍须
+显式协商对应能力、坐标/时间映射及执行结果，不能仅凭出现SEI开启。
+
+SEI标准结构可对照[FFmpeg的公开语法实现](https://ffmpeg.org/doxygen/trunk/cbs__sei__syntax__template_8c_source.html)。
+
 Host 已经有一张完整应用画面时，把它作为可过期的连续媒体交给 Edge。Edge 只保留
 正在接收的一张和最新完成的一张，随后把最新合法画面交给本机显示后端。显示后端在
 真实 KMS page-flip（Linux 内核显示提交完成事件）到达后，可异步发送一条小型呈现证据。
