@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,19 @@ static unsigned port(const char *s)
     char *end;
     unsigned long value = strtoul(s, &end, 10);
     return *s && !*end && value && value <= 65535 ? (unsigned)value : 0;
+}
+
+static int control_liveness(int fd)
+{
+    /* Deployment policy only: turn a silent lost TCP peer into a socket error.
+     * TCP_USER_TIMEOUT also bounds unacknowledged data and overrides the
+     * keepalive probe-count timeout. No application heartbeat bytes are added. */
+    const int enabled = 1, idle = 5, interval = 2, probes = 3, timeout_ms = 15000;
+    return setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled)) ||
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) ||
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval)) ||
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probes, sizeof(probes)) ||
+        setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &timeout_ms, sizeof(timeout_ms));
 }
 
 int main(int argc, char **argv)
@@ -37,7 +51,8 @@ int main(int argc, char **argv)
     struct timeval timeout = {.tv_sec = 5};
     socklen_t size = sizeof(local);
     char tcp_text[24], udp_text[24];
-    if (tcp < 0 || udp < 0 || setsockopt(tcp, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout))) goto out;
+    if (tcp < 0 || udp < 0 || setsockopt(tcp, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) ||
+        control_liveness(tcp)) goto out;
     peer.sin_port = htons((uint16_t)port(argv[3]));
     if (connect(tcp, (struct sockaddr *)&peer, sizeof(peer)) ||
         getsockname(tcp, (struct sockaddr *)&local, &size)) goto out;

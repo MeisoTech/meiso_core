@@ -83,6 +83,11 @@ PeerID 由 `--local-peer` 与 `--expected-peer` 配置，各为32位十六进制
 均非零且彼此不同，必须成对提供。continuous入口要求显式配置；有限诊断负载在
 两项均省略时保留原示例身份。对端将自己的local与另一侧expected交换配置，
 匹配由现有Core Session握手检查。这是对等身份声明，不提供密码学认证或设备注册。
+Linux连接启动器为控制TCP启用存活探测：空闲5秒开始、间隔2秒、探测计数3，并设置
+15秒`TCP_USER_TIMEOUT`（同时约束未确认发送；它会覆盖探测计数对应的关闭时限）。
+连接失效由内核报告socket error，沿既有终止/重连路径建立fresh Session；不会在应用字节流插入
+心跳，也不证明远端应用健康。参数只属于此Linux部署入口，不改变Core的通用liveness合同或
+系统全局TCP设置。行为定义见[Linux TCP文档](https://man7.org/linux/man-pages/man7/tcp.7.html)。
 重连脚本只持有一个子进程 PID，退出后等待2秒，参数错误（退出码2）停止重试。
 不要在已有平台 supervisor 上再叠加此脚本。
 `--continuous on` 让 Edge 媒体服务持续到连接终止或显式停止，不因实验帧数计时退出。
