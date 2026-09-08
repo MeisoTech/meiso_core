@@ -88,6 +88,7 @@ ctest --preset windows-msvc-debug
 
 实现与接入：
 
+- [Jetson → K230D 视频、消息与应用 SDK 快速开始](docs/host-edge-quickstart.md)
 - [SDK 设计与开发指南](docs/sdk-guide.md)
 - [Session Core v0](docs/session-core-v0.md) 与
   [Runtime negotiation core v0](docs/runtime-core-v0.md)

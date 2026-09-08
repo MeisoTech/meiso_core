@@ -101,7 +101,8 @@ Host 构建/IPC入口属于 Looking Glass 的 `sdc/integrations/meiso/presentati
 `/etc/meiso/edge.conf`（root拥有、目录700、文件600），填写可执行安装前缀、Host地址与
 配对PeerID，再将启动文件以755权限安装为 `/etc/init.d/S90meiso-edge`。
 配置是root维护的shell赋值，不包含Wi-Fi凭据；720p与side-by-side是初步默认值。
-驱动需支持NV12源裁剪/步长，两端共同选择Profile v5。现有物理输出模式不在此修改。
+驱动需支持NV12源裁剪/步长；当前原生2D选择Profile v6，side-by-side选择v7，包含可选CJK16能力。
+现有物理输出模式不在此修改。完整配对入口见[快速开始](../../docs/host-edge-quickstart.md)。
 
 ```sh
 /etc/init.d/S90meiso-edge start

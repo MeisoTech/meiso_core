@@ -44,8 +44,9 @@
 - [Display Ingress Profile](../profiles/display_ingress/README.md)：Host 到 Edge 实屏链路的
   单 endpoint、完整帧和异步呈现证据合同；四 route Catalog、Desired/Actual、呈现证据
   codec、一次 RUNNING 数据门、有界媒体 transport 和受控 connected UDP adapter 已实现；
-  现已接通本机模拟服务，以及服务器测试端到 K230D 的单帧真实 page-flip/反馈；正式应用 Host、
-  连续视频、安全 carrier 与独立肉眼核验仍待完成；
+  已接通正式 HostRuntime 应用、连续 H.264 视频、Edge 原生2D与实际呈现回执，并通过实屏观察；
+  配对构建、安装、应用 SDK 与当前边界见 [Host→Edge 快速开始](host-edge-quickstart.md)。
+  安全 carrier、完整 XR 设备接口与姿态微调仍未交付；
 - [K230D Linux Edge基线](k230d-linux-edge-development-baseline.md)与
   [target入口](../targets/k230d-linux/README.md)；
 - [Edge local compositor](edge-local-compositor-v0.md)：已验CPU offscreen合成与尚未验物理present的分界。
