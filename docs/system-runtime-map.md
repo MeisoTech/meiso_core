@@ -2,7 +2,7 @@
 
 > `ENGINEERING MAP / NON-NORMATIVE`，更新于2026-09-08。职责和语义仍由
 > [规范入口](index.md)及已选择的[Display Ingress Profile](../profiles/display_ingress/README.md)拥有。
-> 最近板验代码配对：Meiso **a6e60de**、Looking Glass **08dccf9**；两仓本地main均已包含该版本。
+> 已验代码配对、构建安装与应用 SDK 使用入口统一见[Host→Edge 快速开始](host-edge-quickstart.md)。
 
 ## 产品要完成什么
 
@@ -12,14 +12,14 @@ Host运行应用、交付内容并理解Edge真实状态；Edge在K230D **128 Mi
 | 模式 | 内容在哪里渲染 | 初步基线 |
 | --- | --- | --- |
 | 世界空间简单3D / 6DoF | Edge，Host提供对象数据 | 缺IMU，按产品决定延后。当前不宣称实机姿态跟踪。 |
-| 应用视频，包括OpenXR应用画面 | Host渲染/压缩，Edge解码显示 | 1280×720合并视频已通过实际两端；真实OpenXR compositor输入已接通，完整per-view/姿态/输入/目标时间仍待完成。 |
-| 屏幕2D消息、框、字幕 | Edge，Host提供计划 | 已有视频并发的双眼重复消息/框、desired/actual及实际呈现回执；目前为有限内置字形，完整Unicode字幕未完成。 |
+| 应用视频，包括OpenXR应用画面 | Host渲染/压缩，Edge解码显示 | 1280×720合并视频已通过实际两端；compositor及API逐眼源均已接通。API源每眼姿态/FOV及可转换的目标时间随对应帧到Edge；源Runtime仍负责定位和输入。 |
+| 屏幕2D消息、框、字幕 | Edge，Host提供计划 | 独立纯消息及视频并发均已通过，支持单区域矩形/样式、一行有限ASCII/CJK文字、双眼重复、desired/actual与实际呈现回执；多区域和完整排版未完成。 |
 
 当前最短使用链是：独立应用 → Looking Glass本机IPC/HostRuntime → Meiso SDK的能力、
 状态与压缩媒体交付 → K230D MVX解码/DRM视频和2D叠加 → Host取得实际呈现与释放反馈。
 应用退出会隐藏2D并清屏；断开的旧应用会收到失败，新连接使用新会话。
 
-720p是初步产品基线。Profile v5把同一解码buffer的两个半帧放入各自物理眼区，
+720p是初步产品基线。所选Profile把同一解码buffer的两个半帧放入各自物理眼区，
 无需额外全帧复制；1920×1080输出时，两份640×720画面分别居中。输出参数与输入尺寸分开，
 该布局尚未做全屏缩放或光学校准。更高分辨率的性能研究不阻挡这条完整链先交付。
 
@@ -33,19 +33,21 @@ Host运行应用、交付内容并理解Edge真实状态；Edge在K230D **128 Mi
 | K230D驱动适配、有限缓冲、解码/显示及真实反馈 | Meiso `targets/k230d-linux/`；[构建、安装与BusyBox启动](../targets/k230d-linux/README.md#连续视频与原生2d构建安装和启动)。 |
 
 保留两个产品仓：共用Meiso SDK与Looking Glass Host应用集成。H2E是Meiso的工作树，
-其已验代码已进入本地主分支；实验记录仓保存协作/板级证据，不是第三套SDK。
+其已验代码已进入主分支；实验记录仓保存协作/板级证据，不是第三套SDK。
 另一个graphics-lanes开发工作树及工作中修改不因这次整合自动成为已验产品基线。
 
 ## 已验证的使用边界
 
-安装组件分别是Meiso的 `K230dVideoRuntime` 和Looking Glass的 `MeisoHostRuntime`。
+运行组件分别是Meiso的 `K230dVideoRuntime` 和Looking Glass的 `MeisoHostRuntime`；
+Host客户端SDK已可安装/迁移，仓外应用用find_package消费消息和视频接口并通过实机验证。
 Host复用systemd用户服务，Edge复用BusyBox init和单子进程重连器；PeerID及网络地址由
-部署配置提供。Edge默认驱动及普通重启后自动启动已验，新应用完成120次视频呈现、
-4次双眼消息和最终清理。Host用户服务启停已验，本轮未重启共享Host机器。
+部署配置提供。两侧服务已通过各自设备普通重启、控制连接失联后重新接入的验证；
+恢复后新启动应用的视频、消息和退出清屏通过，不表示先前应用会自动重启或重放。
 
-实际链路目前仍是Host USB → 台架路由 → Edge Wi-Fi；直接双设备Wi-Fi尚未完成。
-Profile的身份声明不等于密码学认证。完整XR设备兼容、真实姿态反馈/帧目标姿态与微调、
-光学标定、安全通信和正式发行仍有缺口。初步链路成立不等于完整产品已上线。
+当前已接受的部署链路是Host USB → 台架路由 → Edge Wi-Fi；中转配置已持久化，
+直接双设备Wi-Fi仍是后续改进。Profile的身份声明不等于密码学认证。
+完整XR设备兼容、Edge实机姿态反馈/微调、光学标定、安全通信和正式发行仍有缺口。
+已传递源渲染姿态不表示已有实机跟踪闭环；初步链路成立不等于完整产品已上线。
 
 <details>
 <summary>历史 Composition 工程记录（截至2026-09-02，包含当时的资源与架构问题）</summary>
