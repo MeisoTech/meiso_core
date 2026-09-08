@@ -30,7 +30,7 @@
 enum { INPUT_BUFFERS = 2, CAPTURE_BUFFERS = 7, AU_LIMIT = 128 * 1024,
        INPUT_BYTES = 1024 * 1024, DUMMY_BYTES = 4096, NPROPS = 10,
        OVERLAY_BYTES = 256 * 1024, CAPTURE_POOL_BYTES = 10 * 1024 * 1024 };
-enum state { WAIT_SOURCE, READY, FAILED };
+enum state { DECODER_IDLE, WAIT_SOURCE, READY, FAILED };
 
 struct surface { int fd; uint32_t handle; void *map; size_t bytes; };
 struct flip { int pending; int seen; uint64_t ns; uint64_t sequence; int capture_index;
@@ -386,10 +386,6 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
                                              uint32_t width, uint32_t height)
 {
     struct MeisoIngressVideo *v = calloc(1, sizeof(*v));
-    struct v4l2_format fmt = { .type = V4L2_BUF_TYPE_VIDEO_OUTPUT };
-    struct v4l2_format capture_fmt = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE };
-    struct v4l2_event_subscription sub = { .type = V4L2_EVENT_SOURCE_CHANGE };
-    enum v4l2_buf_type out = V4L2_BUF_TYPE_VIDEO_OUTPUT, cap = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     if (!v) { errno = ENOMEM; goto fail; }
     v->video_fd = v->drm_fd = -1; v->held_capture = -1;
     v->overlay.front = v->overlay.target = -1;
@@ -402,6 +398,17 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
     v->video_fd = open(video_path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     v->drm_fd = open(drm_path, O_RDWR | O_CLOEXEC);
     if (v->video_fd < 0 || v->drm_fd < 0 || drmSetMaster(v->drm_fd) || drmSetClientCap(v->drm_fd, DRM_CLIENT_CAP_ATOMIC, 1) || setup_display(v)) goto fail;
+    v->state = DECODER_IDLE; return v;
+fail:
+    meiso_ingress_video_close(v); return NULL;
+}
+
+static int start_decoder(struct MeisoIngressVideo *v)
+{
+    struct v4l2_format fmt = { .type = V4L2_BUF_TYPE_VIDEO_OUTPUT };
+    struct v4l2_format capture_fmt = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE };
+    struct v4l2_event_subscription sub = { .type = V4L2_EVENT_SOURCE_CHANGE };
+    enum v4l2_buf_type out = V4L2_BUF_TYPE_VIDEO_OUTPUT, cap = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     /* MVX discovers dimensions from the first IDR; pre-source-change OUTPUT is 0x0. */
     fmt.fmt.pix.width = 0; fmt.fmt.pix.height = 0; fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
     fmt.fmt.pix.field = V4L2_FIELD_NONE; fmt.fmt.pix.sizeimage = INPUT_BYTES;
@@ -423,14 +430,16 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
     if (stream(v, out, 1)) goto fail;
     v->output_streaming = 1;
     if (stream(v, cap, 1)) goto fail;
-    v->capture_streaming = 1; v->state = WAIT_SOURCE; return v;
+    v->capture_streaming = 1; v->state = WAIT_SOURCE;
+    fprintf(stderr,"VIDEO_DECODER_STARTED input_buffers=%u initial_capture_bytes=%u\n", INPUT_BUFFERS, DUMMY_BYTES*2U);
+    return 0;
 fail:
-    meiso_ingress_video_close(v); return NULL;
+    v->state = FAILED; return -1;
 }
 
 int meiso_ingress_video_set_stereo(MeisoIngressVideo *v)
 {
-    if (!v || v->state != WAIT_SOURCE || v->source_changed || v->right.plane ||
+    if (!v || (v->state != DECODER_IDLE && v->state != WAIT_SOURCE) || v->source_changed || v->right.plane ||
         v->width % 16 || v->output_w % 2 || v->width > v->output_w || v->height > v->output_h)
         return errno = EINVAL, -1;
     for (unsigned i = 0; i < INPUT_BUFFERS; ++i)
@@ -473,6 +482,7 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, u
                                                           const uint8_t *au, size_t au_size)
 {
     if (!v || !au || !au_size || au_size > AU_LIMIT || v->state == FAILED) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if (v->state == DECODER_IDLE && start_decoder(v)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if (reap_output(v)) { v->state = FAILED; return MEISO_INGRESS_VIDEO_SUBMIT_ERROR; }
     int index = -1; for (int i = 0; i < INPUT_BUFFERS; ++i) if (!v->input_busy[i]) { index = i; break; }
     if (index < 0) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
@@ -493,6 +503,7 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, u
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v, MeisoIngressVideoPresentation *out)
 {
     if (!v || !out || v->state == FAILED) return MEISO_INGRESS_VIDEO_POLL_ERROR;
+    if (v->state == DECODER_IDLE) return MEISO_INGRESS_VIDEO_NONE;
     if (reap_output(v) || service_source_change(v)) goto fail;
     if (v->flip.pending || v->overlay.pending) {
         if (v->overlay.pending && v->overlay.seen) return MEISO_INGRESS_VIDEO_NONE;

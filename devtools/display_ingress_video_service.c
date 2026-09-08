@@ -327,7 +327,8 @@ bool service_run_edge_media(Service *s)
         MeisoRuntimeEvent event;
         ServiceControlStep step = service_control_step(s, true, 0, &event);
         if (step == SERVICE_CONTROL_PEER_CLOSED) {
-            if (presented == 0) return service_fail(s, "application", "video-no-presentation");
+            if (presented == 0 && !s->overlay_enabled)
+                return service_fail(s, "application", "video-no-presentation");
             return service_terminate_media(s, MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_CONTROL_SESSION) && service_finish_peer_close(s);
         }
         if (step == SERVICE_CONTROL_FAILED || (step == SERVICE_CONTROL_EVENT && !service_overlay_consume(s, &event))) return false;

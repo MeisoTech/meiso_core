@@ -664,6 +664,15 @@ activation, physical evidence and pixel budgets are unchanged. Mixed selections
 fail Session negotiation. HUD capability and plan schemas advance to v3;
 status/evidence retain their existing schemas.
 
+The screen State references the configured video Desired version, not a received
+video frame. It can therefore be presented before any video arrives, including
+a session containing only screen content. Video Actual indicates that ingress is
+armed; it does not assert a physical video presentation. The independent screen
+Actual/evidence still requires its own physical flip. A screen-only session can
+close normally with zero video frames. On K230D the decoder queues and buffers
+are initialized on the first video submission; opening the output for screen
+content alone does not allocate decoded or compressed video surfaces.
+
 Capability adds a big-endian font mask:u32 after the existing 32 bytes. Bit 0
 selects the original 5x7 label font; bit 1 selects CJK16. At least one known bit
 is required. CJK16 is advertised only when its local glyph asset is available.
