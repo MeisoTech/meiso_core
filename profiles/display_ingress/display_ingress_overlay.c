@@ -16,7 +16,7 @@ static bool dec(MeisoByteView in, size_t size, void *v, size_t vs)
 static bool dimension(uint32_t n) { return n && n <= 4096; }
 static bool cap_valid(const MeisoDisplayOverlayCapability *v)
 {
-    return v && v->layouts && !(v->layouts & ~3U) && dimension(v->output_width) && dimension(v->output_height) &&
+    return v && v->fonts && !(v->fonts & ~3U) && v->layouts && !(v->layouts & ~3U) && dimension(v->output_width) && dimension(v->output_height) &&
         v->max_pixels && v->max_pixels <= MEISO_DISPLAY_OVERLAY_MAX_PIXELS &&
         v->max_text && v->max_text <= MEISO_DISPLAY_OVERLAY_MAX_TEXT &&
         v->max_updates_per_second && v->max_updates_per_second <= 60 &&
@@ -29,26 +29,66 @@ static bool cap_valid(const MeisoDisplayOverlayCapability *v)
 }
 static bool character(unsigned char c)
 { return (c>='A' && c<='Z') || (c>='0' && c<='9') || c==' ' || c=='-' || c=='.' || c==':' || c=='/'; }
+bool meiso_display_overlay_cjk_next(MeisoByteView *in, uint32_t *out)
+{
+    if (!in || !out || !in->data || !in->size) return false;
+    const uint8_t *p=in->data; uint32_t cp=p[0]; size_t n=1;
+    if (cp>=0xc2 && cp<=0xdf) { cp&=31; n=2; }
+    else if (cp>=0xe0 && cp<=0xef) { cp&=15; n=3; }
+    else if (cp>=0x80) return false;
+    if (in->size<n) return false;
+    for(size_t i=1;i<n;++i) {
+        if ((p[i]&0xc0)!=0x80) return false;
+        cp=(cp<<6)|(p[i]&63);
+    }
+    if ((n==2 && cp<0x80) || (n==3 && cp<0x800)) return false;
+    if (!((cp>=0x20 && cp<=0x7e) || (cp>=0x3000 && cp<=0x30ff) ||
+        (cp>=0x3400 && cp<=0x4dbf) || (cp>=0x4e00 && cp<=0x9fff) ||
+        (cp>=0xff01 && cp<=0xffef))) return false;
+    *out=cp; in->data+=n; in->size-=n; return true;
+}
+bool meiso_display_overlay_text_extent(uint8_t font, MeisoByteView text,
+    uint32_t *width, uint32_t *height)
+{
+    if (!width || !height || font>1 || text.size>MEISO_DISPLAY_OVERLAY_MAX_TEXT ||
+        (text.size && !text.data)) return false;
+    uint32_t w=0,h=0;
+    if (font==MEISO_DISPLAY_OVERLAY_FONT_LABEL) {
+        for(size_t i=0;i<text.size;++i) if(!character(text.data[i])) return false;
+        if(text.size) { w=(uint32_t)text.size*6-1; h=7; }
+    } else {
+        const bool any=text.size!=0;
+        while(text.size) {
+            uint32_t cp;
+            if(!meiso_display_overlay_cjk_next(&text,&cp)) return false;
+            w+=cp<128?8U:16U;
+        }
+        if(any) h=16;
+    }
+    *width=w; *height=h; return true;
+}
 static bool plan_valid(const MeisoDisplayOverlayPlan *v)
 {
     if (!v || !v->generation || !v->video_desired_version || !dimension(v->canvas_width) ||
         !dimension(v->canvas_height) || v->visible > 1 || v->layout > MEISO_DISPLAY_OVERLAY_LAYOUT_SIDE_BY_SIDE || v->text_size > MEISO_DISPLAY_OVERLAY_MAX_TEXT)
         return false;
     if (!zero((const uint8_t *)v->text + v->text_size, sizeof(v->text)-v->text_size)) return false;
-    for (unsigned i=0;i<v->text_size;++i) if (!character((unsigned char)v->text[i])) return false;
+    uint32_t text_width,text_height;
+    if(!meiso_display_overlay_text_extent(v->font,(MeisoByteView){(const uint8_t *)v->text,v->text_size},
+        &text_width,&text_height)) return false;
     if (!v->visible) return !v->x && !v->y && !v->width && !v->height && !v->border_argb &&
-        !v->fill_argb && !v->text_argb && !v->border_width && !v->text_scale && !v->text_size && !v->layout;
+        !v->fill_argb && !v->text_argb && !v->border_width && !v->text_scale && !v->text_size && !v->layout && !v->font;
     if (!dimension(v->width) || !dimension(v->height) || !v->text_scale || v->text_scale>8 ||
         v->border_width>v->width/2 || v->border_width>v->height/2) return false;
-    return !v->text_size || ((uint32_t)(v->text_size*6-1)*v->text_scale <= v->width-2*v->border_width &&
-        7U*v->text_scale <= v->height-2*v->border_width);
+    return !v->text_size || (text_width*v->text_scale <= v->width-2*v->border_width &&
+        text_height*v->text_scale <= v->height-2*v->border_width);
 }
 bool meiso_display_overlay_plan_supported(const MeisoDisplayOverlayCapability *c,
     const MeisoDisplayOverlayPlan *v, uint64_t video_version)
 {
     if (!cap_valid(c) || !plan_valid(v) || v->video_desired_version!=video_version ||
         v->canvas_width!=c->output_width || v->canvas_height!=c->output_height ||
-        v->text_size>c->max_text) return false;
+        v->text_size>c->max_text || (v->visible && v->text_size && !(c->fonts & (1U<<v->font)))) return false;
     if (!v->visible) return true;
     const bool stereo=v->layout==MEISO_DISPLAY_OVERLAY_LAYOUT_SIDE_BY_SIDE;
     const uint32_t eye_width=stereo?c->output_width/2:c->output_width;
@@ -62,17 +102,17 @@ bool meiso_display_overlay_plan_supported(const MeisoDisplayOverlayCapability *c
 }
 bool meiso_display_overlay_capability_encode(const MeisoDisplayOverlayCapability *v, MeisoMutableBuffer out)
 {
-    if (!enc(v,sizeof(*v),out,32) || !cap_valid(v)) return false;
-    uint8_t b[32]={0}; put32(b,v->output_width); put32(b+4,v->output_height);
+    if (!enc(v,sizeof(*v),out,36) || !cap_valid(v)) return false;
+    uint8_t b[36]={0}; put32(b,v->output_width); put32(b+4,v->output_height);
     put32(b+8,v->max_pixels); put32(b+12,v->max_text); put32(b+16,v->max_updates_per_second);
     const uint16_t limits[]={v->min_width,v->min_height,v->width_alignment,v->height_alignment};
     for(unsigned i=0;i<4;++i) { b[20+2*i]=(uint8_t)(limits[i]>>8); b[21+2*i]=(uint8_t)limits[i]; }
-    put32(b+28,v->layouts); memcpy(out.data,b,32); return true;
+    put32(b+28,v->layouts); put32(b+32,v->fonts); memcpy(out.data,b,36); return true;
 }
 bool meiso_display_overlay_capability_decode(MeisoByteView in, MeisoDisplayOverlayCapability *out)
 {
-    if (!dec(in,32,out,sizeof(*out))) return false;
-    MeisoDisplayOverlayCapability v={get32(in.data),get32(in.data+4),get32(in.data+8),get32(in.data+12),get32(in.data+16),0,0,0,0,get32(in.data+28)};
+    if (!dec(in,36,out,sizeof(*out))) return false;
+    MeisoDisplayOverlayCapability v={get32(in.data),get32(in.data+4),get32(in.data+8),get32(in.data+12),get32(in.data+16),0,0,0,0,get32(in.data+28),get32(in.data+32)};
     v.min_width=(uint16_t)((uint16_t)in.data[20]<<8|in.data[21]);
     v.min_height=(uint16_t)((uint16_t)in.data[22]<<8|in.data[23]);
     v.width_alignment=(uint16_t)((uint16_t)in.data[24]<<8|in.data[25]);
@@ -88,18 +128,18 @@ bool meiso_display_overlay_plan_encode(const MeisoDisplayOverlayPlan *v, MeisoMu
     put32(b+32,v->width); put32(b+36,v->height); put32(b+40,v->border_argb);
     put32(b+44,v->fill_argb); put32(b+48,v->text_argb);
     b[52]=(uint8_t)(v->border_width>>8); b[53]=(uint8_t)v->border_width;
-    b[54]=v->text_scale; b[55]=v->visible; b[56]=v->text_size; b[57]=v->layout;
+    b[54]=v->text_scale; b[55]=v->visible; b[56]=v->text_size; b[57]=v->layout; b[58]=v->font;
     memcpy(b+64,v->text,v->text_size); memcpy(out.data,b,112); return true;
 }
 bool meiso_display_overlay_plan_decode(MeisoByteView in, MeisoDisplayOverlayPlan *out)
 {
-    if (!dec(in,112,out,sizeof(*out)) || !zero(in.data+58,6)) return false;
+    if (!dec(in,112,out,sizeof(*out)) || !zero(in.data+59,5)) return false;
     const uint8_t *b=in.data; MeisoDisplayOverlayPlan v={0};
     v.generation=get64(b); v.video_desired_version=get64(b+8);
     v.canvas_width=get32(b+16); v.canvas_height=get32(b+20); v.x=get32(b+24); v.y=get32(b+28);
     v.width=get32(b+32); v.height=get32(b+36); v.border_argb=get32(b+40);
     v.fill_argb=get32(b+44); v.text_argb=get32(b+48);
-    v.border_width=(uint16_t)((uint16_t)b[52]<<8 | b[53]); v.text_scale=b[54]; v.visible=b[55]; v.text_size=b[56]; v.layout=b[57];
+    v.border_width=(uint16_t)((uint16_t)b[52]<<8 | b[53]); v.text_scale=b[54]; v.visible=b[55]; v.text_size=b[56]; v.layout=b[57]; v.font=b[58];
     memcpy(v.text,b+64,sizeof(v.text)); if (!plan_valid(&v)) return false;
     *out=v; return true;
 }
@@ -118,13 +158,13 @@ bool meiso_display_overlay_evidence_decode(MeisoByteView in, MeisoDisplayOverlay
 }
 
 static const MeisoEndpointId endpoint={UINT64_C(0x444953504c41595f),UINT64_C(0x4855445f454e445f)};
-static const MeisoSchemaRef capability_schema={{UINT64_C(0x444953505f534348),UINT64_C(0x4855445f4341505f)},2};
+static const MeisoSchemaRef capability_schema={{UINT64_C(0x444953505f534348),UINT64_C(0x4855445f4341505f)},3};
 static const uint64_t suffix[3]={UINT64_C(0x4855445f504c414e),UINT64_C(0x4855445f53544154),UINT64_C(0x4855445f50524553)};
 static MeisoRuntimeV4RouteDescriptor hud_route(unsigned i, uint64_t incarnation)
 {
     MeisoRuntimeV4RouteDescriptor v={0}; v.route.endpoint_id=endpoint; v.route.endpoint_incarnation=incarnation;
     v.route.resource.id=(MeisoResourceId){UINT64_C(0x444953504c41595f),suffix[i]};
-    v.route.resource.schema=(MeisoSchemaRef){{UINT64_C(0x444953505f534348),suffix[i]},i==0?2:1};
+    v.route.resource.schema=(MeisoSchemaRef){{UINT64_C(0x444953505f534348),suffix[i]},i==0?3:1};
     v.route.resource.kind=i==2?MEISO_RESOURCE_KIND_STREAM:MEISO_RESOURCE_KIND_STATE;
     v.route.resource.owner=i==0?MEISO_OWNER_ROLE_HOST:MEISO_OWNER_ROLE_EDGE;
     v.route.resource.max_payload_size=i==0?MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE+112:
@@ -155,7 +195,7 @@ bool meiso_display_overlay_configure_runtime(MeisoRuntimeV4Config *out, MeisoSes
     if (!out || !session) return false;
     MeisoRuntimeV4Config v={0}; v.base.session=session;
     v.base.max_endpoints=2; v.base.max_endpoint_history=4; v.base.max_routes=7;
-    v.base.max_capability_bytes=64; v.base.max_desired_profile_bytes_per_endpoint=112;
+    v.base.max_capability_bytes=68; v.base.max_desired_profile_bytes_per_endpoint=112;
     v.base.max_actual_profile_bytes_per_endpoint=32; v.max_blob_transfer_bytes=1;
     if (!meiso_runtime_v4_memory_required(&v)) return false;
     *out=v; return true;
@@ -164,18 +204,18 @@ bool meiso_display_overlay_build_catalog(const MeisoDisplayIngressCatalogConfig 
     const MeisoDisplayOverlayCapability *hud, MeisoMutableBuffer storage,
     MeisoRuntimeEndpointDescriptor *ep, size_t ec, MeisoRuntimeV4RouteDescriptor *rt, size_t rc)
 {
-    if (!video || !hud || !ep || !rt || !storage.data || ec<2 || rc<7 || storage.capacity<64 ||
+    if (!video || !hud || !ep || !rt || !storage.data || ec<2 || rc<7 || storage.capacity<68 ||
         video->capability.frame_format!=MEISO_DISPLAY_INGRESS_FRAME_H264_IDR) return false;
     const void *p[]={video,hud,storage.data,ep,rt};
-    const size_t n[]={sizeof(*video),sizeof(*hud),64,2*sizeof(*ep),7*sizeof(*rt)};
+    const size_t n[]={sizeof(*video),sizeof(*hud),68,2*sizeof(*ep),7*sizeof(*rt)};
     for(unsigned i=0;i<5;++i) for(unsigned j=i+1;j<5;++j) if(overlap(p[i],n[i],p[j],n[j])) return false;
-    uint8_t cap[64]; MeisoRuntimeEndpointDescriptor e[2]={0}; MeisoRuntimeV4RouteDescriptor r[7]={0};
+    uint8_t cap[68]; MeisoRuntimeEndpointDescriptor e[2]={0}; MeisoRuntimeV4RouteDescriptor r[7]={0};
     if (meiso_display_ingress_build_catalog(video,(MeisoMutableBuffer){cap,32},e,1,r,4)!=MEISO_DISPLAY_INGRESS_PROFILE_OK ||
-        !meiso_display_overlay_capability_encode(hud,(MeisoMutableBuffer){cap+32,32})) return false;
+        !meiso_display_overlay_capability_encode(hud,(MeisoMutableBuffer){cap+32,36})) return false;
     e[0].capability.data=storage.data;
-    e[1]=(MeisoRuntimeEndpointDescriptor){endpoint,video->endpoint_incarnation,capability_schema,{storage.data+32,32}};
+    e[1]=(MeisoRuntimeEndpointDescriptor){endpoint,video->endpoint_incarnation,capability_schema,{storage.data+32,36}};
     for(unsigned i=0;i<3;++i) r[4+i]=hud_route(i,video->endpoint_incarnation);
-    memcpy(storage.data,cap,64); memcpy(ep,e,sizeof(e)); memcpy(rt,r,sizeof(r)); return true;
+    memcpy(storage.data,cap,68); memcpy(ep,e,sizeof(e)); memcpy(rt,r,sizeof(r)); return true;
 }
 bool meiso_display_overlay_validate_catalog(const MeisoRuntimeEndpointDescriptor *ep, size_t ec,
     const MeisoRuntimeV4RouteDescriptor *rt, size_t rc, MeisoDisplayIngressCapability *video, MeisoDisplayOverlayCapability *hud)

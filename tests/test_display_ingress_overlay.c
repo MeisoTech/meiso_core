@@ -1,7 +1,10 @@
+#define _POSIX_C_SOURCE 200809L
 #include <meiso/profiles/display_ingress/overlay.h>
 #include "../targets/k230d-linux/display_ingress_overlay_raster.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 #define CHECK(x) do { if(!(x)) { fprintf(stderr,"line %d: %s\n",__LINE__,#x); return 1; } } while(0)
 
 int main(void)
@@ -12,14 +15,14 @@ int main(void)
     session.local_incarnation=31; session.local_nonce=(MeisoSessionNonce){61,62};
     session.protocol=(MeisoProtocolVersion){1,0};
     CHECK(meiso_display_overlay_configure_session(&session));
-    CHECK(session.profile.version==4);
+    CHECK(session.profile.version==6);
     const size_t session_bytes=meiso_session_memory_required(&session);
     CHECK(meiso_display_stereo_overlay_configure_session(&session));
-    CHECK(session.profile.version==5 && meiso_session_memory_required(&session)==session_bytes);
+    CHECK(session.profile.version==7 && meiso_session_memory_required(&session)==session_bytes);
     CHECK(!meiso_display_stereo_overlay_configure_session(NULL));
-    CHECK(meiso_display_overlay_configure_session(&session) && session.profile.version==4);
+    CHECK(meiso_display_overlay_configure_session(&session) && session.profile.version==6);
 
-    MeisoDisplayOverlayCapability cap={1920,1080,65536,48,10,16,16,2,1,3}, decoded_cap;
+    MeisoDisplayOverlayCapability cap={1920,1080,65536,48,10,16,16,2,1,3,3}, decoded_cap;
     MeisoDisplayOverlayPlan plan={0}, decoded;
     plan.generation=501; plan.video_desired_version=3; plan.canvas_width=1920; plan.canvas_height=1080;
     plan.x=100; plan.y=500; plan.width=512; plan.height=128; plan.visible=1;
@@ -41,7 +44,7 @@ int main(void)
     decoded=plan; decoded.text_scale=8; decoded.width=64;
     memset(wire,0xa5,sizeof(wire)); CHECK(!meiso_display_overlay_plan_encode(&decoded,(MeisoMutableBuffer){wire,sizeof(wire)}));
     CHECK(wire[0]==0xa5 && wire[111]==0xa5);
-    memcpy(wire,canonical,sizeof(wire)); wire[58]=1;
+    memcpy(wire,canonical,sizeof(wire)); wire[59]=1;
     decoded.generation=999; CHECK(!meiso_display_overlay_plan_decode((MeisoByteView){wire,sizeof(wire)},&decoded));
     CHECK(decoded.generation==999);
     memcpy(wire,canonical,sizeof(wire)); wire[111]=1;
@@ -107,17 +110,58 @@ int main(void)
     CHECK(w==16 && h==16);
     for(unsigned i=0;i<256;++i) CHECK(pixels[i]==0);
 
+    // The same immutable State carries UTF-8 and an explicit negotiated font.
+    decoded=plan; decoded.layout=1; decoded.width=320; decoded.height=48;
+    decoded.font=MEISO_DISPLAY_OVERLAY_FONT_CJK16; decoded.text_scale=2;
+    memset(decoded.text,0,sizeof(decoded.text));
+    const char mixed[]="你好 a";
+    decoded.text_size=(uint8_t)(sizeof(mixed)-1); memcpy(decoded.text,mixed,sizeof(mixed)-1);
+    uint32_t tw=0,th=0;
+    CHECK(meiso_display_overlay_text_extent(decoded.font,
+        (MeisoByteView){(const uint8_t *)mixed,sizeof(mixed)-1},&tw,&th));
+    CHECK(tw==48 && th==16);
+    CHECK(meiso_display_overlay_plan_encode(&decoded,(MeisoMutableBuffer){wire,sizeof(wire)}));
+    CHECK(wire[58]==1);
+    MeisoDisplayOverlayPlan mixed_decoded;
+    CHECK(meiso_display_overlay_plan_decode((MeisoByteView){wire,sizeof(wire)},&mixed_decoded));
+    CHECK(mixed_decoded.font==1 && !memcmp(mixed_decoded.text,mixed,sizeof(mixed)-1));
+    cap.fonts=1; CHECK(!meiso_display_overlay_plan_supported(&cap,&decoded,3)); cap.fonts=3;
+    CHECK(meiso_display_overlay_plan_supported(&cap,&decoded,3));
+    const uint8_t malformed[][4]={{0xe4,0xbd},{0xc0,0xaf},{0xed,0xa0,0x80},
+        {0xe4,0x41,0xa0},{0xf0,0x9f,0x98,0x80},{0},{0x7f},{0xc3,0xa9}};
+    const size_t lengths[]={2,2,3,3,4,1,1,2};
+    for(unsigned i=0;i<sizeof(lengths)/sizeof(lengths[0]);++i) {
+        tw=123; th=456;
+        CHECK(!meiso_display_overlay_text_extent(1,(MeisoByteView){malformed[i],lengths[i]},&tw,&th));
+        CHECK(tw==123 && th==456);
+    }
+    CHECK(!meiso_k230d_overlay_raster(&cap,&decoded,pixels,65536,&w,&h));
+    // Synthetic glyph rows exercise the exact board raster path without a font
+    // dependency in the portable test. Real glyph appearance is checked on-board.
+    char path[]="/tmp/meiso-overlay-font-XXXXXX";
+    int fd=mkstemp(path); CHECK(fd>=0);
+    CHECK(ftruncate(fd,8+65536*32)==0 && pwrite(fd,"MCJK16\r\n",8,0)==8);
+    const uint8_t stroke[2]={0x80,0};
+    CHECK(pwrite(fd,stroke,2,8+(off_t)0x4f60*32)==2);
+    CHECK(meiso_k230d_overlay_font_open(path)); CHECK(unlink(path)==0); CHECK(close(fd)==0);
+    CHECK(meiso_k230d_overlay_raster(&cap,&decoded,pixels,65536,&w,&h));
+    CHECK(pixels[4*w+4]==decoded.text_argb && pixels[4*w+5]==decoded.text_argb);
+    CHECK(pixels[4*w+6]==decoded.fill_argb);
+    for(unsigned y=0;y<h;++y) CHECK(!memcmp(pixels+y*w,pixels+y*w+960,320*sizeof(uint32_t)));
+    meiso_k230d_overlay_font_close();
+    CHECK(!meiso_k230d_overlay_raster(&cap,&decoded,pixels,65536,&w,&h));
+
     MeisoDisplayIngressCatalogConfig video={1,{1280,720,60000,131072,1200,
         MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_DRM_KMS_PAGE_FLIP,MEISO_STREAM_DEADLINE_UNSUPPORTED,MEISO_DISPLAY_INGRESS_FRAME_H264_IDR}};
-    uint8_t capabilities[64]; MeisoRuntimeEndpointDescriptor endpoints[2]; MeisoRuntimeV4RouteDescriptor routes[7];
+    uint8_t capabilities[68]; MeisoRuntimeEndpointDescriptor endpoints[2]; MeisoRuntimeV4RouteDescriptor routes[7];
     MeisoDisplayIngressCapability decoded_video;
-    CHECK(meiso_display_overlay_build_catalog(&video,&cap,(MeisoMutableBuffer){capabilities,64},endpoints,2,routes,7));
+    CHECK(meiso_display_overlay_build_catalog(&video,&cap,(MeisoMutableBuffer){capabilities,sizeof(capabilities)},endpoints,2,routes,7));
     CHECK(meiso_display_overlay_validate_catalog(endpoints,2,routes,7,&decoded_video,&decoded_cap));
     endpoints[1].capability_schema.version=1;
     CHECK(!meiso_display_overlay_validate_catalog(endpoints,2,routes,7,&decoded_video,&decoded_cap));
-    endpoints[1].capability_schema.version=2; routes[4].route.resource.schema.version=1;
+    endpoints[1].capability_schema.version=3; routes[4].route.resource.schema.version=1;
     CHECK(!meiso_display_overlay_validate_catalog(endpoints,2,routes,7,&decoded_video,&decoded_cap));
-    routes[4].route.resource.schema.version=2;
+    routes[4].route.resource.schema.version=3;
     CHECK(decoded_cap.output_width==1920 && decoded_cap.max_updates_per_second==10);
     CHECK(!meiso_display_overlay_validate_catalog(endpoints,1,routes,4,&decoded_video,&decoded_cap));
     CHECK(meiso_display_ingress_validate_catalog(endpoints,2,routes,7,&decoded_video)==MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_MISMATCH);
@@ -128,7 +172,7 @@ int main(void)
     CHECK(!meiso_display_overlay_validate_catalog(endpoints,2,routes,7,&decoded_video,&decoded_cap));
     routes[6].delivery=MEISO_RUNTIME_DELIVERY_INLINE; capabilities[63]=4;
     CHECK(!meiso_display_overlay_validate_catalog(endpoints,2,routes,7,&decoded_video,&decoded_cap));
-    CHECK(!meiso_display_overlay_build_catalog(&video,&cap,(MeisoMutableBuffer){capabilities,64},endpoints,2,routes,6));
+    CHECK(!meiso_display_overlay_build_catalog(&video,&cap,(MeisoMutableBuffer){capabilities,sizeof(capabilities)},endpoints,2,routes,6));
 
     MeisoDisplayOverlayEvidence evidence={501,17,{1,2,3}}, got;
     CHECK(meiso_display_overlay_evidence_encode(&evidence,(MeisoMutableBuffer){wire,sizeof(wire)}));

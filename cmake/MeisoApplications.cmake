@@ -373,6 +373,18 @@ if(UNIX)
             DESTINATION "${CMAKE_INSTALL_DATADIR}/meiso/init.d" COMPONENT K230dVideoRuntime)
         install(FILES targets/k230d-linux/edge.conf.example
             DESTINATION "${CMAKE_INSTALL_DATADIR}/meiso" COMPONENT K230dVideoRuntime)
+        set(MEISO_K230D_OVERLAY_FONT_FILE "" CACHE FILEPATH "Optional generated CJK16 glyph bank")
+        if(MEISO_K230D_OVERLAY_FONT_FILE)
+            if(NOT EXISTS "${MEISO_K230D_OVERLAY_FONT_FILE}")
+                message(FATAL_ERROR "CJK16 glyph bank does not exist")
+            endif()
+            install(FILES "${MEISO_K230D_OVERLAY_FONT_FILE}"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/meiso" RENAME overlay-cjk16.bin
+                COMPONENT K230dVideoRuntime)
+            install(FILES targets/k230d-linux/overlay-font-NOTICE.txt
+                targets/k230d-linux/overlay-font-OFL.txt
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/meiso" COMPONENT K230dVideoRuntime)
+        endif()
     endif()
 
     option(MEISO_BUILD_DISPLAY_INGRESS_DRM_SERVICE "Build the controlled Linux single-frame DRM service" OFF)

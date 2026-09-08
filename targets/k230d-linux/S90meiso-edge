@@ -23,6 +23,10 @@ start() {
     running && { echo "Meiso Edge already running"; return 0; }
     [ -x "$runner" ] && [ -x "$MEISO_PREFIX/bin/meiso_display_ingress_edge_launch" ] &&
         [ -x "$MEISO_PREFIX/bin/meiso_display_ingress_video_edge" ] || return 2
+    if [ -z "${MEISO_OVERLAY_FONT+x}" ] && [ -r "$MEISO_PREFIX/share/meiso/overlay-cjk16.bin" ]; then
+        MEISO_OVERLAY_FONT="$MEISO_PREFIX/share/meiso/overlay-cjk16.bin"
+    fi
+    if [ -n "${MEISO_OVERLAY_FONT:-}" ]; then export MEISO_OVERLAY_FONT; fi
     rm -f "$pidfile"
     start-stop-daemon -S -b -m -p "$pidfile" -x /bin/sh -O /dev/console -- "$runner" \
         "$MEISO_PREFIX/bin/meiso_display_ingress_edge_launch" \

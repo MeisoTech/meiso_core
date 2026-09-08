@@ -656,7 +656,51 @@ Display Actual 不得因本策略内核或拓扑收据存在而报告 RUNNING。
 9. 可选左右眼 atlas。
 
 第 8 步以前不得声称“Host 应用已经显示到 Edge 实屏”。
-## Display Ingress v4: compressed video with a native screen layer
+## Display Ingress v6/v7: bounded CJK screen text
+
+The current overlay selections are v6 (native video) and v7 (side-by-side video).
+They replace the v4/v5 selections described below; their layer ordering, State
+activation, physical evidence and pixel budgets are unchanged. Mixed selections
+fail Session negotiation. HUD capability and plan schemas advance to v3;
+status/evidence retain their existing schemas.
+
+Capability adds a big-endian font mask:u32 after the existing 32 bytes. Bit 0
+selects the original 5x7 label font; bit 1 selects CJK16. At least one known bit
+is required. CJK16 is advertised only when its local glyph asset is available.
+The plan remains 112 bytes: byte 58 is font (0 or 1), bytes 59–63 are reserved
+zero. Hidden plans require font 0; text length still counts at most 48 bytes.
+Evidence hashes all 112 bytes, including the font and exact text bytes.
+
+Font 0 retains its original repertoire and metrics. CJK16 consumes strict UTF-8
+and draws one spacing glyph per code point, 16 pixels tall. Basic printable
+ASCII U+0020–007E advances 8 pixels; U+3000–30FF, U+3400–4DBF, U+4E00–9FFF and
+U+FF01–FFEF advance 16 pixels. It provides short Chinese/Japanese and basic Latin
+labels, with no normalization, complex-script shaping, multiline layout or emoji
+claim. Integer scaling, colors and borders retain their existing meaning.
+Overlong UTF-8, invalid continuations, unsupported code points, unadvertised fonts
+and text extending outside the region are rejected before rendering. Invalid
+Host file updates retain the previous accepted message while video continues.
+
+K230D uses a local, read-only fixed glyph bank, not a full image in Desired or a
+second media channel. Glyph data and its license accompany the installed runtime;
+absence of that optional asset leaves only font 0 available. Acceptance includes
+mixed text round-trip, malformed UTF-8, font capability mismatch, identical left
+and right glyph pixels, unchanged raster bounds, actual update/hide evidence
+alongside compressed video, and bounded memory on K230D.
+
+For K230D, generate the optional 2 MiB bank with
+`targets/k230d-linux/make_overlay_font.py INPUT.hex.gz OUTPUT.bin`; the converter
+pins the upstream archive hash and documents its download URL. Configure
+`MEISO_K230D_OVERLAY_FONT_FILE` to that generated file when installing the
+`K230dVideoRuntime` component. CMake installs the bank with its SIL OFL license
+and attribution; the font is derived from [GNU Unifont](https://unifoundry.com/unifont/).
+The installed init script selects the bank under the runtime prefix. Foreground
+launchers can set `MEISO_OVERLAY_FONT` to an explicit local bank; an invalid
+explicit path fails startup. With no selected asset, only font 0 is advertised.
+The platform reads 32 bytes per used glyph through one descriptor, with at most
+1536 bytes of glyph rows per update, while reusing the existing HUD pixel buffer.
+
+## Historical v4: compressed video with a native screen layer
 
 `DISPLAY_/INGRESS_:v4` explicitly selects two ordered `VIEW Quad` layers: the
 unchanged v2 H.264 video layer, then one Edge-native screen region. It uses the
@@ -731,7 +775,7 @@ video/HUD identities, stereo eye bounds, spanning pixel/stride budgets and
 transparent gap rasterization, latest replacement, visible/move/hide feedback, and
 unchanged video production with bounded memory on the target board.
 
-## Display Ingress v5: side-by-side video with native screen content
+## Historical v5: side-by-side video with native screen content
 
 `DISPLAY_/INGRESS_:v5` explicitly selects a left/right video atlas. It reuses
 v4's exact two-endpoint/seven-route graph and all its resource schemas/codecs;

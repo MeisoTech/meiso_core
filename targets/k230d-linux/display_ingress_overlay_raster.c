@@ -1,5 +1,26 @@
+#define _POSIX_C_SOURCE 200809L
 #include "display_ingress_overlay_raster.h"
 #include <string.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int font_fd=-1;
+bool meiso_k230d_overlay_font_open(const char *path)
+{
+    if(!path || !*path) return false;
+    int fd=open(path,O_RDONLY|O_CLOEXEC);
+    struct stat st; uint8_t header[8];
+    if(fd<0) return false;
+    if(fstat(fd,&st) || !S_ISREG(st.st_mode) || st.st_size!=8+65536*32 ||
+        pread(fd,header,8,0)!=8 || memcmp(header,"MCJK16\r\n",8)) {
+        close(fd); return false;
+    }
+    if(font_fd>=0) close(font_fd);
+    font_fd=fd; return true;
+}
+void meiso_k230d_overlay_font_close(void)
+{ if(font_fd>=0) close(font_fd); font_fd=-1; }
 
 /* Built-in bitmap glyphs, intentionally limited by the selected capability. */
 static const uint8_t font[36][7]={
@@ -36,13 +57,35 @@ bool meiso_k230d_overlay_raster(const MeisoDisplayOverlayCapability *cap,
     const uint32_t eye=stereo?p->canvas_width/2:0;
     const uint32_t w=p->visible?p->width+eye:16, h=p->visible?p->height:16;
     if ((uint64_t)w*h>capacity) return false;
+    uint8_t rows[MEISO_DISPLAY_OVERLAY_MAX_TEXT][32], advances[MEISO_DISPLAY_OVERLAY_MAX_TEXT];
+    unsigned count=0;
+    if(p->visible && p->text_size && p->font==MEISO_DISPLAY_OVERLAY_FONT_CJK16) {
+        if(font_fd<0) return false;
+        MeisoByteView text={(const uint8_t *)p->text,p->text_size};
+        while(text.size) {
+            uint32_t cp;
+            if(!meiso_display_overlay_cjk_next(&text,&cp) ||
+                pread(font_fd,rows[count],32,8+(off_t)cp*32)!=32) return false;
+            advances[count++]=cp<128?8:16;
+        }
+    }
     memset(pixels,0,(size_t)w*h*sizeof(*pixels));
     if (p->visible) for (unsigned copy=0;copy<(stereo?2U:1U);++copy) {
         const uint32_t offset=copy*eye;
         for(unsigned y=0;y<p->height;++y) for(unsigned x=0;x<p->width;++x)
             pixels[y*w+offset+x]=(x<p->border_width || y<p->border_width ||
                 x>=p->width-p->border_width || y>=p->height-p->border_width)?p->border_argb:p->fill_argb;
-        for(unsigned g=0;g<p->text_size;++g) for(unsigned y=0;y<7;++y) for(unsigned x=0;x<5;++x)
+        if(p->font==MEISO_DISPLAY_OVERLAY_FONT_CJK16) {
+            unsigned advance=0;
+            for(unsigned g=0;g<count;++g) {
+                for(unsigned y=0;y<16;++y) for(unsigned x=0;x<advances[g];++x)
+                    if(rows[g][2*y+x/8] & (0x80U>>(x%8)))
+                        for(unsigned yy=0;yy<p->text_scale;++yy) for(unsigned xx=0;xx<p->text_scale;++xx)
+                            pixels[(p->border_width+y*p->text_scale+yy)*w+offset+
+                                p->border_width+(advance+x)*p->text_scale+xx]=p->text_argb;
+                advance+=advances[g];
+            }
+        } else for(unsigned g=0;g<p->text_size;++g) for(unsigned y=0;y<7;++y) for(unsigned x=0;x<5;++x)
             if(glyph(p->text[g],y)&(1U<<(4-x)))
                 for(unsigned yy=0;yy<p->text_scale;++yy) for(unsigned xx=0;xx<p->text_scale;++xx)
                     pixels[(p->border_width+y*p->text_scale+yy)*w+offset+

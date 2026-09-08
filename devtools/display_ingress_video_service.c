@@ -1,5 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "display_ingress_simulated_service_private.h"
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+#include "../targets/k230d-linux/display_ingress_overlay_raster.h"
+#endif
 #include <meiso/profiles/display_ingress/projection.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -392,7 +395,7 @@ int main(int argc, char **argv)
     }
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
     if (service.stereo_video && !service.overlay_enabled) {
-        fprintf(stderr, "side-by-side video requires native-overlay on (Profile v5)\n");
+        fprintf(stderr, "side-by-side video requires native-overlay on (stereo overlay Profile)\n");
         return 2;
     }
     if (continuous_edge && !local_set) {
@@ -414,7 +417,15 @@ int main(int argc, char **argv)
     if (service.overlay_enabled) {
         /* Canaan DRM framebuffers are at least 16x16; VO stride is in 8-byte
          * units, hence an even ARGB width. Publish these actual constraints. */
-        service.overlay_capability=(MeisoDisplayOverlayCapability){0,0,65536,48,10,16,16,2,1,3};
+        service.overlay_capability=(MeisoDisplayOverlayCapability){0,0,65536,48,10,16,16,2,1,3,1};
+        const char *font_path=getenv("MEISO_OVERLAY_FONT");
+        if(font_path && *font_path) {
+            if(!meiso_k230d_overlay_font_open(font_path)) {
+                fprintf(stderr,"invalid or unavailable CJK16 font asset\n");
+                meiso_ingress_video_close(video); return 2;
+            }
+            service.overlay_capability.fonts|=2;
+        }
         if (meiso_ingress_video_output_size(video,&service.overlay_capability.output_width,
                 &service.overlay_capability.output_height)) { meiso_ingress_video_close(video); return 1; }
     }
@@ -430,6 +441,7 @@ int main(int argc, char **argv)
     int restored = 1;
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
     service_overlay_finish();
+    meiso_k230d_overlay_font_close();
     restored = meiso_ingress_video_close(video) == 0;
 #else
     if (source != NULL) munmap(source, source_size);

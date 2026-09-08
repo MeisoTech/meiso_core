@@ -149,7 +149,7 @@ static bool build_catalog(Service *service)
 
     service->capability = config.capability;
     if (service->overlay_enabled) return meiso_display_overlay_build_catalog(&config,
-        &service->overlay_capability, (MeisoMutableBuffer){service->capability_wire,64},
+        &service->overlay_capability, (MeisoMutableBuffer){service->capability_wire,sizeof(service->capability_wire)},
         service->endpoints,2,service->routes,7);
     return meiso_display_ingress_build_catalog(
         &config,
