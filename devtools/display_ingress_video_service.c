@@ -271,6 +271,16 @@ static bool poll_presentation(Service *s)
             (double)v->views[0].position_meters[0],(double)v->views[1].position_meters[0],
             (double)v->views[0].fov_left_right_up_down[0],(double)v->views[0].fov_left_right_up_down[1],
             (double)v->views[0].fov_left_right_up_down[2],(double)v->views[0].fov_left_right_up_down[3]);
+        for (unsigned i=0;i<v->view_count;++i) {
+            const MeisoDisplayProjectionView *w=&v->views[i];
+            fprintf(stderr,"PROJECTION_VIEW frame=%"PRIu64" view=%u position=%.9g,%.9g,%.9g"
+                " orientation=%.9g,%.9g,%.9g,%.9g fov=%.9g,%.9g,%.9g,%.9g\n",p.sequence,i,
+                (double)w->position_meters[0],(double)w->position_meters[1],(double)w->position_meters[2],
+                (double)w->orientation_xyzw[0],(double)w->orientation_xyzw[1],
+                (double)w->orientation_xyzw[2],(double)w->orientation_xyzw[3],
+                (double)w->fov_left_right_up_down[0],(double)w->fov_left_right_up_down[1],
+                (double)w->fov_left_right_up_down[2],(double)w->fov_left_right_up_down[3]);
+        }
     }
     ledger[slot].sequence = 0; --ledger_count;
     last_evidence_sequence = p.sequence; ++presented;
