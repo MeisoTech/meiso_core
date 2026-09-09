@@ -32,10 +32,14 @@ K230D 硬件解码视频、本地绘制框和短消息，再回传实际呈现�
 
 ## 从固定源码生成两个包
 
-配对代码基线：Meiso `d5da243631edd1d472776707d2ecfe51ea2417cd`，
-Looking Glass `be0f725f037c3d266c560ae712dfc84879009d7d`。使用这些已提交版本的干净源码，
-分别放在工作目录的 `meiso/` 与 `looking_glass/`；Host 构建只需要后者的 `sdc/` 子树。
-可用 `git archive REV` 导出，避免打入其他人的工作中改动。后续配对版本须重新记录和验证。
+配对源码使用两仓的 `v0.1.0-alpha.1` tag；Looking Glass 的
+`sdc/integrations/meiso/meiso.lock.json` 固定所需 Meiso 完整 commit，构建时自动检查。
+仓库、选择版本与升级步骤见[版本配对与发布](releases.md)。使用干净源码分别放在 `meiso/` 与
+`looking_glass/`；Host 构建只需要后者的 `sdc/` 子树。
+
+板测行为基线仍为 Meiso `d5da243631edd1d472776707d2ecfe51ea2417cd` 与
+Looking Glass `be0f725f037c3d266c560ae712dfc84879009d7d`；本次预发布增加配对元数据和构建检查，
+没有改变媒体运行代码或重新宣称板测。hello_xr 的单眼近景红色物体仍待源图对照，双眼光学/内容正确性未完整验收。
 
 2026-09-08基础包按下列命令从空构建目录生成并迁移，在同一Host服务中通过纯消息、
 仓外SDK消息应用及真实OpenXR视频+消息的显示、更新、隐藏和退出清理；摄像头观察两类实屏内容。

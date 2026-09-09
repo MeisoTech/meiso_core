@@ -1,6 +1,7 @@
 @PACKAGE_INIT@
 
 set(MeisoGlass_VERSION "@PROJECT_VERSION@")
+set(MeisoGlass_SOURCE_REVISION "@MEISO_SOURCE_REVISION@")
 set(
     MeisoGlass_SUPPORTED_COMPONENTS
     Core

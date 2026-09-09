@@ -17,3 +17,6 @@
 
 五份通用规范、当前 Profile/wire 合同和源码 API 不归档。历史文件中的
 `CURRENT`、`NOT IMPLEMENTED`、`TARGET NOT RUN` 等标记只对它的截止点成立。
+
+- [截至2026-08-30的阶段状态](system-report-through-20260830.md)：已被当前应用快速开始替代。
+- [C SDK结构审计](c-sdk-organization-report.md)：已完成的结构整理与当时欠账。

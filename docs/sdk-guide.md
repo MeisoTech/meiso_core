@@ -64,7 +64,9 @@ Package 名为 `MeisoGlass 0.1.0`，imported target namespace 为 `Meiso::`。
 | `Control` | `Meiso::CompositionControlSession` | connected control fd integration |
 | `Host` | Host Runtime、Remote Edge | native Host integration |
 
-K230D/Linux adapter 与 service 是 build-only target，不进入 portable install export。
+K230D/Linux adapter 不进入 portable 库导出；视频程序与启动入口可通过独立的
+`K230dVideoRuntime` 组件安装。两端应用包和构建依赖见[快速开始](host-edge-quickstart.md)。
+安装包同时导出源码 revision；Looking Glass 用固定清单检查它，见[版本配对](releases.md)。
 内部协议 fixture 和 Four-kind lab 也不安装。
 
 `cmake --install --component` 只安装指定分量，不递归安装依赖；构造组合 prefix 时必须

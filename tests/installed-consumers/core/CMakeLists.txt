@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.21)
 project(MeisoGlassInstalledCoreConsumer LANGUAGES C)
 
 find_package(MeisoGlass 0.1 REQUIRED CONFIG COMPONENTS Core)
+if(NOT DEFINED MeisoGlass_SOURCE_REVISION OR MeisoGlass_SOURCE_REVISION STREQUAL "")
+    message(FATAL_ERROR "Installed package lost its source revision")
+endif()
 
 if(NOT TARGET Meiso::Core OR
    NOT TARGET Meiso::CoreResources OR

@@ -1,117 +1,64 @@
 # Meiso Glass
 
-[![CI](https://github.com/anantheparty/meiso_glass/actions/workflows/ci.yml/badge.svg)](https://github.com/anantheparty/meiso_glass/actions/workflows/ci.yml)
+[![CI](https://github.com/MeisoTech/meiso_glass/actions/workflows/ci.yml/badge.svg)](https://github.com/MeisoTech/meiso_glass/actions/workflows/ci.yml)
 
-Meiso Glass 是面向分体式 XR/AR 的开放 Resource 与 Composition 契约，以及一组
-portable C11 参考实现和可重复实验。
+Meiso Glass 是分体式 AR 设备的通信与设备 SDK。眼镜端 **Edge** 负责采集、解码和显示；
+外部 **Host** 运行应用、渲染和重计算，通过同一套接口交付内容、读取设备能力与实际状态。
 
-## 模型
+当前可运行组合是 **Jetson Host → K230D 128 MiB Edge**：Host 提供左右眼压缩视频，
+Edge 硬件解码并叠加本地绘制的框和中文短消息。纯消息可以独立运行。
 
-- `Edge` 拥有设备 truth、platform adapter、本地安全行为，并对已声明的物理输出拥有最终 authority；
-- `Host` 运行应用与重计算，通过 portable Edge facade 操作远端或模拟 Edge；
-- 公共 Resource 是 `State / Stream / Action / Blob`，MediaStream 是 Stream 的专业化；
-- Core 负责 identity、Session 与 Resource delivery，Runtime 负责 capability、endpoint 和控制，
-  Host SDK 负责 opaque `MeisoEdgeHandle` 与应用 API。
+- **运行设备或写应用**：[Host/Edge 快速开始](docs/host-edge-quickstart.md)
+- **选择配套版本**：[版本配对与发布](docs/releases.md)
+- **理解代码边界**：[SDK 指南](docs/sdk-guide.md) · [实现地图](docs/system-runtime-map.md)
+- **修改协议或查细节**：[文档导航](docs/index.md)
 
-项目不绑定特定 SoC、开发板、操作系统、图形 API 或网络载体。IP、端口和 TCP adapter
-属于 bootstrap/transport，不是 peer identity。
+## 当前能做什么
 
-## 当前状态
+| 能力 | 当前范围 |
+|---|---|
+| Host 视频 → Edge 显示 | 1280×720 H.264 左右眼画面；1920×1080 物理输出，每眼原生像素居中。输入和输出尺寸分别配置。 |
+| Edge 本地 2D | 一个矩形/短文字区域，可双眼重复；支持更新、隐藏、纯消息和视频叠加。 |
+| 应用接入 | 可安装的 C++20 Host 客户端 SDK、本地 IPC 服务、OpenXR 逐眼视频入口；当前一次接入一个应用。 |
+| 状态与恢复 | 实际呈现反馈、应用退出清理、连接失效后建立新 Session；当前配对部署已验证 Host/Edge 各自重启恢复。 |
+| 相机与其他数据 | 已有独立 Composition 相机/遥测实现；相机适配器为 320×240 NV12。持续感知、AI 推理和录像应用尚未整合。 |
 
-| 组件 | 已有实现 | 证据边界 |
-| --- | --- | --- |
-| Resource Core | caller-owned arena 上的 bounded `State / Stream / Action / Blob` | portable C11 source API，不冻结二进制 ABI |
-| Session 与 Runtime | exact Profile handshake、bounded wire、catalog、State/Stream production gate、Blob carriage 与 MRT0 v4 external route | Host semantic/wire 与 POSIX loopback；不包含安全 transport 或通用 discovery |
-| Wi-Fi telemetry | macOS Host、K230D Linux Edge、direct-IP State/Stream 闭环与本地 dashboard | 已有受限 board evidence，不等于通用产品 Runtime |
-| Composition Profile | `COMPOSE_/_PROFILE:v1`、MRT0 v4、6/18 graph、SceneStore、coordinator、scheduler 与双路 media | Host/loopback semantic、wire 与 transport evidence；fresh board gate 待本轮收口 |
-| CPU raster / Edge compositor | bounded 320×240 reference CPU off-screen renderer 与 integrated K230D backend | 旧身份有 board render/CMFB 证据；正式身份待 fresh 复验；不证明 driver scanout 或物理显示 |
-| K230D camera capture | bounded Linux V4L2 four-buffer NV12 adapter 与一次三帧 target receipt | `BOARD_VERIFIED` 仅指单适配器物理采集；不证明 CameraMedia transport、combined service、性能或 E2E |
-| K230D Composition E2E chain | 同一Session内Blob、Scene/C2、CPU render、Render/Camera Media、Wi-Fi/DeviceTelemetry与local Web bridge | [当前身份的实机复验门](docs/k230d-composition-e2e.md)尚待fresh run；旧身份证据只保留在archive，不证明当前工作树 |
-| Composition Host SDK facade | opaque `EdgeHandle`、exact 6/18 discovery、typed desired/actual/Stream/Blob/Composition snapshot、media borrow/release、caller-owned deterministic simulator、canonical trace v1，以及同一native Composition Host Bridge的Composition Editor离线入口 | HostRuntime/AF_INET与simulator两种backend；remote Composition Editor可在typed transport/Session/catalog terminal后启动fresh Host child并回放最新local editor intent，但不resume旧Session/handle，也不等于通用SDK/backend或Edge重启恢复；`--simulator`可从本地编辑器真实子进程驱动Mesh→Scene/C2→source-pinned CPU RenderResult和完整320×240 RGBA CMFB preview、Wi-Fi、DeviceTelemetry及两路media State，但不建立Session/TCP、camera frame、target或physical evidence，也不承诺跨target像素一致；trace v1仍只重放Wi-Fi/media |
+这是开发基线。30 Hz 输入不代表已达到 30fps 显示；6DoF、Edge 姿态微调、完整 XR 设备接口、
+复杂排版和安全传输仍未交付；出图通过不等于双眼光学校准验收。具体环境和证据边界见快速开始。
 
-逐版本提交、CI、资源账本和 target receipt 统一记录在
-[系统进展](docs/system-report.md)，不在首页重复维护。
+## 代码与仓库怎样组合
 
-## 构建与测试
+| 目录 | 职责 |
+|---|---|
+| `include/meiso/core`、`src/core` | C11 Core：身份、Session、State / Stream / Action / Blob 传输语义。 |
+| `src/runtime`、`profiles`、`integrations` | 资源目录、能力协商、desired/actual、媒体契约与 Host facade。 |
+| `targets/k230d-linux` | K230D 的摄像头、解码、DRM 显示和 Linux 服务适配。 |
+| `applications`、`simulation`、`tests` | 使用入口、模拟后端与契约检查。 |
 
-Linux/macOS：
+[Looking Glass](https://github.com/MeisoTech/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
+它通过 CMake `find_package(MeisoGlass)` 链接本仓安装的库，再交付 Host 服务和客户端 SDK；
+本仓另外交叉编译 Edge 包。两仓按固定源码组合发布，不需要整仓复制或相同的提交节奏。
+
+协议核心可以跨平台复用；运行包仍需要相应 OS、编解码和设备驱动。板级固件及私有实验资料不属于
+本 SDK 的源码包。
+
+## 构建可移植库
+
+需要 C11 编译器和 CMake 3.21 或更高版本。此命令构建库与测试，不会部署设备：
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-纯 library/SDK 构建不创建应用和测试 target：
+只构建 SDK 可添加 `-DBUILD_TESTING=OFF -DMEISO_BUILD_APPLICATIONS=OFF`。
+按组件安装、仓外链接和 Windows 构建见 [SDK 指南](docs/sdk-guide.md)；运行 Jetson/K230D
+使用 [配对快速开始](docs/host-edge-quickstart.md)，不是上面这条本机构建命令。
 
-```sh
-cmake -S . -B build-sdk \
-  -DBUILD_TESTING=OFF \
-  -DMEISO_BUILD_APPLICATIONS=OFF \
-  -DCMAKE_INSTALL_PREFIX=/tmp/meiso
-cmake --build build-sdk --parallel
-cmake --install build-sdk --component Core
-cmake --install build-sdk --component Runtime
-```
+## 参与开发
 
-仓外 consumer 可以只选 Core，或在同一 prefix 中安装 Core+Runtime 后链接
-`Meiso::Runtime`：
+遵循 [贡献约定](AGENTS.md)，从一条具体应用闭环开始；协议变更同步其所属规范，
+平台变化补相应实机结果。提交时保留别人的工作中内容，原始日志、凭据和固件镜像不进产品仓。
 
-```cmake
-find_package(MeisoGlass 0.1 CONFIG REQUIRED COMPONENTS Runtime)
-target_link_libraries(my_runtime PRIVATE Meiso::Runtime)
-```
-
-公开头按职责使用 `<meiso/core/...>`、`<meiso/runtime/...>`、
-`<meiso/profiles/...>` 等 namespace；本轮是 pre-public 硬迁移，不提供旧根头、旧 target alias
-或 forwarding shim。完整组件图与安装例见 [SDK 指南](docs/sdk-guide.md)。
-
-> 注：当前仓库尚无 `LICENSE`/`COPYING`/`NOTICE`。上述 package 已通过技术安装与
-> relocation 验证，但不因此自动具备对外分发授权。
-
-Windows（MSVC x64 v143 + Ninja）：
-
-```powershell
-cmake --preset windows-msvc-debug
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
-```
-
-## 从这里开始
-
-产品契约：
-
-- [文档入口与权威关系](docs/index.md)
-- [系统设计](docs/system.md)
-- [Resource](docs/resource.md)、[Runtime](docs/runtime.md)、[Link](docs/link.md) 与
-  [Composition](docs/composition.md) 契约
-
-实现与接入：
-
-- [Jetson → K230D 视频、消息与应用 SDK 快速开始](docs/host-edge-quickstart.md)
-- [SDK 设计与开发指南](docs/sdk-guide.md)
-- [Session Core v0](docs/session-core-v0.md) 与
-  [Runtime negotiation core v0](docs/runtime-core-v0.md)
-- [Host 集成回执 v0](docs/host-integration-receipt-v0.md)
-- [Composition Edge deterministic trace v1](docs/composition-edge-trace-v1.md)
-
-实验与 target：
-
-- [Wi-Fi telemetry Profile](profiles/wifi/README.md) 与
-  [direct-IP 实装规则](docs/wifi-runtime-direct-ip-v0.md)
-- [Composition Profile](profiles/composition/README.md) 与
-  [Edge local compositor 方案](docs/edge-local-compositor-v0.md)
-- [Composition Editor](devtools/web/composition_editor/README.md)
-- [K230D Linux Edge](targets/k230d-linux/README.md)
-- [K230D Composition E2E 验收状态](docs/k230d-composition-e2e.md)
-
-## 尚未完成
-
-当前仓库不是 application-facing 完整产品：已有正式
-`COMPOSE_/_PROFILE:v1` 的首个 portable Edge
-facade、包含离线Composition编辑闭环的deterministic simulator与同一native Composition Host Bridge/Dashboard入口、固定版本canonical trace，但通用backend plugin、discovery/reconnect、
-State watch、Action、认证与安全transport尚未完成。
-旧身份的 Composition Edge 已有一次准确 K230D 上的 combined off-screen
-render/camera MediaStream 与 local Web bridge 证据；当前正式身份需 fresh 复验。
-Dashboard 仅实现 host-local fresh-child 自动重连，板端
-network/Edge恢复、Session resume、通用fresh Edge、性能、长稳和physical presentation evidence仍未完成。
+仓库尚未提供源代码许可证；技术预发布不自动授予开源使用或再分发权利。

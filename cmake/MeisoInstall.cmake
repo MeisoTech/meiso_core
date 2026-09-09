@@ -2,6 +2,7 @@
 # installing Core alone never copies Runtime/Profile/Host artifacts.
 
 include(CMakePackageConfigHelpers)
+include("${CMAKE_CURRENT_LIST_DIR}/MeisoSourceRevision.cmake")
 
 set(
     MEISO_INSTALL_CMAKEDIR
