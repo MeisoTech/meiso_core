@@ -29,11 +29,11 @@ Host运行应用、交付内容并理解Edge真实状态；Edge在K230D **128 Mi
 | --- | --- |
 | 连接身份、Session、State/Stream/Action/Blob传输语义 | Meiso Core：`include/meiso/core/`、`src/core/`。 |
 | 能力/路由协商、desired/actual、资源与媒体契约、Host与Edge框架 | Meiso SDK：`include/meiso/runtime/`、`profiles/`、`integrations/`。代码中Runtime仍指这一协议运行库，不代表应用兼容层。 |
-| 本机应用API/IPC、组合与平台输入、编码及应用生命周期 | Looking Glass `sdc/`；[Meiso Host应用入口](../../looking_glass/sdc/integrations/meiso/presentation_sink/README.md)。它通过公开SDK契约对接设备。 |
+| 本机应用API/IPC、组合与平台输入、编码及应用生命周期 | Looking Glass `sdc/`；[Meiso Host应用入口](https://github.com/shisuiki/looking_glass/blob/v0.1.0-alpha.1/sdc/integrations/meiso/presentation_sink/README.md)。它通过公开SDK契约对接设备。 |
 | K230D驱动适配、有限缓冲、解码/显示及真实反馈 | Meiso `targets/k230d-linux/`；[构建、安装与BusyBox启动](../targets/k230d-linux/README.md#连续视频与原生2d构建安装和启动)。 |
 
-保留两个产品仓：共用Meiso SDK与Looking Glass Host应用集成。H2E是Meiso的工作树，
-其已验代码已进入主分支；实验记录仓保存协作/板级证据，不是第三套SDK。
+保留两个产品仓：共用Meiso SDK与Looking Glass Host应用集成。H2E曾是Meiso的工作树，
+其已验代码已进入主分支，工作树已清理；实验记录仓保存协作/板级证据，不是第三套SDK。
 另一个graphics-lanes开发工作树及工作中修改不因这次整合自动成为已验产品基线。
 
 ## 已验证的使用边界
