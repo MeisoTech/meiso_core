@@ -35,7 +35,7 @@ Edge 硬件解码并叠加本地绘制的框和中文短消息。纯消息可以
 | `targets/k230d-linux` | K230D 的摄像头、解码、DRM 显示和 Linux 服务适配。 |
 | `applications`、`simulation`、`tests` | 使用入口、模拟后端与契约检查。 |
 
-[Looking Glass](https://github.com/MeisoTech/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
+[Looking Glass](https://github.com/shisuiki/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
 它通过 CMake `find_package(MeisoGlass)` 链接本仓安装的库，再交付 Host 服务和客户端 SDK；
 本仓另外交叉编译 Edge 包。两仓按固定源码组合发布，不需要整仓复制或相同的提交节奏。
 

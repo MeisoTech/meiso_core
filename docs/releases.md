@@ -11,7 +11,7 @@ Meiso Glass 与 Looking Glass 是独立仓库。**需要匹配的是经过验证
 
 ```sh
 git clone --branch v0.1.0-alpha.1 https://github.com/MeisoTech/meiso_glass.git meiso
-git clone --branch v0.1.0-alpha.1 https://github.com/MeisoTech/looking_glass.git looking_glass
+git clone --branch v0.1.0-alpha.1 https://github.com/shisuiki/looking_glass.git looking_glass
 ```
 
 仓库保持 Private，需要已有读取权限。然后按[快速开始](host-edge-quickstart.md)先安装 Meiso SDK，
