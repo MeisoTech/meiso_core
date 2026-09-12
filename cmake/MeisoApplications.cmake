@@ -341,6 +341,34 @@ if(UNIX)
     target_link_libraries(meiso_display_ingress_video_host PRIVATE meiso_posix_tcp_adapter
         meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input)
     meiso_enable_warnings(meiso_display_ingress_video_host)
+    option(MEISO_BUILD_DESKTOP_EDGE "Build portable software-decoded Display Ingress Edge" OFF)
+    if(MEISO_BUILD_DESKTOP_EDGE)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(MEISO_DESKTOP_AV REQUIRED IMPORTED_TARGET libavcodec libavutil libswscale)
+        add_executable(meiso_desktop_edge ${MEISO_VIDEO_SERVICE_SOURCES}
+            devtools/display_ingress_video_overlay.c
+            targets/k230d-linux/display_ingress_overlay_raster.c
+            adapters/desktop/display_ingress_video_backend.c)
+        target_compile_definitions(meiso_desktop_edge PRIVATE
+            MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
+            MEISO_DISPLAY_INGRESS_DESKTOP_EDGE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
+        target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter
+            meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
+            PkgConfig::MEISO_DESKTOP_AV)
+        meiso_enable_warnings(meiso_desktop_edge)
+        add_executable(meiso_desktop_host ${MEISO_VIDEO_SERVICE_SOURCES})
+        target_compile_definitions(meiso_desktop_host PRIVATE
+            MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
+        target_link_libraries(meiso_desktop_host PRIVATE meiso_posix_tcp_adapter
+            meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input)
+        meiso_enable_warnings(meiso_desktop_host)
+        install(PROGRAMS devtools/desktop/launch.py DESTINATION "${CMAKE_INSTALL_BINDIR}"
+            RENAME meiso-desktop-launch COMPONENT DesktopRuntime)
+        install(PROGRAMS devtools/desktop/pair.py DESTINATION "${CMAKE_INSTALL_BINDIR}"
+            RENAME meiso-desktop-pair COMPONENT DesktopRuntime)
+        install(TARGETS meiso_desktop_edge meiso_desktop_host RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT DesktopRuntime)
+    endif()
+
     option(MEISO_BUILD_K230D_VIDEO_SERVICE "Build native K230D MVX/DRM video service" OFF)
     if(MEISO_BUILD_K230D_VIDEO_SERVICE)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

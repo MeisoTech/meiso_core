@@ -1,0 +1,76 @@
+# Desktop Host / Edge development
+
+Host and Edge are roles. Desktop validation uses the production Session,
+Catalog, Desired/Actual, Display Ingress H.264 profile and bounded TCP/UDP
+adapters. Only the output backend is replaced. No K230D or camera is required.
+
+## Build and run a local pair
+
+Install CMake, pkg-config and FFmpeg development libraries (`libavcodec`,
+`libavutil`, `libswscale`), then build:
+
+```sh
+cmake -S . -B build-desktop -DMEISO_BUILD_DESKTOP_EDGE=ON
+cmake --build build-desktop --target meiso_desktop_host meiso_desktop_edge
+cmake --install build-desktop --component DesktopRuntime --prefix "$PWD/desktop-install"
+```
+
+Prepare a local 1280×720 H.264 Annex B file, one Baseline IDR slice per access
+unit, with repeated SPS/PPS and optional AUD. The same 128 KiB AU limit applies
+as on K230D. For example, with an explicitly supplied local video:
+
+```sh
+ffmpeg -i input.mp4 -frames:v 60 -c:v libx264 -threads 1 \
+  -preset ultrafast -tune zerolatency -profile:v baseline -pix_fmt yuv420p \
+  -x264-params keyint=1:min-keyint=1:scenecut=0:repeat-headers=1:aud=1:slices=1 \
+  -b:v 1500k -f h264 source.h264
+python3 devtools/desktop/pair.py \
+  --host-service build-desktop/meiso_desktop_host \
+  --edge-service build-desktop/meiso_desktop_edge \
+  --source source.h264 --output-directory runs/desktop-pair
+```
+
+`pair.py` creates real connected TCP and UDP sockets, passes the descriptors to
+the two independent executables, and checks their exits. It contains no Meiso
+wire codec. The output directory must be new. The Edge decodes into a single
+owned RGBA raster and returns **SIMULATED** evidence with the actual accepted AU
+sequence/digest. `first.ppm`, `latest.ppm`, `last.ppm` allow inspection; the
+received elementary stream is recorded up to 64 MiB, then recording stops while
+decoding continues. This is a finite debugging capture, not platform history.
+The installed commands are `meiso-desktop-pair`, `meiso-desktop-launch`,
+`meiso_desktop_host` and `meiso_desktop_edge`; the same pair invocation works
+with their installed paths. FFmpeg shared libraries remain a runtime dependency.
+
+The reference Host here replays prepared encoded input. It validates the shared
+SDK/transport but does not replace a Looking Glass HostRuntime application test.
+Software completion is not a DRM page flip, physical visibility, K230D memory
+performance or a measurement of capture-to-photon delay.
+
+## Mixed devices
+
+`devtools/desktop/launch.py --help` supplies explicit bind/peer/control/media
+ports and execs the same service on macOS or Linux. Connected descriptors remain
+the deployment boundary; tunnels/relays do not enter the product protocol.
+It can connect the desktop Edge to Looking Glass's real HostRuntime when that
+Host explicitly selects simulated evidence. The default physical Host must
+reject this capability; it must never silently weaken its evidence requirement.
+Use distinct configured peer identities, sockets and output directories for
+continuous mixed-device development.
+
+For a routed LAN, start the Looking Glass Host with its configured Edge address
+and media port, `--presentation-evidence simulated --native-overlay off`. Start
+the Edge with `meiso-desktop-launch --role edge`, the corresponding bind/peer
+addresses and TCP/UDP ports. Pass `--continuous on --output-directory NEW_DIR`
+and both configured peer identities after the launcher's `--` separator.
+Then run the normal native application against the Host's IPC socket with
+`--overlay off`. The application and its cleanup use the same HostRuntime API.
+If a deployment uses a NAT or tunnel, its UDP return mapping must remain valid
+while the application is idle; a connected TCP control stream alone does not
+keep that mapping alive. This is a deployment responsibility.
+
+Current desktop support is the H.264 video profile with an offscreen output
+raster. Native HUD, centered physical-eye crops and camera uplink are not yet
+implemented in this adapter. Their capabilities are not advertised; selecting
+them fails before the Session starts. Parameter snapshots for offline optics
+are separate from real device calibration. Actual supported dimensions and AU
+budgets come from each peer's Catalog rather than the desktop's memory size.

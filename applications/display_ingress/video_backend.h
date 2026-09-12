@@ -1,10 +1,11 @@
-#ifndef MEISO_K230D_DISPLAY_INGRESS_VIDEO_BACKEND_H
-#define MEISO_K230D_DISPLAY_INGRESS_VIDEO_BACKEND_H
+#ifndef MEISO_DISPLAY_INGRESS_VIDEO_BACKEND_H
+#define MEISO_DISPLAY_INGRESS_VIDEO_BACKEND_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-/* Private K230D Linux adapter.  The owning service decides admission and drop policy. */
+/* Platform adapter boundary. The service owns admission, transport and evidence policy.
+ * K230D uses MVX/DRM; desktop validation uses software decoding/offscreen output. */
 typedef struct MeisoIngressVideo MeisoIngressVideo;
 
 typedef enum MeisoIngressVideoSubmitResult {
@@ -27,16 +28,19 @@ typedef enum MeisoIngressVideoConnectorKind {
 
 typedef struct MeisoIngressVideoPresentation {
     uint64_t sequence;
+    /* Legacy field name: adapter completion on its monotonic clock. The
+     * selected evidence class, not this timestamp, establishes physical scope. */
     uint64_t page_flip_monotonic_ns;
     uint32_t output_width;
     uint32_t output_height;
     MeisoIngressVideoConnectorKind connector_kind;
 } MeisoIngressVideoPresentation;
 
-/* Opens one decoder/empty NV12 plane, two input DMA buffers and provisional capture.
- * Full-size NV12 surfaces are allocated after the first source-change event. */
+/* Opens one bounded decoder/output adapter. Paths select platform resources:
+ * K230D uses MVX/DRM devices; desktop uses a new output directory and ignores
+ * video_path. Platform-specific allocations belong to each implementation. */
 MeisoIngressVideo *meiso_ingress_video_open(const char *video_path,
-                                            const char *drm_path,
+                                            const char *output_path,
                                             uint32_t width,
                                             uint32_t height);
 
@@ -51,7 +55,8 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *vide
                                                           const uint8_t *au,
                                                           size_t au_size);
 
-/* Performs at most one bounded (~33 ms) real DRM event wait. */
+/* Performs one bounded completion poll (K230D: at most ~33 ms DRM event wait;
+ * desktop: software raster completion). No unbounded frame queue. */
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *video,
                                                       MeisoIngressVideoPresentation *presentation);
 
@@ -74,7 +79,7 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
 MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(
     MeisoIngressVideo *video, MeisoIngressVideoPresentation *presentation);
 
-/* Restores the selected plane, stops MVX, releases all exported DMA-BUFs and closes fds.
+/* Releases adapter resources and performs its requested output cleanup.
  * Returns 0 only when all requested recovery operations succeeded. */
 int meiso_ingress_video_close(MeisoIngressVideo *video);
 

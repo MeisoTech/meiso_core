@@ -16,7 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
-#include "../targets/k230d-linux/display_ingress_video_backend.h"
+#include "../applications/display_ingress/video_backend.h"
 bool service_overlay_initialize(Service *, MeisoIngressVideo *);
 bool service_overlay_consume(Service *, const MeisoRuntimeEvent *);
 bool service_overlay_poll(Service *);
@@ -110,7 +110,7 @@ bool service_video_host_event(Service *s, const MeisoRuntimeEvent *event)
         event->stream_sample.sender_deadline.present || event->stream_sample.dependency.size != 0 ||
         meiso_display_ingress_evidence_decode(event->stream_sample.payload, &evidence) != MEISO_DISPLAY_INGRESS_PROFILE_OK ||
         !meiso_display_ingress_evidence_supported(&s->capability, &evidence, s->production_epoch) ||
-        evidence.evidence_class != MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP ||
+        evidence.evidence_class != SERVICE_EVIDENCE_CLASS ||
         evidence.media_stream_epoch != s->media_stream_epoch ||
         evidence.displayed_frame_sequence <= last_evidence_sequence ||
         evidence.displayed_frame_sequence > submitted ||
@@ -258,7 +258,7 @@ static bool poll_presentation(Service *s)
     if (slot == 16 || p.sequence <= last_evidence_sequence || p.page_flip_monotonic_ns == 0)
         return service_fail(s, "display", "frame-identity");
     memset(&pending, 0, sizeof(pending));
-    pending.evidence_class = MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP;
+    pending.evidence_class = SERVICE_EVIDENCE_CLASS;
     pending.connector_kind = p.connector_kind == MEISO_INGRESS_VIDEO_CONNECTOR_DSI ? MEISO_DISPLAY_INGRESS_CONNECTOR_DSI :
         p.connector_kind == MEISO_INGRESS_VIDEO_CONNECTOR_HDMI ? MEISO_DISPLAY_INGRESS_CONNECTOR_HDMI : MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED;
     pending.output_width = p.output_width; pending.output_height = p.output_height;
@@ -379,6 +379,9 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--source") == 0) input = argv[i+1];
         else if (strcmp(argv[i], "--video-device") == 0) video_path = argv[i+1];
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+        else if (strcmp(argv[i], "--output-directory") == 0) drm_path = argv[i+1];
+#endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
         else if (strcmp(argv[i], "--continuous") == 0 && strcmp(argv[i+1], "on") == 0) continuous_edge=true;
         else if (strcmp(argv[i], "--video-layout") == 0 &&
@@ -395,6 +398,17 @@ int main(int argc, char **argv)
         return 2;
     }
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+    /* Current HUD Profile defines physical flip evidence only. Do not forge it. */
+    if (service.overlay_enabled || service.stereo_video) {
+        fprintf(stderr,"desktop HUD/stereo Profile binding is not implemented; use native video raster\n");
+        return 2;
+    }
+    if (strcmp(drm_path,"/dev/dri/card0")==0) {
+        fprintf(stderr,"desktop Edge requires an explicit new --output-directory\n"); return 2;
+    }
+    fprintf(stderr,"DESKTOP_EDGE evidence=SIMULATED physical_presentation=false backend=ffmpeg-offscreen\n");
+#endif
     if (service.stereo_video && !service.overlay_enabled) {
         fprintf(stderr, "side-by-side video requires native-overlay on (stereo overlay Profile)\n");
         return 2;
@@ -451,10 +465,11 @@ int main(int argc, char **argv)
     printf("VIDEO_RESULT role=%s ok=%d submitted=%" PRIu64 " presented=%" PRIu64
         " evidence=%" PRIu64 " last_frame=%" PRIu64 " rejected=%" PRIu64 " pending=%" PRIu64
         " transport_drops=%" PRIu64 " reassembly_drops=%" PRIu64 " latest_drops=%" PRIu64
-        " restored=%d close_clean=%d failure=%s/%s\n",
+        " restored=%d close_clean=%d failure=%s/%s evidence_class=%u\n",
         service.role_name, ok && restored, submitted, presented, evidence_count, last_evidence_sequence,
         rejected, ledger_count, media_state.transport_whole_frames_dropped, media_state.reassembly_frames_dropped,
         media_state.unread_latest_frames_dropped, restored, service.close_clean,
-        service.failure_plane ? service.failure_plane : "none", service.failure_stage ? service.failure_stage : "none");
+        service.failure_plane ? service.failure_plane : "none", service.failure_stage ? service.failure_stage : "none",
+        (unsigned)SERVICE_EVIDENCE_CLASS);
     return ok && restored ? 0 : 1;
 }

@@ -1,5 +1,5 @@
 #include "display_ingress_simulated_service_private.h"
-#include "../targets/k230d-linux/display_ingress_video_backend.h"
+#include "../applications/display_ingress/video_backend.h"
 #include "../targets/k230d-linux/display_ingress_overlay_raster.h"
 #include <inttypes.h>
 #include <stdio.h>
