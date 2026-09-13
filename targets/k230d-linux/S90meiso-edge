@@ -21,6 +21,19 @@ running() {
 
 start() {
     running && { echo "Meiso Edge already running"; return 0; }
+    set --
+    if [ -n "${MEISO_CAMERA_DEVICE:-}${MEISO_CAMERA_PORT:-}" ]; then
+        if [ -z "${MEISO_CAMERA_DEVICE:-}" ] || [ -z "${MEISO_CAMERA_PORT:-}" ]; then
+            echo "Set both MEISO_CAMERA_DEVICE and MEISO_CAMERA_PORT" >&2; return 2
+        fi
+        case "$MEISO_CAMERA_PORT" in ''|*[!0-9]*|??????*)
+            echo "Invalid camera TCP port" >&2; return 2 ;; esac
+        if [ "$MEISO_CAMERA_PORT" -lt 1 ] || [ "$MEISO_CAMERA_PORT" -gt 65535 ] ||
+            [ "$MEISO_CAMERA_PORT" -eq "${MEISO_CONTROL_PORT:-4440}" ]; then
+            echo "Camera needs a distinct TCP port in 1..65535" >&2; return 2
+        fi
+        set -- --camera-device "$MEISO_CAMERA_DEVICE" --camera-port "$MEISO_CAMERA_PORT"
+    fi
     [ -x "$runner" ] && [ -x "$MEISO_PREFIX/bin/meiso_display_ingress_edge_launch" ] &&
         [ -x "$MEISO_PREFIX/bin/meiso_display_ingress_video_edge" ] || return 2
     if [ -z "${MEISO_OVERLAY_FONT+x}" ] && [ -r "$MEISO_PREFIX/share/meiso/overlay-cjk16.bin" ]; then
@@ -35,7 +48,7 @@ start() {
         "${MEISO_DRM_DEVICE:-/dev/dri/card0}" "${MEISO_EDGE_MEDIA_PORT:-4442}" \
         --width "${MEISO_WIDTH:-1280}" --height "${MEISO_HEIGHT:-720}" \
         --native-overlay on --continuous on --video-layout "${MEISO_VIDEO_LAYOUT:-side-by-side}" \
-        --local-peer "$MEISO_LOCAL_PEER" --expected-peer "$MEISO_EXPECTED_PEER"
+        --local-peer "$MEISO_LOCAL_PEER" --expected-peer "$MEISO_EXPECTED_PEER" "$@"
 }
 
 stop() {

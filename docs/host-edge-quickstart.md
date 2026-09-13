@@ -147,6 +147,19 @@ chmod 755 /etc/init.d/S90meiso-edge
 [BusyBox 服务说明](../targets/k230d-linux/README.md#busybox-开机服务)。
 预先配置双向路由；服务安装不改 Wi-Fi、转发或防火墙。
 
+相机上行是可选的。确认目标板 ISP 与采集节点可用后，在 Edge `edge.conf` 同时设置
+`MEISO_CAMERA_DEVICE=/dev/video1` 和 `MEISO_CAMERA_PORT=4443`（节点按板型确认）；
+在 Host `host.env` 设置 `MEISO_CAMERA_PORT=4443`。当前 K230D NV12 路径还需 Host 设置
+`MEISO_CAMERA_COLORIMETRY=bt601-limited`；桌面 RGBA 相机不设置此项。
+相机 TCP 端口必须不同于控制 TCP 端口，允许当前路由双向通过。
+当前 v9 应用 Profile 可在同一 Session 中组合相机、双眼视频和原生 HUD；升级需同时安装
+匹配的两端版本，不能仅替换一侧。未配置相机时继续使用视频/HUD。
+
+Host 服务也读取可选 `MEISO_NATIVE_OVERLAY=on|off`、
+`MEISO_PRESENTATION_EVIDENCE=physical|simulated` 和 `MEISO_STATIC_CALIBRATION` 路径。
+默认仍是 physical 与原生 HUD；只有桌面输出环境显式选择 simulated。
+这些值经启动器同一参数检查，显式命令行参数优先；实际设备的标定不能从示例或另一块板复制。
+
 ```sh
 # Host（使用已配置的服务用户）
 systemctl --user daemon-reload

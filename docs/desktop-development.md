@@ -33,7 +33,7 @@ python3 devtools/desktop/pair.py \
 `pair.py` creates real connected TCP and UDP sockets, passes the descriptors to
 the two independent executables, and checks their exits. It contains no Meiso
 wire codec. The output directory must be new. The Edge decodes into a single
-owned RGBA raster and returns **SIMULATED** evidence with the actual accepted AU
+owned decoded RGBA raster and output canvas, and returns **SIMULATED** evidence with the actual accepted AU
 sequence/digest. `first.ppm`, `latest.ppm`, `last.ppm` allow inspection; the
 received elementary stream is recorded up to 64 MiB, then recording stops while
 decoding continues. This is a finite debugging capture, not platform history.
@@ -68,10 +68,15 @@ If a deployment uses a NAT or tunnel, its UDP return mapping must remain valid
 while the application is idle; a connected TCP control stream alone does not
 keep that mapping alive. This is a deployment responsibility.
 
-Current desktop support is the H.264 video profile with an offscreen output
-raster. Native HUD and centered physical-eye crops are not yet
-implemented in this adapter. Their capabilities are not advertised; selecting
-them fails before the Session starts. Parameter snapshots for offline optics
+The v9 application profile supports video, optional camera and optional native
+HUD in one Session. To compose stereo video and independent labels, select
+`--native-overlay on --video-layout side-by-side` on both services and add
+`--output-width 1920 --output-height 1080` to the desktop Edge service options.
+The 1280×720 video is placed per eye within that output canvas. Leave the
+application's overlay enabled (or select its `--message`); HUD show, move and
+hide recompose from the decoded video without retaining old pixels. Video and
+HUD receipts remain SIMULATED. Output dimensions are parameters, not a physical
+screen claim. Parameter snapshots for offline optics
 are separate from real device calibration. Actual supported dimensions and AU
 budgets come from each peer's Catalog rather than the desktop's memory size.
 
@@ -89,8 +94,8 @@ use independent carriers, the Edge waits at most five seconds for the existing
 normal Session close; EOF alone never makes a run successful.
 
 The matching Looking Glass `meiso-host-serve` selects `--camera-port PORT`,
-`--camera-fixture off` and `--native-overlay off`. Both sides select Display
-Ingress v8, composing video and CameraMedia in one Session. The camera port
+`--camera-fixture off`; native HUD may remain enabled. Both sides select Display
+Ingress v9, composing video, optional HUD and CameraMedia in one Session. The camera port
 is a separate TCP media connection using the existing CameraMedia framing,
 not another control Session. The normal video media ports still use UDP.
 The Host publishes owned RGBA snapshots through its installed camera SDK;
@@ -99,3 +104,11 @@ detection. Source exposure and optical calibration remain unknown.
 
 Capture buffers and FFmpeg memory are desktop costs. This path does not
 establish simultaneous K230D ISP/decoder/display memory or power budgets.
+
+The installed launcher is an explicit foreground development command, not a
+login camera service. After a connection ends, close the previous application
+and launch a new Session with a **new** output directory, then restart the app
+against the Host IPC socket. Do not reuse old handles or replay their content.
+The Linux Host's existing systemd service can rebuild its connection; its
+optional camera/evidence configuration is described in the
+[paired installation guide](host-edge-quickstart.md#安装并连接).
