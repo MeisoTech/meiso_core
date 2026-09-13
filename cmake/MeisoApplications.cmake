@@ -352,7 +352,7 @@ if(UNIX)
         target_compile_definitions(meiso_desktop_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
             MEISO_DISPLAY_INGRESS_DESKTOP_EDGE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
-        target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter
+        target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter meiso_display_camera_channel
             meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
             PkgConfig::MEISO_DESKTOP_AV)
         meiso_enable_warnings(meiso_desktop_edge)

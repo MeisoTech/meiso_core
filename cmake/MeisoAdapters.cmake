@@ -31,6 +31,12 @@ if(UNIX)
         ALIAS meiso_composition_media_posix_tcp_adapter
     )
 
+    add_library(meiso_display_camera_channel integrations/display_camera_channel.c)
+    meiso_configure_public_target(meiso_display_camera_channel DisplayCameraChannel)
+    target_link_libraries(meiso_display_camera_channel PUBLIC meiso_composition_media_posix_tcp_adapter meiso_display_ingress_profile)
+    meiso_enable_warnings(meiso_display_camera_channel)
+    add_library(Meiso::DisplayCameraChannel ALIAS meiso_display_camera_channel)
+
     add_library(
         meiso_display_ingress_media_posix_udp_adapter
         adapters/posix/display_ingress_media_posix_udp.c

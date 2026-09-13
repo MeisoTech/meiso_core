@@ -811,3 +811,35 @@ Its selected input width must be divisible by 16 for two 8-pixel-aligned crops.
 The matching kernel must implement video source crops and framebuffer stride;
 unsupported scaling, crop alignment and unequal Y/UV pitches are rejected.
 Normal close restores both video planes before releasing the shared buffers.
+
+## v8: video ingress with camera uplink
+
+`DISPLAY_/INGRESS_:v8` composes the unchanged v2 H.264 display endpoint (four
+routes) and Composition's existing CameraMedia endpoint (three routes), in
+that order, within one Session and Catalog. It does not select native HUD or
+stereo placement. Camera capability, Desired, Actual, OPEN/BIND and RAW media
+units retain their [Composition definitions](../composition/README.md). The
+camera endpoint incarnation equals the display incarnation in this selection.
+No second Session or application-specific wire is introduced.
+
+Camera Desired has independent Host state version 1/delivery generation 11;
+Edge Actual has version 1/delivery generation 12. The first implementation
+accepts one enabled configuration per connection. Host first configures video,
+then camera; neither camera frames nor video frames wait for per-frame ACKs.
+Camera failure invalidates the combined connection; a fresh connection requires
+a new catalog, Desired/Actual and media binding. Close revokes both producers.
+
+The initial desktop adapter exposes 320x240 packed RGBA8, at up to 5 Hz. The
+Host starts at 2 Hz: 614400 payload bytes/s (4.92 Mbit/s), before framing and
+carrier overhead. Camera uses the existing bounded CameraMedia TCP adapter;
+downlink video retains UDP. TCP may delay current camera data behind older
+bytes on a poor link; this is a functional baseline, not a low-latency weak-link
+claim. In-flight/latest slots and application copies remain bounded.
+
+Desktop source time is the Edge's monotonic time after a complete capture
+frame is dequeued, not a measured sensor exposure. No optical calibration or
+Host/Edge clock synchronization is asserted. Host consumers retain the Edge
+clock identity, sequence and epoch, and mark exposure/calibration unknown.
+Acceptance covers exact graph/version rejection, independent control states,
+wrong binding and stale sequence rejection, partial-frame/EOF cleanup, and
+simultaneous real camera uplink plus application video downlink.

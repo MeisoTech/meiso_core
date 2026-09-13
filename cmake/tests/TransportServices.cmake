@@ -163,3 +163,8 @@ if(TARGET meiso_four_kind_lab)
         meiso_four_kind_lab_internal_test "service" --self-test
     )
 endif()
+
+if(TARGET meiso_display_camera_channel)
+    meiso_add_c_test(meiso_display_camera_channel_test tests/test_display_camera_channel.c
+        adapter meiso_display_camera_channel)
+endif()

@@ -117,6 +117,7 @@ install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/profile.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/overlay.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/camera.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/projection.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/media_transport.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/profiles/display_ingress"
@@ -259,6 +260,7 @@ if(TARGET meiso_posix_tcp_adapter)
         TARGETS
             meiso_posix_tcp_adapter
             meiso_composition_media_posix_tcp_adapter
+            meiso_display_camera_channel
             meiso_display_ingress_media_posix_udp_adapter
         EXPORT MeisoPosixTargets
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Posix
@@ -331,3 +333,8 @@ install(
 
 unset(meiso_composition_headers)
 unset(meiso_composition_install_targets)
+
+if(TARGET meiso_display_camera_channel)
+    install(FILES include/meiso/integrations/display_camera_channel.h
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/integrations" COMPONENT Posix)
+endif()

@@ -69,8 +69,30 @@ while the application is idle; a connected TCP control stream alone does not
 keep that mapping alive. This is a deployment responsibility.
 
 Current desktop support is the H.264 video profile with an offscreen output
-raster. Native HUD, centered physical-eye crops and camera uplink are not yet
+raster. Native HUD and centered physical-eye crops are not yet
 implemented in this adapter. Their capabilities are not advertised; selecting
 them fails before the Session starts. Parameter snapshots for offline optics
 are separate from real device calibration. Actual supported dimensions and AU
 budgets come from each peer's Catalog rather than the desktop's memory size.
+
+## Optional local camera uplink
+
+The Edge launcher accepts `--camera-device DEVICE --camera-port PORT` before
+the service arguments. On macOS DEVICE is an explicitly selected FFmpeg
+AVFoundation video device (enumerate with `ffmpeg -f avfoundation -list_devices
+true -i ''`); on Linux it is a V4L2 path. No audio is opened. It captures
+640x480/30, reduces to 320x240 RGBA/5 Hz, and publishes at the Host-requested
+rate (initially 2 Hz). Missing devices, capture stalls or partial-frame EOF fail
+the run and reclaim its children. Stopping the launcher stops its camera.
+
+The matching Looking Glass `meiso-host-serve` selects `--camera-port PORT`,
+`--camera-fixture off` and `--native-overlay off`. Both sides select Display
+Ingress v8, composing video and CameraMedia in one Session. The camera port
+is a separate TCP media connection using the existing CameraMedia framing,
+not another control Session. The normal video media ports still use UDP.
+The Host publishes owned RGBA snapshots through its installed camera SDK;
+Locate's `configs/sdk-camera-people.json` demonstrates explicit real CPU person
+detection. Source exposure and optical calibration remain unknown.
+
+Capture buffers and FFmpeg memory are desktop costs. This path does not
+establish simultaneous K230D ISP/decoder/display memory or power budgets.

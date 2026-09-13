@@ -121,6 +121,7 @@ add_library(
     meiso_display_ingress_profile
     profiles/display_ingress/display_ingress_profile.c
     profiles/display_ingress/display_ingress_overlay.c
+    profiles/display_ingress/display_ingress_camera.c
     profiles/display_ingress/display_ingress_profile_codec.c
     profiles/display_ingress/display_ingress_projection.c
 )
@@ -128,7 +129,7 @@ meiso_configure_public_target(
     meiso_display_ingress_profile
     DisplayIngressProfile
 )
-target_link_libraries(meiso_display_ingress_profile PUBLIC meiso_runtime)
+target_link_libraries(meiso_display_ingress_profile PUBLIC meiso_runtime meiso_composition_profile)
 meiso_enable_warnings(meiso_display_ingress_profile)
 meiso_set_target_folder(meiso_display_ingress_profile "Meiso/Profiles")
 add_library(
