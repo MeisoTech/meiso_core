@@ -11,6 +11,33 @@
 > 通用规则仍由 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 > [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
 
+## 组合应用 Profile v9
+
+`DISPLAY_/INGRESS_:v9`复用H.264 v2的四条display资源，再按固定顺序选择完整HUD三条、
+完整CameraMedia三条。display必选；两个可选endpoint各自全有或全无，最多3 endpoint、
+10 routes、148 capability bytes。所有endpoint共享本次设备incarnation，未知/重复/乱序、
+部分资源或能力与资源不一致拒绝整个Catalog。不新增Session、传输或逐帧等待规则；
+v1–v8保持原契约，双方明确选择v9，无隐式降级。
+
+Display能力schema为`DISP_SCH/CAPABIL_:v3`，48 bytes：前32 bytes沿用H.264能力；
+32..35、36..39为大端output_width/output_height（1..4096），40为video_layout
+（0=native左上原尺寸；1=左右眼各自原尺寸居中），41..47必须为零。
+输入必须装得进输出；左右模式要求输入/输出宽为偶数。无隐式缩放；未覆盖区域保留
+平台背景/安全层，桌面后端以黑色作为背景。
+布局描述实际输出栅格，不表示光学校准。evidence_class_mask必须恰好选择SIMULATED或
+DRM_KMS_PAGE_FLIP之一，视频与HUD共同遵循；更换后端须重新协商Catalog。
+HUD原有36-byte能力/计划保持，画布尺寸必须等于display输出；CameraMedia仍用既有64-byte
+能力与来源/desired/actual/media身份。缺少可选endpoint时调用方不得继续宣称该能力可用。
+
+HUD证据schema升级为`DISP_SCH/HUD_PRES:v2`，保留56-byte布局，byte0明确为
+1=SIMULATED或2=DRM_KMS_PAGE_FLIP，其余字节保持原定义。消费者严格核对所选类别，
+软件合成完成不能表述成物理显示；历史HUD_PRES:v1仍只接受2。隐藏或移动也须完成
+实际后端更新后报告对应plan，而不能仅因接收/校验通过即回执。
+
+失败向量包括：四种可选组合、输出越界/奇数左右宽、保留位、错误证据类别、HUD画布不符、
+Camera资源乱序及owner/delivery/schema变化；桌面检查合成/移动/隐藏像素并标记模拟，
+板端另外测两平面视频+原生ARGB+相机的并发资源和实际显示。
+
 ## 这条 Profile 解决什么
 
 ### 压缩扩展：`DISPLAY_/INGRESS_:v2`
@@ -658,7 +685,8 @@ Display Actual 不得因本策略内核或拓扑收据存在而报告 RUNNING。
 第 8 步以前不得声称“Host 应用已经显示到 Edge 实屏”。
 ## Display Ingress v6/v7: bounded CJK screen text
 
-The current overlay selections are v6 (native video) and v7 (side-by-side video).
+The legacy overlay selections are v6 (native video) and v7 (side-by-side video);
+current services compose these resources through v9 above.
 They replace the v4/v5 selections described below; their layer ordering, State
 activation, physical evidence and pixel budgets are unchanged. Mixed selections
 fail Session negotiation. HUD capability and plan schemas advance to v3;
@@ -844,7 +872,7 @@ Acceptance covers exact graph/version rejection, independent control states,
 wrong binding and stale sequence rejection, partial-frame/EOF cleanup, and
 simultaneous real camera uplink plus application video downlink.
 
-The K230D Linux service can select this same v8 graph with `--camera-media-fd`
+The earlier K230D Linux service selected this v8 graph with `--camera-media-fd`
 and `--camera-device` (default `/dev/video1`). It reuses the existing V4L2
 adapter: 320x240 NV12, four 115200-byte MMAP buffers, up to 5 transmitted Hz.
 At the Host's initial 2 Hz this is 230400 payload bytes/s (1.84 Mbit/s).
@@ -857,6 +885,7 @@ timestamps remain dequeue times, not exposure measurements.
 NV12 describes pixel layout, not colorimetry. A Host converting these bytes
 must select the source's documented matrix/range explicitly; the current
 deployment may select BT.601 limited range only for a source confirmed to use
-it. This does not add color calibration to the wire. v8 still does not select
+it. Current services use the v9 optional graph described above. This does not add
+color calibration to the wire. v8 still does not select
 native HUD/stereo placement; testing this graph must not be reported as those
 combined product modes passing.

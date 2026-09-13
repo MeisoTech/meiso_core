@@ -148,12 +148,16 @@ static bool build_catalog(Service *service)
     };
 
     service->capability = config.capability;
-    if (service->camera_enabled) return meiso_display_camera_build_catalog(&config,
-        &service->camera_capability,(MeisoMutableBuffer){service->capability_wire,sizeof(service->capability_wire)},
-        service->endpoints,2,service->routes,7);
-    if (service->overlay_enabled) return meiso_display_overlay_build_catalog(&config,
-        &service->overlay_capability, (MeisoMutableBuffer){service->capability_wire,sizeof(service->capability_wire)},
-        service->endpoints,2,service->routes,7);
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
+    const MeisoDisplayApplicationCatalogConfig application={.video=config,
+        .output_width=service->output_width ? service->output_width : service_frame_width(service),
+        .output_height=service->output_height ? service->output_height : service_frame_height(service),
+        .video_layout=service->stereo_video,.overlay_enabled=service->overlay_enabled,
+        .camera_enabled=service->camera_enabled,.overlay=service->overlay_capability,.camera=service->camera_capability};
+    return meiso_display_application_build_catalog(&application,
+        (MeisoMutableBuffer){service->capability_wire,sizeof(service->capability_wire)},
+        service->endpoints,MEISO_DISPLAY_APPLICATION_MAX_ENDPOINTS,service->routes,MEISO_DISPLAY_APPLICATION_MAX_ROUTES);
+#else
     return meiso_display_ingress_build_catalog(
         &config,
         (MeisoMutableBuffer){
@@ -164,6 +168,7 @@ static bool build_catalog(Service *service)
         service->routes,
         MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT
     ) == MEISO_DISPLAY_INGRESS_PROFILE_OK;
+#endif
 }
 
 static bool initialize_session_and_tcp(Service *service)
@@ -200,10 +205,13 @@ static bool initialize_session_and_tcp(Service *service)
     session_config.local_incarnation = identity.incarnation;
     session_config.local_nonce = identity.nonce;
     session_config.protocol = (MeisoProtocolVersion){1U, 0U};
-    if (service->camera_enabled ? !meiso_display_camera_configure_session(&session_config) : service->overlay_enabled ? !(service->stereo_video ?
-        meiso_display_stereo_overlay_configure_session(&session_config) :
-        meiso_display_overlay_configure_session(&session_config)) :
-        meiso_display_ingress_configure_session_for_format(&session_config, SERVICE_FRAME_FORMAT) != MEISO_DISPLAY_INGRESS_PROFILE_OK) {
+    if (
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
+        !meiso_display_application_configure_session(&session_config)
+#else
+        meiso_display_ingress_configure_session_for_format(&session_config, SERVICE_FRAME_FORMAT) != MEISO_DISPLAY_INGRESS_PROFILE_OK
+#endif
+    ) {
         return service_fail(service, "control", "session");
     }
     required = meiso_session_memory_required(&session_config);
@@ -267,8 +275,12 @@ bool service_initialize_runtime(Service *service)
         !meiso_session_snapshot(service->session, &snapshot) ||
         snapshot.state != MEISO_SESSION_STATE_READY ||
         !snapshot.session_id_known || !snapshot.remote_identity_known ||
-        (service->camera_enabled ? !meiso_display_camera_configure_runtime(&runtime_config,service->session) : service->overlay_enabled ? !meiso_display_overlay_configure_runtime(&runtime_config,service->session) :
-        meiso_display_ingress_configure_runtime_v4(&runtime_config, service->session) != MEISO_DISPLAY_INGRESS_PROFILE_OK)) {
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
+        !meiso_display_application_configure_runtime(&runtime_config, service->session)
+#else
+        meiso_display_ingress_configure_runtime_v4(&runtime_config, service->session) != MEISO_DISPLAY_INGRESS_PROFILE_OK
+#endif
+    ) {
         return service_fail(service, "control", "session");
     }
     required = meiso_runtime_v4_memory_required(&runtime_config);

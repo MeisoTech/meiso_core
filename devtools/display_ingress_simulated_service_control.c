@@ -245,6 +245,18 @@ static bool capability_equal(
 
 bool service_validate_staged_catalog(Service *service)
 {
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
+    MeisoRuntimeEndpointDescriptor ep[3]; MeisoRuntimeV4RouteDescriptor rt[10];
+    MeisoRuntimeSnapshot snapshot; MeisoDisplayApplicationCatalogConfig c;
+    if(!meiso_runtime_snapshot(service->runtime,&snapshot) || snapshot.staged_endpoint_count!=1 ||
+        snapshot.staged_route_count!=4 || meiso_runtime_staged_endpoint_at(service->runtime,0,ep)!=MEISO_RUNTIME_OK)
+        return service_fail(service,"control","catalog");
+    for(size_t i=0;i<4;++i) if(meiso_runtime_v4_staged_route_at(service->runtime,i,rt+i)!=MEISO_RUNTIME_OK)
+        return service_fail(service,"control","catalog");
+    if(!meiso_display_application_validate_catalog(ep,1,rt,4,&c) ||
+        !capability_equal(&c.video.capability,&service->capability)) return service_fail(service,"control","catalog");
+    return true;
+#else
     MeisoRuntimeEndpointDescriptor endpoint;
     MeisoRuntimeV4RouteDescriptor routes[
         MEISO_DISPLAY_INGRESS_PROFILE_ROUTE_COUNT
@@ -277,4 +289,5 @@ bool service_validate_staged_catalog(Service *service)
         return service_fail(service, "control", "catalog");
     }
     return true;
+#endif
 }

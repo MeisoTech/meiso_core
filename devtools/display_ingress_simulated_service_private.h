@@ -6,7 +6,7 @@
 #include <meiso/host/display_ingress_fixture_input.h>
 #include <meiso/profiles/display_ingress/profile.h>
 #include <meiso/profiles/display_ingress/overlay.h>
-#include <meiso/profiles/display_ingress/camera.h>
+#include <meiso/profiles/display_ingress/application.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -135,9 +135,10 @@ typedef struct {
     MeisoCompositionMediaCapability camera_capability;
     uint32_t selected_input_width, selected_input_height;
     MeisoDisplayOverlayCapability overlay_capability;
-    uint8_t capability_wire[96];
-    MeisoRuntimeEndpointDescriptor endpoints[2];
-    MeisoRuntimeV4RouteDescriptor routes[MEISO_DISPLAY_OVERLAY_ROUTE_COUNT];
+    uint32_t output_width, output_height;
+    uint8_t capability_wire[MEISO_DISPLAY_APPLICATION_MAX_CAPABILITY_BYTES];
+    MeisoRuntimeEndpointDescriptor endpoints[MEISO_DISPLAY_APPLICATION_MAX_ENDPOINTS];
+    MeisoRuntimeV4RouteDescriptor routes[MEISO_DISPLAY_APPLICATION_MAX_ROUTES];
     MeisoRuntimeDesiredState applied_desired;
     uint8_t applied_desired_profile[
         MEISO_DISPLAY_INGRESS_PROFILE_DESIRED_WIRE_SIZE
@@ -186,8 +187,8 @@ static inline uint32_t service_frame_width(const Service *s)
 static inline uint32_t service_frame_height(const Service *s)
 { return s->selected_input_height ? s->selected_input_height : SERVICE_FRAME_HEIGHT; }
 
-static inline size_t service_endpoint_count(const Service *s) { return (s->overlay_enabled || s->camera_enabled) ? 2U : 1U; }
-static inline size_t service_route_count(const Service *s) { return (s->overlay_enabled || s->camera_enabled) ? 7U : 4U; }
+static inline size_t service_endpoint_count(const Service *s) { return 1U + s->overlay_enabled + s->camera_enabled; }
+static inline size_t service_route_count(const Service *s) { return 4U + 3U * (s->overlay_enabled + s->camera_enabled); }
 
 #ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
 SERVICE_PRIVATE_API bool service_drm_open(Service *service);

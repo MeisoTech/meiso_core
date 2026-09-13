@@ -497,6 +497,8 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--video-device") == 0) video_path = argv[i+1];
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+        else if (strcmp(argv[i], "--output-width") == 0 && number(argv[i+1],4096U,&n) && n) service.output_width=(uint32_t)n;
+        else if (strcmp(argv[i], "--output-height") == 0 && number(argv[i+1],4096U,&n) && n) service.output_height=(uint32_t)n;
         else if (strcmp(argv[i], "--output-directory") == 0) drm_path = argv[i+1];
         else if (strcmp(argv[i], "--camera-input-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_input_fd=(int)n;
 #endif
@@ -522,8 +524,8 @@ int main(int argc, char **argv)
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
     service.camera_enabled=service.camera_media_fd>=0;
     if(service.camera_enabled && (service.camera_media_fd==service.control_fd ||
-            service.camera_media_fd==service.media_fd || service.overlay_enabled || service.stereo_video)) {
-        fprintf(stderr,"camera v8 requires a separate media descriptor and native video without HUD/stereo placement\n");
+            service.camera_media_fd==service.media_fd)) {
+        fprintf(stderr,"camera requires a separate media descriptor\n");
         return 2;
     }
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
@@ -539,11 +541,6 @@ int main(int argc, char **argv)
             .min_width=320,.min_height=240,.max_width=320,.max_height=240,.max_fps_millihz=5000,
             .max_access_unit_bytes=320*240*4,.max_fragment_payload_bytes=4096};
     }
-    /* Current HUD Profile defines physical flip evidence only. Do not forge it. */
-    if (service.overlay_enabled || service.stereo_video) {
-        fprintf(stderr,"desktop HUD/stereo Profile binding is not implemented; use native video raster\n");
-        return 2;
-    }
     if (strcmp(drm_path,"/dev/dri/card0")==0) {
         fprintf(stderr,"desktop Edge requires an explicit new --output-directory\n"); return 2;
     }
@@ -554,10 +551,6 @@ int main(int argc, char **argv)
         .codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW,.min_width=320,.min_height=240,.max_width=320,.max_height=240,
         .max_fps_millihz=5000,.max_access_unit_bytes=320*240*3/2,.max_fragment_payload_bytes=4096};
 #endif
-    if (service.stereo_video && !service.overlay_enabled) {
-        fprintf(stderr, "side-by-side video requires native-overlay on (stereo overlay Profile)\n");
-        return 2;
-    }
     if (continuous_edge && !local_set) {
         fprintf(stderr, "continuous Edge requires --local-peer and --expected-peer\n");
         return 2;
@@ -570,6 +563,15 @@ int main(int argc, char **argv)
     (void)input;
     video = meiso_ingress_video_open(video_path, drm_path, service_frame_width(&service), service_frame_height(&service));
     if (video == NULL) { fprintf(stderr, "video backend open failed\n"); return 1; }
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+    if ((service.output_width==0)!=(service.output_height==0) ||
+        (service.output_width && meiso_ingress_video_set_output_size(video,service.output_width,service.output_height))) {
+        meiso_ingress_video_close(video); return 2;
+    }
+#endif
+    if(meiso_ingress_video_output_size(video,&service.output_width,&service.output_height)) {
+        meiso_ingress_video_close(video); return 1;
+    }
     if (service.stereo_video && meiso_ingress_video_set_stereo(video)) {
         fprintf(stderr, "stereo video output unavailable\n");
         meiso_ingress_video_close(video); return 1;

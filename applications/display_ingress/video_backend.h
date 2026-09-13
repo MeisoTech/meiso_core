@@ -44,6 +44,12 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path,
                                             uint32_t width,
                                             uint32_t height);
 
+/* Desktop-only output canvas configuration before any submission; the hardware
+ * backend reports its actual connector mode through output_size instead. */
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO
+int meiso_ingress_video_set_output_size(MeisoIngressVideo *, uint32_t width, uint32_t height);
+#endif
+
 /* Select two centered native-size views of one left/right atlas. Call once
  * before submitting any input. Requires the matching Canaan crop/stride kernel,
  * two empty nonrotating NV12 planes and input width divisible by 16. */

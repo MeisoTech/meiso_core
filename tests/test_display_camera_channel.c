@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <meiso/integrations/display_camera_channel.h>
+#include <meiso/profiles/display_ingress/application.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -12,6 +13,7 @@
 typedef union {max_align_t align;uint8_t bytes[65536];} Arena;
 typedef struct {Arena sm,rm;MeisoSession *s;MeisoRuntime *r;MeisoDisplayCameraChannel *c;} Peer;
 static Peer h,e;
+static bool application;
 static void transfer(Peer *from,Peer *to)
 {
     MeisoByteView bytes;uint8_t copy[5000];MeisoSessionRuntimeMessage message;
@@ -30,13 +32,13 @@ static void init(Peer *p,bool host)
     MeisoSessionConfig cfg={0};cfg.local_role=host?MEISO_SESSION_ROLE_HOST:MEISO_SESSION_ROLE_EDGE;
     cfg.local_peer_id=(MeisoPeerId){host?1:2,3};cfg.expected_peer_id=(MeisoPeerId){host?2:1,3};
     cfg.local_incarnation=host?4:5;cfg.local_nonce=(MeisoSessionNonce){host?6:7,8};cfg.protocol=(MeisoProtocolVersion){1,0};
-    CHECK(meiso_display_camera_configure_session(&cfg));
+    CHECK(application?meiso_display_application_configure_session(&cfg):meiso_display_camera_configure_session(&cfg));
     CHECK(meiso_session_init(p->sm.bytes,sizeof(p->sm.bytes),&cfg,&p->s)==MEISO_SESSION_INIT_OK);
     CHECK(meiso_session_start(p->s)==MEISO_SESSION_START_STARTED);
 }
 static void runtime(Peer *p)
 {
-    MeisoRuntimeV4Config cfg;CHECK(meiso_display_camera_configure_runtime(&cfg,p->s));
+    MeisoRuntimeV4Config cfg;CHECK(application?meiso_display_application_configure_runtime(&cfg,p->s):meiso_display_camera_configure_runtime(&cfg,p->s));
     CHECK(meiso_runtime_v4_init(p->rm.bytes,sizeof(p->rm.bytes),&cfg,&p->r)==MEISO_RUNTIME_INIT_OK);
 }
 static void tick(void)
@@ -47,8 +49,9 @@ static void tick(void)
 }
 int main(int argc,char **argv)
 {
-    const bool nv12=argc==2 && strcmp(argv[1],"--nv12")==0;
-    CHECK(argc==1 || nv12);
+    const bool nv12=argc>=2 && strcmp(argv[1],"--nv12")==0;
+    application=argc==3 && strcmp(argv[2],"--application")==0;
+    CHECK(argc==1 || (argc==2 && nv12) || (application && (nv12 || strcmp(argv[1],"--rgba")==0)));
     const size_t pixel_bytes=nv12?115200U:307200U;
     init(&h,true);init(&e,false);transfer(&h,&e);transfer(&e,&h);transfer(&h,&e);transfer(&e,&h);
     runtime(&h);runtime(&e);
@@ -56,9 +59,13 @@ int main(int argc,char **argv)
     MeisoCompositionMediaCapability c={.source=MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,.pixel_formats=nv12?MEISO_COMPOSITION_MEDIA_PIXEL_MASK_NV12:MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888,.codecs=1,
         .min_width=320,.min_height=240,.max_width=320,.max_height=240,.max_fps_millihz=2000,
         .max_access_unit_bytes=(uint32_t)pixel_bytes,.max_fragment_payload_bytes=4096};
-    uint8_t caps[96];MeisoRuntimeEndpointDescriptor ep[2];MeisoRuntimeV4RouteDescriptor rt[7];
-    CHECK(meiso_display_camera_build_catalog(&v,&c,(MeisoMutableBuffer){caps,96},ep,2,rt,7));
-    CHECK(meiso_runtime_v4_offer_catalog(e.r,1,ep,2,rt,7)==MEISO_RUNTIME_OK);transfer(&e,&h);transfer(&h,&e);
+    uint8_t caps[148];MeisoRuntimeEndpointDescriptor ep[3];MeisoRuntimeV4RouteDescriptor rt[10];
+    if(application){
+        const MeisoDisplayApplicationCatalogConfig all={.video=v,.output_width=1920,.output_height=1080,.video_layout=1,
+            .overlay_enabled=true,.camera_enabled=true,.overlay={1920,1080,65536,48,10,16,16,2,1,3,1},.camera=c};
+        CHECK(meiso_display_application_build_catalog(&all,(MeisoMutableBuffer){caps,sizeof(caps)},ep,3,rt,10));
+    }else CHECK(meiso_display_camera_build_catalog(&v,&c,(MeisoMutableBuffer){caps,sizeof(caps)},ep,3,rt,10));
+    CHECK(meiso_runtime_v4_offer_catalog(e.r,1,ep,application?3:2,rt,application?10:7)==MEISO_RUNTIME_OK);transfer(&e,&h);transfer(&h,&e);
     int listener=socket(AF_INET,SOCK_STREAM,0);CHECK(listener>=0);
     struct sockaddr_in address={.sin_family=AF_INET,.sin_addr={.s_addr=htonl(UINT32_C(0x7f000001))}};
     CHECK(bind(listener,(struct sockaddr*)&address,sizeof(address))==0 && listen(listener,1)==0);

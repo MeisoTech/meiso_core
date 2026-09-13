@@ -128,14 +128,14 @@ bool service_overlay_poll(Service *s)
         ++hud.epoch; ++hud.actual_version; hud.status_queued=true; return true;
     }
     uint8_t wire[56];
-    if(!meiso_display_overlay_evidence_encode(&hud.evidence,(MeisoMutableBuffer){wire,sizeof(wire)}))
+    if(!meiso_display_overlay_evidence_encode_for_class(&hud.evidence,SERVICE_EVIDENCE_CLASS,(MeisoMutableBuffer){wire,sizeof(wire)}))
         return service_fail(s,"hud","evidence-codec");
     MeisoStreamSample sample={0}; sample.key=(MeisoStreamKey){s->edge_owner,1,++hud.evidence_sequence};
     sample.source_time=(MeisoTimePoint){SERVICE_EVIDENCE_CLOCK_EPOCH,hud.flip_ns}; sample.payload=(MeisoByteView){wire,56};
     if(meiso_runtime_send_stream_sample(s->runtime,service_route_key(s,MEISO_DISPLAY_OVERLAY_ROUTE_EVIDENCE),hud.epoch,&sample)!=MEISO_RUNTIME_OK)
         return service_fail(s,"hud","evidence-send");
-    fprintf(stderr,"HUD_PRESENTED version=%"PRIu64" plan=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" visible=%u layout=%u x=%u y=%u width=%u height=%u\n",
-        hud.desired_version,get64(wire+8),hud.epoch,hud.flip_ns,hud.plan.visible,hud.plan.layout,hud.plan.x,hud.plan.y,hud.raster_width,hud.raster_height);
+    fprintf(stderr,"HUD_PRESENTED evidence=%u version=%"PRIu64" plan=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" visible=%u layout=%u x=%u y=%u width=%u height=%u\n",
+        SERVICE_EVIDENCE_CLASS,hud.desired_version,get64(wire+8),hud.epoch,hud.flip_ns,hud.plan.visible,hud.plan.layout,hud.plan.x,hud.plan.y,hud.raster_width,hud.raster_height);
     hud.pending=false; return true;
 }
 void service_overlay_finish(void)

@@ -16,7 +16,11 @@ struct MeisoIngressVideo {
     AVCodecContext *decoder;
     AVFrame *frame;
     struct SwsContext *scaler;
-    uint8_t *rgba;
+    uint8_t *rgba, *canvas;
+    uint32_t *overlay;
+    uint32_t output_width, output_height, overlay_x, overlay_y, overlay_w, overlay_h;
+    uint64_t overlay_sequence, overlay_completed;
+    bool stereo, overlay_pending, overlay_visible;
     uint32_t width, height;
     uint64_t sequence, completed, capture_bytes;
     bool pending;
@@ -44,13 +48,13 @@ static int save_frame(MeisoIngressVideo *v, const char *name)
 {
     FILE *f=output_file(v,name,"wb");
     if (!f) return -1;
-    bool ok=fprintf(f,"P6\n%u %u\n255\n",v->width,v->height)>0;
+    bool ok=fprintf(f,"P6\n%u %u\n255\n",v->output_width,v->output_height)>0;
     /* Keep conversion bounded; RGB rows need only width*3 scratch bytes. */
-    uint8_t row[1920*3];
-    for (uint32_t y=0; ok && y<v->height; ++y) {
-        const uint8_t *in=v->rgba+(size_t)y*v->width*4;
-        for (uint32_t x=0; x<v->width; ++x) memcpy(row+(size_t)x*3,in+(size_t)x*4,3);
-        ok=fwrite(row,3,v->width,f)==v->width;
+    uint8_t row[4096*3];
+    for (uint32_t y=0; ok && y<v->output_height; ++y) {
+        const uint8_t *in=v->canvas+(size_t)y*v->output_width*4;
+        for (uint32_t x=0; x<v->output_width; ++x) memcpy(row+(size_t)x*3,in+(size_t)x*4,3);
+        ok=fwrite(row,3,v->output_width,f)==v->output_width;
     }
     if (fclose(f)) ok=false;
     return ok ? 0 : -1;
@@ -64,11 +68,12 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
         mkdir(output,0700)) return NULL; /* Never overwrite another run. */
     MeisoIngressVideo *v=calloc(1,sizeof(*v));
     if (!v) return NULL;
-    v->width=width;v->height=height;v->directory=strdup(output);
+    v->width=width;v->height=height;v->output_width=width;v->output_height=height;v->directory=strdup(output);
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);
     v->decoder=codec ? avcodec_alloc_context3(codec) : NULL;
-    v->frame=av_frame_alloc();v->rgba=malloc((size_t)width*height*4);
-    if (!v->decoder || !v->frame || !v->rgba || !v->directory) goto fail;
+    v->frame=av_frame_alloc();v->rgba=calloc((size_t)width*height,4);
+    v->canvas=calloc((size_t)width*height,4);
+    if (!v->decoder || !v->frame || !v->rgba || !v->canvas || !v->directory) goto fail;
     v->decoder->thread_count=1;
     v->decoder->max_pixels=(int64_t)width*height;
     if (avcodec_open2(v->decoder,codec,NULL)<0) goto fail;
@@ -115,18 +120,42 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, u
     return MEISO_INGRESS_VIDEO_ACCEPTED;
 }
 
+/* Rebuild from the retained video, so moving/hiding never leaves old HUD pixels.
+ * Two native-size eye rectangles mirror the hardware plane placement. */
+static void compose(MeisoIngressVideo *v)
+{
+    memset(v->canvas,0,(size_t)v->output_width*v->output_height*4);
+    unsigned eyes=v->stereo?2:1;
+    uint32_t width=v->width/eyes, output_eye=v->output_width/eyes;
+    for(unsigned eye=0;eye<eyes;++eye) {
+        uint32_t x=eye*output_eye+(v->stereo?(output_eye-width)/2:0);
+        uint32_t y=v->stereo?(v->output_height-v->height)/2:0;
+        for(uint32_t row=0;row<v->height;++row)
+            memcpy(v->canvas+((size_t)(row+y)*v->output_width+x)*4,
+                v->rgba+((size_t)row*v->width+eye*width)*4,(size_t)width*4);
+    }
+    if(v->overlay_visible) for(uint32_t y=0;y<v->overlay_h;++y) for(uint32_t x=0;x<v->overlay_w;++x) {
+        uint32_t argb=v->overlay[(size_t)y*v->overlay_w+x], alpha=argb>>24;
+        uint8_t *out=v->canvas+((size_t)(y+v->overlay_y)*v->output_width+x+v->overlay_x)*4;
+        const uint32_t rgb[]={(argb>>16)&255,(argb>>8)&255,argb&255};
+        for(unsigned i=0;i<3;++i) out[i]=(uint8_t)((rgb[i]*alpha+out[i]*(255-alpha)+127)/255);
+        out[3]=255;
+    }
+}
+
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v,
                                                    MeisoIngressVideoPresentation *p)
 {
     if (!v || !p) return MEISO_INGRESS_VIDEO_POLL_ERROR;
     if (!v->pending) return MEISO_INGRESS_VIDEO_NONE;
+    compose(v);
     /* Software completion occurs after decoding into the owned output raster.
      * Export first/every 30th/last frame; this is not a physical page flip. */
     if ((!v->completed && save_frame(v,"first.ppm")) ||
         (v->completed%30==0 && save_frame(v,"latest.ppm"))) return MEISO_INGRESS_VIDEO_POLL_ERROR;
     uint64_t now=monotonic_ns();
     if (!now) return MEISO_INGRESS_VIDEO_POLL_ERROR;
-    *p=(MeisoIngressVideoPresentation){v->sequence,now,v->width,v->height,MEISO_INGRESS_VIDEO_CONNECTOR_UNKNOWN};
+    *p=(MeisoIngressVideoPresentation){v->sequence,now,v->output_width,v->output_height,MEISO_INGRESS_VIDEO_CONNECTOR_UNKNOWN};
     ++v->completed;v->pending=false;
     if (v->completed==1 || v->completed%30==0)
         fprintf(stderr,"SOFTWARE_PRESENTED frame=%"PRIu64" decoded=%"PRIu64" physical=false\n",v->sequence,v->completed);
@@ -134,20 +163,54 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v,
 }
 
 int meiso_ingress_video_output_size(const MeisoIngressVideo *v,uint32_t *w,uint32_t *h)
-{if(!v || !w || !h)return -1;*w=v->width;*h=v->height;return 0;}
-int meiso_ingress_video_set_stereo(MeisoIngressVideo *v) {(void)v;return -1;}
+{if(!v || !w || !h)return -1;*w=v->output_width;*h=v->output_height;return 0;}
+int meiso_ingress_video_set_output_size(MeisoIngressVideo *v,uint32_t w,uint32_t h)
+{
+    if(!v || v->sequence || v->overlay_sequence || v->stereo || w<v->width || h<v->height || w>4096 || h>4096) return -1;
+    uint8_t *canvas=calloc((size_t)w*h,4);if(!canvas) return -1;
+    free(v->canvas);v->canvas=canvas;v->output_width=w;v->output_height=h;return 0;
+}
+int meiso_ingress_video_set_stereo(MeisoIngressVideo *v)
+{
+    if(!v || v->sequence || v->overlay_sequence || v->stereo || v->width%16 || v->output_width%2) return -1;
+    v->stereo=true;return 0;
+}
 MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(MeisoIngressVideo *v,uint64_t seq,
     uint32_t x,uint32_t y,uint32_t w,uint32_t h,const uint32_t *pixels,size_t bytes)
-{(void)v;(void)seq;(void)x;(void)y;(void)w;(void)h;(void)pixels;(void)bytes;return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;}
+{
+    if(!v || !seq || seq<=v->overlay_sequence) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if(v->overlay_pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
+    const bool visible=w!=0 || h!=0;
+    if(visible) {
+        if(!pixels || w<16 || h<16 || w%2 || w>v->output_width || h>v->output_height ||
+            x>v->output_width-w || y>v->output_height-h || (uint64_t)w*h>65536 ||
+            bytes!=(size_t)w*h*4) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+        if(!v->overlay) v->overlay=malloc(65536*4);
+        if(!v->overlay) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+        memcpy(v->overlay,pixels,bytes);
+    } else if(x || y || bytes || !v->overlay_visible) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    v->overlay_x=x;v->overlay_y=y;v->overlay_w=w;v->overlay_h=h;
+    v->overlay_visible=visible;v->overlay_sequence=seq;v->overlay_pending=true;
+    return MEISO_INGRESS_VIDEO_ACCEPTED;
+}
 MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(MeisoIngressVideo *v,MeisoIngressVideoPresentation *p)
-{(void)v;(void)p;return MEISO_INGRESS_VIDEO_NONE;}
+{
+    if(!v || !p) return MEISO_INGRESS_VIDEO_POLL_ERROR;
+    if(!v->overlay_pending) return MEISO_INGRESS_VIDEO_NONE;
+    compose(v);
+    if(save_frame(v,"latest.ppm")) return MEISO_INGRESS_VIDEO_POLL_ERROR;
+    uint64_t now=monotonic_ns();if(!now) return MEISO_INGRESS_VIDEO_POLL_ERROR;
+    *p=(MeisoIngressVideoPresentation){v->overlay_sequence,now,v->output_width,v->output_height,MEISO_INGRESS_VIDEO_CONNECTOR_UNKNOWN};
+    v->overlay_pending=false;++v->overlay_completed;
+    return MEISO_INGRESS_VIDEO_PRESENTED;
+}
 int meiso_ingress_video_close(MeisoIngressVideo *v)
 {
     if (!v) return 0;
     int result=0;
-    if (v->completed && save_frame(v,"last.ppm")) result=-1;
+    if ((v->completed || v->overlay_completed) && save_frame(v,"last.ppm")) result=-1;
     if (v->capture && fclose(v->capture)) result=-1;
     fprintf(stderr,"DESKTOP_BACKEND_CLOSED decoded=%"PRIu64" capture_bytes=%"PRIu64" physical=false\n",v->completed,v->capture_bytes);
     sws_freeContext(v->scaler);av_frame_free(&v->frame);avcodec_free_context(&v->decoder);
-    free(v->rgba);free(v->directory);free(v);return result;
+    free(v->rgba);free(v->canvas);free(v->overlay);free(v->directory);free(v);return result;
 }

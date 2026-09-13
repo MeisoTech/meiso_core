@@ -356,6 +356,15 @@ if(UNIX)
             meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
             PkgConfig::MEISO_DESKTOP_AV)
         meiso_enable_warnings(meiso_desktop_edge)
+        if(BUILD_TESTING)
+            add_executable(meiso_desktop_video_backend_test tests/test_desktop_video_backend.c
+                adapters/desktop/display_ingress_video_backend.c)
+            target_compile_definitions(meiso_desktop_video_backend_test PRIVATE MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
+            target_link_libraries(meiso_desktop_video_backend_test PRIVATE PkgConfig::MEISO_DESKTOP_AV)
+            meiso_enable_warnings(meiso_desktop_video_backend_test)
+            add_test(NAME meiso_desktop_video_backend_test COMMAND meiso_desktop_video_backend_test)
+        endif()
+
         add_executable(meiso_desktop_host ${MEISO_VIDEO_SERVICE_SOURCES})
         target_compile_definitions(meiso_desktop_host PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)

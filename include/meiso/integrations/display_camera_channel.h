@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 typedef struct MeisoDisplayCameraChannel MeisoDisplayCameraChannel;
-/* POSIX assembly for v8, once the combined Catalog is active. The caller
+/* POSIX assembly for v8/v9, once the combined Catalog is active. The caller
  * serializes calls with Runtime/control I/O, and owns all descriptors.
  * No blocking I/O, thread, camera driver or control socket is owned here. */
 typedef struct {
@@ -25,7 +25,7 @@ bool meiso_display_camera_channel_ready(const MeisoDisplayCameraChannel *);
  * callers may await that independent control result within a bounded grace. */
 bool meiso_display_camera_channel_peer_eof(const MeisoDisplayCameraChannel *);
 bool meiso_display_camera_channel_submit(MeisoDisplayCameraChannel *, uint64_t sequence,
-    MeisoTimePoint source_time, MeisoByteView rgba);
+    MeisoTimePoint source_time, MeisoByteView pixels);
 bool meiso_display_camera_channel_latest(MeisoDisplayCameraChannel *, MeisoCompositionMediaLatestView *);
 bool meiso_display_camera_channel_release(MeisoDisplayCameraChannel *, const MeisoCompositionMediaFrameRef *);
 const MeisoCompositionMediaDesired *meiso_display_camera_channel_effective(const MeisoDisplayCameraChannel *);

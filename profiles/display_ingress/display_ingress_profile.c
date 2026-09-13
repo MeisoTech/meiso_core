@@ -1,3 +1,4 @@
+#include <meiso/profiles/display_ingress/application.h>
 #include "display_ingress_profile_private.h"
 
 #include <string.h>
@@ -640,16 +641,17 @@ meiso_display_ingress_media_binding_from_runtime(
             MEISO_DISPLAY_INGRESS_PROFILE_INVALID_ARGUMENT :
             MEISO_DISPLAY_INGRESS_PROFILE_RUNTIME_NOT_ACTIVE;
     }
+    uint32_t output_width, output_height;
+    uint8_t video_layout;
+    const bool application = meiso_schema_ref_equal(endpoint.capability_schema,
+        *meiso_display_application_video_capability_schema());
+    const bool decoded = application ? meiso_display_application_video_capability_decode(
+        endpoint.capability, &catalog_capability, &output_width, &output_height, &video_layout) :
+        (meiso_schema_ref_equal(endpoint.capability_schema,
+            *meiso_display_ingress_capability_schema_for_format(capability->frame_format)) &&
+         meiso_display_ingress_capability_decode(endpoint.capability, &catalog_capability) == MEISO_DISPLAY_INGRESS_PROFILE_OK);
     if (!meiso_endpoint_id_equal(endpoint.id, DISPLAY_INGRESS_ENDPOINT) ||
-        endpoint.incarnation == 0U || !meiso_schema_ref_equal(
-            endpoint.capability_schema,
-            *meiso_display_ingress_capability_schema_for_format(capability->frame_format)
-        ) || endpoint.capability.size !=
-            MEISO_DISPLAY_INGRESS_PROFILE_CAPABILITY_WIRE_SIZE ||
-        meiso_display_ingress_capability_decode(
-            endpoint.capability, &catalog_capability
-        ) != MEISO_DISPLAY_INGRESS_PROFILE_OK ||
-        !capability_equal(&catalog_capability, capability)) {
+        endpoint.incarnation == 0U || !decoded || !capability_equal(&catalog_capability, capability)) {
         return MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_MISMATCH;
     }
     expected_media = expected_resource(
