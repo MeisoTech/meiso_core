@@ -843,3 +843,20 @@ clock identity, sequence and epoch, and mark exposure/calibration unknown.
 Acceptance covers exact graph/version rejection, independent control states,
 wrong binding and stale sequence rejection, partial-frame/EOF cleanup, and
 simultaneous real camera uplink plus application video downlink.
+
+The K230D Linux service can select this same v8 graph with `--camera-media-fd`
+and `--camera-device` (default `/dev/video1`). It reuses the existing V4L2
+adapter: 320x240 NV12, four 115200-byte MMAP buffers, up to 5 transmitted Hz.
+At the Host's initial 2 Hz this is 230400 payload bytes/s (1.84 Mbit/s).
+ISP and decoder allocations are additional; this is not a full board memory
+budget. Capture must start before publishing the catalog; capture failure or
+carrier loss terminates the combined service and releases its camera buffers.
+The adapter's source time/sequence provenance is preserved; zero driver
+timestamps remain dequeue times, not exposure measurements.
+
+NV12 describes pixel layout, not colorimetry. A Host converting these bytes
+must select the source's documented matrix/range explicitly; the current
+deployment may select BT.601 limited range only for a source confirmed to use
+it. This does not add color calibration to the wire. v8 still does not select
+native HUD/stereo placement; testing this graph must not be reported as those
+combined product modes passing.

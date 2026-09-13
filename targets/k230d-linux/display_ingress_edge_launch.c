@@ -39,18 +39,22 @@ int main(int argc, char **argv)
         return 2;
     }
     /* Descriptor and role ownership stay with this launcher. */
+    unsigned camera_port=0;
     for (int i = 7; i < argc; i += 2) {
         if (!strcmp(argv[i], "--role") || !strcmp(argv[i], "--control-fd") ||
-            !strcmp(argv[i], "--media-fd") || !strcmp(argv[i], "--drm-device")) return 2;
+            !strcmp(argv[i], "--media-fd") || !strcmp(argv[i], "--camera-media-fd") || !strcmp(argv[i], "--drm-device")) return 2;
+        if(!strcmp(argv[i],"--camera-port")) {
+            if(camera_port || !(camera_port=port(argv[i+1])) || camera_port==port(argv[3])) return 2;
+        }
     }
     if (access(argv[1], X_OK)) { perror("service executable"); return 2; }
     struct sockaddr_in peer = {.sin_family = AF_INET}, local = {0};
     if (inet_pton(AF_INET, argv[2], &peer.sin_addr) != 1) return 2;
     int tcp = socket(AF_INET, SOCK_STREAM, 0), udp = socket(AF_INET, SOCK_DGRAM, 0);
-    int result = 1;
+    int result = 1, camera=-1;
     struct timeval timeout = {.tv_sec = 5};
     socklen_t size = sizeof(local);
-    char tcp_text[24], udp_text[24];
+    char tcp_text[24], udp_text[24], camera_text[24];
     if (tcp < 0 || udp < 0 || setsockopt(tcp, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) ||
         control_liveness(tcp)) goto out;
     peer.sin_port = htons((uint16_t)port(argv[3]));
@@ -62,6 +66,14 @@ int main(int argc, char **argv)
     if (connect(udp, (struct sockaddr *)&peer, sizeof(peer)) ||
         getsockname(udp, (struct sockaddr *)&local, &size)) goto out;
     if (fcntl(tcp, F_SETFL, O_NONBLOCK) || fcntl(udp, F_SETFL, O_NONBLOCK)) goto out;
+    if(camera_port) {
+        camera=socket(AF_INET,SOCK_STREAM,0);
+        peer.sin_port=htons((uint16_t)camera_port);
+        if(camera<0 || setsockopt(camera,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout)) ||
+            control_liveness(camera) || connect(camera,(struct sockaddr*)&peer,sizeof(peer)) ||
+            fcntl(camera,F_SETFL,O_NONBLOCK)) goto out;
+        snprintf(camera_text,sizeof(camera_text),"%d",camera);
+    }
     printf("UDP_PORT=%u\n", (unsigned)ntohs(local.sin_port));
     if (fflush(stdout)) goto out;
     snprintf(tcp_text, sizeof(tcp_text), "%d", tcp);
@@ -69,12 +81,17 @@ int main(int argc, char **argv)
     char *child[48] = {argv[1], "--role", "edge", "--control-fd", tcp_text,
                        "--media-fd", udp_text, "--drm-device", argv[5]};
     int next = 9;
-    for (int i = 7; i < argc; ++i) child[next++] = argv[i];
+    for (int i = 7; i < argc; i+=2) {
+        if(!strcmp(argv[i],"--camera-port")) continue;
+        child[next++]=argv[i];child[next++]=argv[i+1];
+    }
+    if(camera_port) { child[next++]="--camera-media-fd";child[next++]=camera_text; }
     child[next] = NULL;
     execv(argv[1], child);
 out:
     perror("edge launch");
     if (tcp >= 0) close(tcp);
     if (udp >= 0) close(udp);
+    if (camera >= 0) close(camera);
     return result;
 }

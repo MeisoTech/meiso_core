@@ -1,7 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 #include "display_ingress_simulated_service_private.h"
-#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+#ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
 #include <meiso/integrations/display_camera_channel.h>
+#ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+#include <meiso/edge/linux/camera_v4l2.h>
+#endif
 #endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
 #include "../targets/k230d-linux/display_ingress_overlay_raster.h"
@@ -182,12 +185,44 @@ bool service_run_host_media(Service *s)
 bool service_run_edge_media(Service *s) { return service_fail(s, "application", "host-only"); }
 #else
 static MeisoIngressVideo *video;
-#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
 static MeisoDisplayCameraChannel *camera;
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
 static uint8_t capture_pixels[320*240*4];
 static size_t capture_used;
 static bool capture_started;
-static uint64_t capture_sequence,capture_last,capture_next,camera_deadline,camera_eof_deadline;
+static uint64_t capture_sequence;
+#else
+static MeisoCameraV4l2Adapter *capture;
+static void *capture_arena;
+static bool capture_stop(void)
+{
+    if(!capture) return true;
+    const MeisoCameraV4l2StopStatus status=meiso_camera_v4l2_stop(capture);
+    MeisoCameraV4l2Snapshot state;
+    if(meiso_camera_v4l2_snapshot(capture,&state))
+        fprintf(stderr,"CAMERA_CAPTURE stopped=%u mapped=%"PRIu64" stream_on=%d borrowed=%d cleanup_stage=%u errno=%d\n",
+            status,state.mapped_bytes,state.stream_on,state.frame_borrowed,state.cleanup_failure_stage,state.cleanup_error);
+    return status==MEISO_CAMERA_V4L2_STOP_STOPPED || status==MEISO_CAMERA_V4L2_STOP_UNCHANGED;
+}
+static bool capture_open(const char *path)
+{
+    MeisoCameraV4l2Config config;
+    uint64_t epoch=0;
+    do { if(!service_random_bytes(&epoch,sizeof(epoch))) return false; } while(!epoch);
+    meiso_camera_v4l2_default_config(epoch,&config);
+    config.device_path=path;
+    const size_t bytes=meiso_camera_v4l2_memory_required();
+    if(posix_memalign(&capture_arena,meiso_camera_v4l2_alignment_required(),bytes)!=0) return false;
+    if(meiso_camera_v4l2_init(capture_arena,bytes,&config,&capture)!=MEISO_CAMERA_V4L2_INIT_OK) return false;
+    const MeisoCameraV4l2StartStatus status=meiso_camera_v4l2_start(capture);
+    MeisoCameraV4l2Snapshot snapshot;
+    if(!meiso_camera_v4l2_snapshot(capture,&snapshot)) return false;
+    fprintf(stderr,"CAMERA_CAPTURE start=%u arena=%zu mapped=%"PRIu64" stage=%u errno=%d\n",
+        status,bytes,snapshot.mapped_bytes,snapshot.primary_failure_stage,snapshot.primary_error);
+    return status==MEISO_CAMERA_V4L2_START_STARTED;
+}
+#endif
+static uint64_t capture_last,capture_next,camera_deadline,camera_eof_deadline;
 static bool camera_tick(Service *s)
 {
     if(!camera) return true;
@@ -198,10 +233,14 @@ static bool camera_tick(Service *s)
         /* Independent carriers can deliver camera EOF before Session CLOSE.
          * Stop capture/submit now; only a real control close can finish cleanly. */
         camera_eof_deadline=service_deadline_after_ms(SERVICE_TIMEOUT_MS);
+#ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+        if(!capture_stop()) return service_fail(s,"camera","capture-stop");
+#endif
         return true;
     }
     if(!meiso_display_camera_channel_ready(camera))
         return now<camera_deadline || service_fail(s,"camera","negotiation-timeout");
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
     if(!capture_started) { capture_started=true;capture_last=now; }
     const ssize_t n=read(s->camera_input_fd,capture_pixels+capture_used,sizeof(capture_pixels)-capture_used);
     if(n<0 && errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR) return service_fail(s,"camera","capture-read");
@@ -217,9 +256,29 @@ static bool camera_tick(Service *s)
             fprintf(stderr,"CAMERA_SUBMITTED frame=%"PRIu64" source_ns=%"PRIu64" bytes=%zu fixture=false exposure=unknown\n",capture_sequence,now,sizeof(capture_pixels));
         }
     }
+#else
+    MeisoCameraV4l2FrameView frame;
+    const MeisoCameraV4l2PollStatus status=meiso_camera_v4l2_poll_frame(capture,&frame);
+    if(status==MEISO_CAMERA_V4L2_POLL_FRAME) {
+        bool ok=true;
+        capture_last=now;
+        if(now>=capture_next) {
+            const MeisoCompositionMediaDesired *d=meiso_display_camera_channel_effective(camera);
+            ok=d && meiso_display_camera_channel_submit(camera,frame.ref.driver_sequence,frame.source_time,frame.bytes);
+            if(ok) {
+                capture_next=now+UINT64_C(1000000000000)/d->fps_millihz;
+                fprintf(stderr,"CAMERA_SUBMITTED frame=%u source_ns=%"PRIu64" bytes=%zu fixture=false exposure=unknown timestamp_provenance=%u sequence_provenance=%u\n",
+                    frame.ref.driver_sequence,frame.source_time.monotonic_ns,frame.bytes.size,frame.timestamp_provenance,frame.sequence_provenance);
+            }
+        }
+        if(meiso_camera_v4l2_release_frame(capture,&frame.ref)!=MEISO_CAMERA_V4L2_RELEASE_RELEASED)
+            return service_fail(s,"camera","capture-release");
+        if(!ok) return service_fail(s,"camera","capture-submit");
+    } else if(status!=MEISO_CAMERA_V4L2_POLL_WOULD_BLOCK && status!=MEISO_CAMERA_V4L2_POLL_INTERRUPTED)
+        return service_fail(s,"camera","capture-poll");
+#endif
     return now-capture_last<UINT64_C(3000000000) || service_fail(s,"camera","capture-stalled");
 }
-#endif
 static struct { uint64_t sequence; uint8_t digest[32];
     bool projection_present; MeisoDisplayProjection projection; } ledger[16];
 static MeisoDisplayIngressPresentationEvidence pending;
@@ -361,7 +420,6 @@ static bool queue_presentation(Service *s)
 bool service_run_edge_media(Service *s)
 {
     if (!service_overlay_initialize(s, video)) return false;
-#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
     if(s->camera_enabled) {
         MeisoDisplayCameraChannelConfig config={.session=s->session,.runtime=s->runtime,.media_fd=s->camera_media_fd};
         if(!service_random_bytes(&config.edge_nonce,sizeof(config.edge_nonce))) return false;
@@ -369,7 +427,6 @@ bool service_run_edge_media(Service *s)
         if(!camera) return service_fail(s,"camera","open");
         capture_last=service_now_ns(); camera_deadline=capture_last+UINT64_C(10000000000);
     }
-#endif
     const uint64_t deadline = service_now_ns() + frame_limit * UINT64_C(1000000000) / 30U + UINT64_C(15000000000);
     uint64_t last_progress = service_now_ns(), previous_presented = 0;
     while (!interrupted && (continuous_edge || service_now_ns() < deadline)) {
@@ -384,14 +441,10 @@ bool service_run_edge_media(Service *s)
         if (step == SERVICE_CONTROL_FAILED) return false;
         if (step == SERVICE_CONTROL_EVENT) {
             int consumed=0;
-#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
             if(camera) consumed=meiso_display_camera_channel_consume(camera,&event);
-#endif
             if(consumed<0 || (!consumed && !service_overlay_consume(s,&event))) return service_fail(s,"camera","control");
         }
-        #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
         if(!camera_tick(s)) return false;
-        #endif
         if (!queue_presentation(s)) return false;
         if (presented != previous_presented || ledger_count == 0) last_progress = service_now_ns();
         previous_presented = presented;
@@ -418,6 +471,9 @@ int main(int argc, char **argv)
 {
     /* Caller owns connecting TCP/UDP; this executable assumes no deployment address. */
     const char *input = NULL, *video_path = "/dev/video0", *drm_path = "/dev/dri/card0";
+#if defined(MEISO_DISPLAY_INGRESS_VIDEO_EDGE) && !defined(MEISO_DISPLAY_INGRESS_DESKTOP_EDGE)
+    const char *camera_path="/dev/video1";
+#endif
     memset(&service, 0, sizeof(service));
     service.control_fd = service.media_fd = service.frame_fd = -1;
     service.camera_input_fd=service.camera_media_fd=-1;
@@ -442,10 +498,13 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--drm-device") == 0) drm_path = argv[i+1];
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
         else if (strcmp(argv[i], "--output-directory") == 0) drm_path = argv[i+1];
-        else if (strcmp(argv[i], "--camera-media-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_media_fd=(int)n;
         else if (strcmp(argv[i], "--camera-input-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_input_fd=(int)n;
 #endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+        else if (strcmp(argv[i], "--camera-media-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_media_fd=(int)n;
+#ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+        else if (strcmp(argv[i], "--camera-device") == 0) camera_path=argv[i+1];
+#endif
         else if (strcmp(argv[i], "--continuous") == 0 && strcmp(argv[i+1], "on") == 0) continuous_edge=true;
         else if (strcmp(argv[i], "--video-layout") == 0 &&
             (strcmp(argv[i+1], "native") == 0 || strcmp(argv[i+1], "side-by-side") == 0))
@@ -461,6 +520,12 @@ int main(int argc, char **argv)
         return 2;
     }
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+    service.camera_enabled=service.camera_media_fd>=0;
+    if(service.camera_enabled && (service.camera_media_fd==service.control_fd ||
+            service.camera_media_fd==service.media_fd || service.overlay_enabled || service.stereo_video)) {
+        fprintf(stderr,"camera v8 requires a separate media descriptor and native video without HUD/stereo placement\n");
+        return 2;
+    }
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
     if ((service.camera_input_fd>=0)!=(service.camera_media_fd>=0)) return 2;
     service.camera_enabled=service.camera_input_fd>=0;
@@ -483,6 +548,11 @@ int main(int argc, char **argv)
         fprintf(stderr,"desktop Edge requires an explicit new --output-directory\n"); return 2;
     }
     fprintf(stderr,"DESKTOP_EDGE evidence=SIMULATED physical_presentation=false backend=ffmpeg-offscreen\n");
+#else
+    if(service.camera_enabled) service.camera_capability=(MeisoCompositionMediaCapability){
+        .source=MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,.pixel_formats=MEISO_COMPOSITION_MEDIA_PIXEL_MASK_NV12,
+        .codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW,.min_width=320,.min_height=240,.max_width=320,.max_height=240,
+        .max_fps_millihz=5000,.max_access_unit_bytes=320*240*3/2,.max_fragment_payload_bytes=4096};
 #endif
     if (service.stereo_video && !service.overlay_enabled) {
         fprintf(stderr, "side-by-side video requires native-overlay on (stereo overlay Profile)\n");
@@ -524,16 +594,22 @@ int main(int argc, char **argv)
     if (input == NULL || !open_source(input)) { fprintf(stderr, "invalid H264 IDR source\n"); return 2; }
     fprintf(stderr, "SOURCE units=%zu bytes=%zu\n", unit_count, source_size);
 #endif
-    bool ok = service_run(&service);
+    bool ok=true;
+#if defined(MEISO_DISPLAY_INGRESS_VIDEO_EDGE) && !defined(MEISO_DISPLAY_INGRESS_DESKTOP_EDGE)
+    if(service.camera_enabled) ok=capture_open(camera_path);
+#endif
+    if(ok) ok=service_run(&service);
     MeisoDisplayIngressMediaTransportSnapshot media_state;
     memset(&media_state, 0, sizeof(media_state));
     if (service.media != NULL) (void)meiso_display_ingress_media_transport_snapshot(service.media, &media_state);
     int restored = 1;
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
     service_overlay_finish();
-#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
     meiso_display_camera_channel_close(camera);
     service_close_fd(&service.camera_media_fd); service_close_fd(&service.camera_input_fd);
+#ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+    if(!capture_stop()) ok=false;
+    free(capture_arena);
 #endif
     meiso_k230d_overlay_font_close();
     restored = meiso_ingress_video_close(video) == 0;

@@ -386,6 +386,7 @@ if(UNIX)
         target_include_directories(meiso_display_ingress_video_edge SYSTEM PRIVATE
             "${MEISO_DISPLAY_DRM_INCLUDE_DIR}" "${MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR}")
         target_link_libraries(meiso_display_ingress_video_edge PRIVATE meiso_posix_tcp_adapter
+            meiso_display_camera_channel meiso_camera_v4l2_adapter
             meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
             "${MEISO_DISPLAY_DRM_LIBRARY}")
         set_target_properties(meiso_display_ingress_video_edge PROPERTIES SKIP_BUILD_RPATH TRUE)
