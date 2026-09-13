@@ -889,3 +889,45 @@ it. Current services use the v9 optional graph described above. This does not ad
 color calibration to the wire. v8 still does not select
 native HUD/stereo placement; testing this graph must not be reported as those
 combined product modes passing.
+
+### Native scene payload building block (not selected by application v9)
+
+`scene.h` defines a bounded replacement for the single repeated HUD rectangle:
+up to 16 independent rectangles with optional existing label/CJK16 text. Each
+rectangle uses absolute output coordinates; Host supplies separate left/right
+geometry after projection and clipping. Count zero clears the scene. All items
+share one immutable generation and active video desired-version reference.
+This codec is not yet an advertised route: v9 and HUD_PLAN v3 remain unchanged.
+Sending these bytes on that legacy route is invalid. Catalog, service and Host
+application integration must select a new version before this becomes usable
+by applications.
+
+Integers are big-endian. Capability is 36 bytes: output width/height, maximum
+backing pixels, maximum text bytes per item (0..48), updates per second (1..60)
+at offsets 0/4/8/12/16; u16 minimum width/height and power-of-two width/height
+alignment at 20/22/24/26; u32 maximum items (1..16) and existing font mask at
+28/32. These are actual platform limits; 4096×4096 is the codec dimension
+ceiling, not a supported K230D surface size.
+
+Plan length is exactly `32 + 88 × count` (32..1440 bytes). Header contains u64
+generation/video desired version at 0/8, u32 canvas width/height at 16/20, u8
+count at 24, and seven zero bytes. Each item has u32 x/y/width/height at 0/4/8/12,
+straight ARGB8888 border/fill/text colors at 16/20/24, u16 border width at 28,
+u8 text scale/font/text byte count at 30/31/32, seven zero bytes and 48 text
+bytes at 40 (unused tail zero). Text repertoire and scaling follow HUD v3.
+Geometry must fit the canvas and text must fit inside the border; out-of-range
+items are rejected, never silently clipped or reprojected on Edge.
+
+Items paint in list order using source-over alpha; transparent interiors do
+not erase earlier objects. The renderer clears one backing region per scene.
+Its union includes all inter-eye gaps, is padded to the advertised minimum and
+alignment, and is shifted inward only as needed to keep padding on canvas.
+That entire region consumes the advertised pixel budget, even for thin frames.
+Empty scenes need no pixel storage. Platform color precision may be lower than
+the logical color (the bounded K230D candidate uses straight ARGB4444).
+
+Codecs and support checks leave outputs untouched on failure. Acceptance covers
+different per-eye geometry, overlap transparency, clear, stale video reference,
+area including padding/gaps, malformed canonical bytes and bounded writes.
+Physical qualification, source binding, invalidation and application receipts
+remain separate requirements; codec/raster tests alone do not establish them.

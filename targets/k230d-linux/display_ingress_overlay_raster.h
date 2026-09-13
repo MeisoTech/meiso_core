@@ -10,4 +10,8 @@ void meiso_k230d_overlay_font_close(void);
 bool meiso_k230d_overlay_raster(const MeisoDisplayOverlayCapability *,
     const MeisoDisplayOverlayPlan *, uint32_t *pixels, size_t capacity,
     uint32_t *width, uint32_t *height);
+/* Shared bounded glyph lookup, not a public SDK/font service. Rows are 16-bit
+ * MSB-first and zero-padded to 16 rows. Failure leaves outputs untouched. */
+bool meiso_k230d_overlay_glyph(uint8_t font, uint32_t codepoint,
+    uint8_t rows[32], uint8_t *advance, uint8_t *height);
 #endif

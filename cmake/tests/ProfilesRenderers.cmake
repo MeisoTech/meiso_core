@@ -7,6 +7,11 @@ meiso_add_c_test(meiso_display_ingress_overlay_test
     tests/test_display_ingress_overlay.c profile meiso_display_ingress_profile)
 target_sources(meiso_display_ingress_overlay_test PRIVATE
     targets/k230d-linux/display_ingress_overlay_raster.c)
+meiso_add_c_test(meiso_display_ingress_scene_test
+    tests/test_display_ingress_scene.c profile meiso_display_ingress_profile)
+target_sources(meiso_display_ingress_scene_test PRIVATE
+    targets/k230d-linux/display_ingress_overlay_raster.c
+    targets/k230d-linux/display_ingress_scene_raster.c)
 
 meiso_add_c_test(
     meiso_wifi_telemetry_profile_test

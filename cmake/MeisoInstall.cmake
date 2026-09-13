@@ -117,6 +117,7 @@ install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/profile.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/overlay.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/scene.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/camera.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/application.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/projection.h"

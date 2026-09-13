@@ -121,6 +121,7 @@ add_library(
     meiso_display_ingress_profile
     profiles/display_ingress/display_ingress_profile.c
     profiles/display_ingress/display_ingress_overlay.c
+    profiles/display_ingress/display_ingress_scene.c
     profiles/display_ingress/display_ingress_camera.c
     profiles/display_ingress/display_ingress_application.c
     profiles/display_ingress/display_ingress_profile_codec.c

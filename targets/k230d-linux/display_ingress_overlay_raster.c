@@ -47,6 +47,21 @@ static unsigned glyph(char c, unsigned row)
     if(c=='/') return 1U<<(row*4/6);
     return 0;
 }
+bool meiso_k230d_overlay_glyph(uint8_t selected, uint32_t cp,
+    uint8_t out[32], uint8_t *advance, uint8_t *height)
+{
+    if(!out || !advance || !height || selected>1) return false;
+    uint8_t rows[32]={0},a,h;
+    if(selected==MEISO_DISPLAY_OVERLAY_FONT_CJK16) {
+        if(font_fd<0 || cp>65535 || pread(font_fd,rows,32,8+(off_t)cp*32)!=32) return false;
+        a=cp<128?8:16;h=16;
+    } else {
+        if(cp>127) return false;
+        for(unsigned y=0;y<7;++y) rows[2*y]=(uint8_t)(glyph((char)cp,y)<<3);
+        a=6;h=7;
+    }
+    memcpy(out,rows,32);*advance=a;*height=h;return true;
+}
 bool meiso_k230d_overlay_raster(const MeisoDisplayOverlayCapability *cap,
     const MeisoDisplayOverlayPlan *p, uint32_t *pixels, size_t capacity,
     uint32_t *width, uint32_t *height)
