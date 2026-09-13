@@ -151,6 +151,8 @@ chmod 755 /etc/init.d/S90meiso-edge
 `MEISO_CAMERA_DEVICE=/dev/video1` 和 `MEISO_CAMERA_PORT=4443`（节点按板型确认）；
 在 Host `host.env` 设置 `MEISO_CAMERA_PORT=4443`。当前 K230D NV12 路径还需 Host 设置
 `MEISO_CAMERA_COLORIMETRY=bt601-limited`；桌面 RGBA 相机不设置此项。
+相机窗口组合的已测配置还将 Host `MEISO_AU_BYTES` 设为 `131072`，避免沿用简单演示图的
+30720 字节预算。它是单个压缩帧的上限，不是实际帧大小或已承诺的链路吞吐。
 相机 TCP 端口必须不同于控制 TCP 端口，允许当前路由双向通过。
 当前 v9 应用 Profile 可在同一 Session 中组合相机、双眼视频和原生 HUD；升级需同时安装
 匹配的两端版本，不能仅替换一侧。未配置相机时继续使用视频/HUD。
