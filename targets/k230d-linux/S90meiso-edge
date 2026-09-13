@@ -21,6 +21,8 @@ running() {
 
 start() {
     running && { echo "Meiso Edge already running"; return 0; }
+    case "${MEISO_NATIVE_OVERLAY:-on}" in on|scene) ;; *)
+        echo "MEISO_NATIVE_OVERLAY must be on or scene" >&2; return 2 ;; esac
     set --
     if [ -n "${MEISO_CAMERA_DEVICE:-}${MEISO_CAMERA_PORT:-}" ]; then
         if [ -z "${MEISO_CAMERA_DEVICE:-}" ] || [ -z "${MEISO_CAMERA_PORT:-}" ]; then
@@ -47,7 +49,7 @@ start() {
         "$MEISO_HOST_IP" "${MEISO_CONTROL_PORT:-4440}" "${MEISO_MEDIA_PORT:-4441}" \
         "${MEISO_DRM_DEVICE:-/dev/dri/card0}" "${MEISO_EDGE_MEDIA_PORT:-4442}" \
         --width "${MEISO_WIDTH:-1280}" --height "${MEISO_HEIGHT:-720}" \
-        --native-overlay on --continuous on --video-layout "${MEISO_VIDEO_LAYOUT:-side-by-side}" \
+        --native-overlay "${MEISO_NATIVE_OVERLAY:-on}" --continuous on --video-layout "${MEISO_VIDEO_LAYOUT:-side-by-side}" \
         --local-peer "$MEISO_LOCAL_PEER" --expected-peer "$MEISO_EXPECTED_PEER" "$@"
 }
 

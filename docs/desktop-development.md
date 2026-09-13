@@ -80,6 +80,13 @@ screen claim. Parameter snapshots for offline optics
 are separate from real device calibration. Actual supported dimensions and AU
 budgets come from each peer's Catalog rather than the desktop's memory size.
 
+For independent per-eye rectangles and source-bound recognition, select
+`--native-overlay scene` at both peers (application v10). The installed Looking
+Glass SDK keeps its ordinary screen-message API and additionally accepts native
+scenes; use its static-scene adapter for source/optical binding. A v10 installation
+does not supply measured optical calibration. On the K230D init deployment,
+`MEISO_NATIVE_OVERLAY=scene` selects this same mode; omission retains `on`/v9.
+
 ## Optional local camera uplink
 
 The Edge launcher accepts `--camera-device DEVICE --camera-port PORT` before

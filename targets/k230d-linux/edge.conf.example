@@ -10,6 +10,8 @@ MEISO_DRM_DEVICE=/dev/dri/card0
 MEISO_WIDTH=1280
 MEISO_HEIGHT=720
 MEISO_VIDEO_LAYOUT=side-by-side
+# Match Host: on selects the v9 HUD; scene selects v10 native scenes.
+MEISO_NATIVE_OVERLAY=on
 # Optional real CameraMedia uplink: enable BOTH and use the Host's camera port.
 # Confirm the device is an ISP capture node on this board, not its VPU decoder.
 # MEISO_CAMERA_DEVICE=/dev/video1
