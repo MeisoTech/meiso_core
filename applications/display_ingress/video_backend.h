@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <meiso/profiles/display_ingress/scene.h>
 
 /* Platform adapter boundary. The service owns admission, transport and evidence policy.
  * K230D uses MVX/DRM; desktop validation uses software decoding/offscreen output. */
@@ -78,6 +79,15 @@ int meiso_ingress_video_output_size(const MeisoIngressVideo *video, uint32_t *wi
 MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
     MeisoIngressVideo *video, uint64_t sequence, uint32_t x, uint32_t y,
     uint32_t width, uint32_t height, const uint32_t *pixels, size_t bytes);
+
+/* Select/reserve a native scene before any input/overlay submission. Publishes
+ * the adapter's actual bounded output capability on success. Mutually exclusive
+ * with the legacy pixel-submit API. Scene pixels are generated directly in the
+ * idle platform buffer; caller's plan is not retained. Empty updates perform a
+ * transparent minimum-size flip, including when the scene was already empty. */
+int meiso_ingress_video_scene_prepare(MeisoIngressVideo *,uint32_t available_fonts,MeisoDisplaySceneCapability *);
+MeisoIngressVideoSubmitResult meiso_ingress_video_scene_submit(
+    MeisoIngressVideo *,uint64_t sequence,const MeisoDisplayScenePlan *);
 
 /* Nonblocking observation of the separate overlay page flip. Keep calling the
  * regular video poll too; it serializes both planes on their shared CRTC.

@@ -38,5 +38,20 @@ int main(void)
     CHECK(!meiso_display_overlay_evidence_decode_for_class((MeisoByteView){bytes,56},2,&got));
     CHECK(!meiso_display_overlay_evidence_decode((MeisoByteView){bytes,56},&got));
     CHECK(!meiso_display_overlay_evidence_encode_for_class(&proof,3,(MeisoMutableBuffer){bytes,56}));
+    c.video.capability.evidence_classes=1;c.overlay_enabled=true;
+    c.scene=(MeisoDisplaySceneCapability){1920,1080,1152000,48,10,16,16,8,1,16,1};
+    for(unsigned camera=0;camera<2;++camera) {
+        c.camera_enabled=camera!=0;const size_t ec=2+camera,rc=7+3*camera;
+        CHECK(meiso_display_application_build_catalog_for_version(&c,10,(MeisoMutableBuffer){bytes,148},ep,3,rt,10));
+        CHECK(meiso_display_application_validate_catalog_for_version(ep,ec,rt,rc,10,&decoded));
+        CHECK(decoded.scene.max_pixels==1152000 && ep[1].capability_schema.version==4 &&
+            rt[4].route.resource.max_payload_size==MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE+1440);
+        CHECK(!meiso_display_application_validate_catalog(ep,ec,rt,rc,&decoded));
+        rt[4].route.resource.schema.version=3;
+        CHECK(!meiso_display_application_validate_catalog_for_version(ep,ec,rt,rc,10,&decoded));
+        CHECK(meiso_display_application_build_catalog(&c,(MeisoMutableBuffer){bytes,148},ep,3,rt,10));
+        CHECK(!meiso_display_application_validate_catalog_for_version(ep,ec,rt,rc,10,&decoded));
+    }
+    CHECK(!meiso_display_application_build_catalog_for_version(&c,11,(MeisoMutableBuffer){bytes,148},ep,3,rt,10));
     puts("application combinations, geometry and evidence isolation passed");return 0;
 }

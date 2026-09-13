@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../../applications/display_ingress/video_backend.h"
+#include "display_ingress_scene_raster.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -29,7 +30,7 @@
 #endif
 enum { INPUT_BUFFERS = 2, CAPTURE_BUFFERS = 7, AU_LIMIT = 128 * 1024,
        INPUT_BYTES = 1024 * 1024, DUMMY_BYTES = 4096, NPROPS = 10,
-       OVERLAY_BYTES = 256 * 1024, CAPTURE_POOL_BYTES = 10 * 1024 * 1024 };
+       OVERLAY_BYTES = 256 * 1024, SCENE_PIXELS = 1600 * 720, CAPTURE_POOL_BYTES = 10 * 1024 * 1024 };
 enum state { DECODER_IDLE, WAIT_SOURCE, READY, FAILED };
 
 struct surface { int fd; uint32_t handle; void *map; size_t bytes; };
@@ -48,6 +49,8 @@ struct MeisoIngressVideo {
     int input_busy[INPUT_BUFFERS], capture_count, held_capture;
     uint32_t shown_fb, shown_handles[2];
     struct flip flip;
+    MeisoDisplaySceneCapability scene_capability;
+    int scene_prepared;
     struct {
         uint32_t plane, props[NPROPS], fb[2], width[2], height[2];
         uint64_t before[NPROPS], sequence, last_sequence, ns;
@@ -301,9 +304,11 @@ static int reconfigure_capture(struct MeisoIngressVideo *v)
         for (unsigned p = 0; p < 2; ++p)
             pool_bytes += ((size_t)v->capture_v4l_length[i][p] + 4095) & ~(size_t)4095;
     }
-    fprintf(stderr,"CAPTURE_BUDGET width=%u height=%u minimum=%d count=%u bytes=%zu limit=%u\n",
-        v->width,v->height,minimum.value,count,pool_bytes,CAPTURE_POOL_BYTES);
-    if (pool_bytes > CAPTURE_POOL_BYTES) { errno = ENOSPC; return -1; }
+    const size_t scene_bytes=v->scene_prepared?v->overlay.surfaces[0].bytes+v->overlay.surfaces[1].bytes:0;
+    const size_t capture_limit=CAPTURE_POOL_BYTES-scene_bytes;
+    fprintf(stderr,"CAPTURE_BUDGET width=%u height=%u minimum=%d count=%u bytes=%zu limit=%zu scene_bytes=%zu\n",
+        v->width,v->height,minimum.value,count,pool_bytes,capture_limit,scene_bytes);
+    if (pool_bytes > capture_limit) { errno = ENOSPC; return -1; }
     for (unsigned i = 0; i < count; ++i) {
         if (make_surface(v->drm_fd, v->capture_v4l_length[i][0], 0, &v->capture[i][0]) ||
             make_surface(v->drm_fd, v->capture_v4l_length[i][1], 0, &v->capture[i][1]) ||
@@ -552,7 +557,7 @@ static int setup_overlay(struct MeisoIngressVideo *v)
         if (!p) continue;
         int argb = 0, is_overlay = 0;
         for (uint32_t j = 0; j < p->count_formats; ++j)
-            if (p->formats[j] == DRM_FORMAT_ARGB8888) argb = 1;
+            if (p->formats[j] == (v->scene_prepared?DRM_FORMAT_ARGB4444:DRM_FORMAT_ARGB8888)) argb = 1;
         drmModeObjectProperties *props = drmModeObjectGetProperties(
             v->drm_fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
         if (props) for (uint32_t j = 0; j < props->count_props; ++j) {
@@ -572,16 +577,18 @@ static int setup_overlay(struct MeisoIngressVideo *v)
     return 0;
 }
 
-MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
+static MeisoIngressVideoSubmitResult submit_overlay(
     MeisoIngressVideo *v, uint64_t sequence, uint32_t x, uint32_t y,
-    uint32_t width, uint32_t height, const uint32_t *pixels, size_t bytes)
+    uint32_t width, uint32_t height, const uint32_t *pixels, size_t bytes,const MeisoDisplayScenePlan *scene)
 {
     if (!v || v->state == FAILED || !sequence || sequence <= v->overlay.last_sequence)
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if (v->flip.pending || v->overlay.pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
     const int disable = width == 0 && height == 0 && pixels == NULL && bytes == 0;
-    const uint64_t needed = (uint64_t)width * height * 4;
-    if ((!disable && (!pixels || !width || !height || needed > OVERLAY_BYTES || bytes != needed ||
+    const unsigned bpp=scene?2:4;
+    const uint64_t needed = (uint64_t)width * height * bpp;
+    const size_t limit=scene?(size_t)v->scene_capability.max_pixels*2:OVERLAY_BYTES;
+    if ((!disable && ((!pixels && !scene) || !width || !height || needed > limit || bytes != needed ||
             width > v->output_w || height > v->output_h ||
             x > v->output_w - width || y > v->output_h - height)) ||
         (disable && (v->overlay.front < 0 || x || y))) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
@@ -593,11 +600,18 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
         target = v->overlay.front == 0 ? 1 : 0;
         for (int i = 0; i < 2; ++i)
             if (v->overlay.surfaces[i].fd < 0 &&
-                make_surface(v->drm_fd, OVERLAY_BYTES, 1, &v->overlay.surfaces[i]))
+                make_surface(v->drm_fd, limit, 1, &v->overlay.surfaces[i]))
                 return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
         struct surface *surface = &v->overlay.surfaces[target];
         if (sync_for_cpu_write(surface->fd, 1)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
-        memcpy(surface->map, pixels, bytes);
+        if(scene) {
+            MeisoDisplaySceneRegion region;
+            if(scene->item_count==0) memset(surface->map,0,bytes);
+            else if(!meiso_k230d_scene_raster(&v->scene_capability,scene,surface->map,bytes/2,&region) ||
+                region.x!=x || region.y!=y || region.width!=width || region.height!=height) {
+                (void)sync_for_cpu_write(surface->fd,0);return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+            }
+        } else memcpy(surface->map, pixels, bytes);
         if (sync_for_cpu_write(surface->fd, 0)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
         if (v->overlay.fb[target] &&
             (v->overlay.width[target] != width || v->overlay.height[target] != height)) {
@@ -605,8 +619,8 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
             v->overlay.fb[target] = 0;
         }
         if (!v->overlay.fb[target]) {
-            uint32_t handles[4] = {surface->handle}, pitches[4] = {width * 4}, offsets[4] = {0};
-            if (drmModeAddFB2(v->drm_fd, width, height, DRM_FORMAT_ARGB8888,
+            uint32_t handles[4] = {surface->handle}, pitches[4] = {width * bpp}, offsets[4] = {0};
+            if (drmModeAddFB2(v->drm_fd, width, height, scene?DRM_FORMAT_ARGB4444:DRM_FORMAT_ARGB8888,
                     handles, pitches, offsets, &v->overlay.fb[target], 0))
                 return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
             v->overlay.width[target] = width; v->overlay.height[target] = height;
@@ -623,6 +637,38 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
     v->overlay.target = target; v->overlay.sequence = sequence; v->overlay.last_sequence = sequence;
     v->overlay.pending = 1; v->overlay.seen = 0;
     return MEISO_INGRESS_VIDEO_ACCEPTED;
+}
+
+int meiso_ingress_video_scene_prepare(MeisoIngressVideo *v,uint32_t fonts,MeisoDisplaySceneCapability *out)
+{
+    if(!v || !out || !fonts || (fonts&~3U) || v->state!=DECODER_IDLE || v->scene_prepared || v->overlay.last_sequence ||
+        v->overlay.plane || v->output_w<16 || v->output_h<16) return errno=EINVAL,-1;
+    const uint32_t canvas=v->output_w*v->output_h;
+    v->scene_capability=(MeisoDisplaySceneCapability){v->output_w,v->output_h,
+        canvas<SCENE_PIXELS?canvas:SCENE_PIXELS,48,10,16,16,8,1,16,fonts};
+    v->scene_prepared=1;
+    if(setup_overlay(v)) return -1;
+    for(int i=0;i<2;++i)
+        if(make_surface(v->drm_fd,(size_t)v->scene_capability.max_pixels*2,1,&v->overlay.surfaces[i])) return -1;
+    const size_t bytes=v->overlay.surfaces[0].bytes+v->overlay.surfaces[1].bytes;
+    if(bytes>=CAPTURE_POOL_BYTES) return errno=ENOSPC,-1;
+    fprintf(stderr,"SCENE_BUDGET dma_bytes=%zu combined_capture_limit=%u cpu_staging=0\n",bytes,CAPTURE_POOL_BYTES);
+    *out=v->scene_capability;return 0;
+}
+MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(MeisoIngressVideo *v,uint64_t sequence,
+    uint32_t x,uint32_t y,uint32_t width,uint32_t height,const uint32_t *pixels,size_t bytes)
+{
+    if(v && v->scene_prepared) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    return submit_overlay(v,sequence,x,y,width,height,pixels,bytes,NULL);
+}
+MeisoIngressVideoSubmitResult meiso_ingress_video_scene_submit(MeisoIngressVideo *v,uint64_t sequence,
+    const MeisoDisplayScenePlan *plan)
+{
+    MeisoDisplaySceneRegion r;
+    if(!v || !v->scene_prepared || !plan ||
+        !meiso_display_scene_supported(&v->scene_capability,plan,plan->video_desired_version,&r)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if(!r.width) {r.width=v->scene_capability.min_width;r.height=v->scene_capability.min_height;}
+    return submit_overlay(v,sequence,r.x,r.y,r.width,r.height,NULL,(size_t)r.width*r.height*2,plan);
 }
 
 MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(

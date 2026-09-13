@@ -160,7 +160,7 @@ bool meiso_display_overlay_evidence_decode(MeisoByteView in, MeisoDisplayOverlay
 static const MeisoEndpointId endpoint={UINT64_C(0x444953504c41595f),UINT64_C(0x4855445f454e445f)};
 static const MeisoSchemaRef capability_schema={{UINT64_C(0x444953505f534348),UINT64_C(0x4855445f4341505f)},3};
 static const uint64_t suffix[3]={UINT64_C(0x4855445f504c414e),UINT64_C(0x4855445f53544154),UINT64_C(0x4855445f50524553)};
-static MeisoRuntimeV4RouteDescriptor hud_route(unsigned i, uint64_t incarnation)
+MeisoRuntimeV4RouteDescriptor meiso_display_overlay_private_route(unsigned i, uint64_t incarnation)
 {
     MeisoRuntimeV4RouteDescriptor v={0}; v.route.endpoint_id=endpoint; v.route.endpoint_incarnation=incarnation;
     v.route.resource.id=(MeisoResourceId){UINT64_C(0x444953504c41595f),suffix[i]};
@@ -172,6 +172,8 @@ static MeisoRuntimeV4RouteDescriptor hud_route(unsigned i, uint64_t incarnation)
     v.route.facet=i==0?MEISO_RUNTIME_FACET_DESIRED:i==1?MEISO_RUNTIME_FACET_ACTUAL:MEISO_RUNTIME_FACET_DATA;
     v.delivery=MEISO_RUNTIME_DELIVERY_INLINE; return v;
 }
+MeisoRuntimeEndpointDescriptor meiso_display_overlay_private_endpoint(uint64_t incarnation)
+{ return (MeisoRuntimeEndpointDescriptor){endpoint,incarnation,capability_schema,{NULL,0}}; }
 bool meiso_display_overlay_configure_session(MeisoSessionConfig *out)
 {
     if (!out) return false;
@@ -214,7 +216,7 @@ bool meiso_display_overlay_build_catalog(const MeisoDisplayIngressCatalogConfig 
         !meiso_display_overlay_capability_encode(hud,(MeisoMutableBuffer){cap+32,36})) return false;
     e[0].capability.data=storage.data;
     e[1]=(MeisoRuntimeEndpointDescriptor){endpoint,video->endpoint_incarnation,capability_schema,{storage.data+32,36}};
-    for(unsigned i=0;i<3;++i) r[4+i]=hud_route(i,video->endpoint_incarnation);
+    for(unsigned i=0;i<3;++i) r[4+i]=meiso_display_overlay_private_route(i,video->endpoint_incarnation);
     memcpy(storage.data,cap,68); memcpy(ep,e,sizeof(e)); memcpy(rt,r,sizeof(r)); return true;
 }
 bool meiso_display_overlay_validate_catalog(const MeisoRuntimeEndpointDescriptor *ep, size_t ec,
@@ -235,7 +237,7 @@ bool meiso_display_overlay_validate_catalog(const MeisoRuntimeEndpointDescriptor
         !meiso_schema_ref_equal(ep[1].capability_schema,capability_schema) ||
         !meiso_display_overlay_capability_decode(ep[1].capability,&h)) return false;
     for(unsigned i=0;i<3;++i) {
-        const MeisoRuntimeV4RouteDescriptor expected=hud_route(i,ep[1].incarnation), *r=&rt[4+i];
+        const MeisoRuntimeV4RouteDescriptor expected=meiso_display_overlay_private_route(i,ep[1].incarnation), *r=&rt[4+i];
         if(!meiso_endpoint_id_equal(r->route.endpoint_id,expected.route.endpoint_id) ||
             r->route.endpoint_incarnation!=expected.route.endpoint_incarnation || r->route.facet!=expected.route.facet ||
             r->delivery!=expected.delivery || !meiso_resource_descriptor_equal(&r->route.resource,&expected.route.resource)) return false;

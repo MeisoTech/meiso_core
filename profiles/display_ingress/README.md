@@ -890,17 +890,45 @@ color calibration to the wire. v8 still does not select
 native HUD/stereo placement; testing this graph must not be reported as those
 combined product modes passing.
 
-### Native scene payload building block (not selected by application v9)
+### Application v10: native scene selection
+
+Application v10 keeps the v9 optional graph (display, optional native 2D,
+optional camera) and all existing ownership, delivery and evidence rules.
+For a selected native 2D endpoint, HUD_CAP and HUD_PLAN are schema v4: capability
+is the scene capability below, Desired suffix is its variable-length scene
+plan (maximum 1440 bytes). HUD status v1 and presentation v2 are unchanged;
+their generation/digest identify the entire scene and the observed DRM/software
+completion of that exact Desired version. Delivery generation remains 9; it
+is independent of the Profile version. Source/optical validity remains Host
+policy and must clear/invalidate the scene through the same owned control path.
+
+Session selection is explicit on both peers. The `*_for_version` helpers
+accept only 9 and 10; legacy helpers still mean v9. Catalog validation uses
+the selected Session version and rejects cross-version HUD schemas or payload
+limits, rather than recognizing a new scene by inspecting unversioned bytes.
+Version 10 is opt-in in the process path (`--native-overlay scene`); old `on`
+still selects v9 HUD. An application does not gain native scene support solely
+because the codec is installed.
+
+The K230D scene adapter reserves two ARGB4444 buffers before publishing this
+capability, each bounded to 1,152,000 pixels. Actual rounded DMA bytes and
+decoder CAPTURE buffers share the existing 10 MiB pool budget; an incompatible
+decoder allocation is rejected before allocating its image buffers. Camera,
+input decoder buffers, State storage and OS memory remain additional costs.
+It rasterizes directly into the idle DMA buffer with no full-frame staging.
+The portable desktop adapter uses the same scene contract and reports software
+completion only. Zero-item updates submit a transparent minimum-sized region
+so even an initially empty scene can produce an actual completion event.
+
+### Native scene payload (application v10; not selected by v9)
 
 `scene.h` defines a bounded replacement for the single repeated HUD rectangle:
 up to 16 independent rectangles with optional existing label/CJK16 text. Each
 rectangle uses absolute output coordinates; Host supplies separate left/right
 geometry after projection and clipping. Count zero clears the scene. All items
 share one immutable generation and active video desired-version reference.
-This codec is not yet an advertised route: v9 and HUD_PLAN v3 remain unchanged.
-Sending these bytes on that legacy route is invalid. Catalog, service and Host
-application integration must select a new version before this becomes usable
-by applications.
+Version 9 and HUD_PLAN v3 remain unchanged. Sending these bytes on that legacy
+route is invalid. The application v10 selection above owns their route binding.
 
 Integers are big-endian. Capability is 36 bytes: output width/height, maximum
 backing pixels, maximum text bytes per item (0..48), updates per second (1..60)

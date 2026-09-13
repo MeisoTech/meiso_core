@@ -42,5 +42,31 @@ int main(void)
     CHECK(!meiso_ingress_video_close(v));
     const char *files[]={"latest.ppm","first.ppm","last.ppm","received.h264"};
     for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
+    CHECK(!rmdir(dir));snprintf(dir,sizeof(dir),"%s/scene",root);
+    v=meiso_ingress_video_open(NULL,dir,32,16);CHECK(v);
+    CHECK(!meiso_ingress_video_set_output_size(v,64,32));CHECK(!meiso_ingress_video_set_stereo(v));
+    MeisoDisplaySceneCapability cap;CHECK(!meiso_ingress_video_scene_prepare(v,1,&cap));
+    CHECK(meiso_ingress_video_set_output_size(v,32,16)!=0);
+    MeisoDisplayScenePlan scene={0};scene.generation=1;scene.video_desired_version=1;scene.canvas_width=64;scene.canvas_height=32;
+    CHECK(meiso_ingress_video_scene_submit(v,1,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==1);
+    CHECK(meiso_ingress_video_submit(v,1,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);CHECK(pixels(dir,original));
+    scene.generation=2;scene.item_count=2;
+    scene.items[0]=(MeisoDisplaySceneItem){8,8,8,8,0xff00ff00,0,0,2,1,0,0,{0}};
+    scene.items[1]=(MeisoDisplaySceneItem){43,13,8,8,0xffffff00,0,0,2,1,0,0,{0}};
+    CHECK(meiso_ingress_video_scene_submit(v,2,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_scene_submit(v,3,&scene)==MEISO_INGRESS_VIDEO_WOULD_BLOCK);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==2);
+    CHECK(pixels(dir,got) && got[(8*64+8)*3+1]==255 && got[(13*64+43)*3]==255 && got[(13*64+43)*3+1]==255);
+    CHECK(got[(12*64+12)*3]>240); // transparent interior preserves video
+    scene.item_count=0;scene.generation=3;
+    CHECK(meiso_ingress_video_scene_submit(v,3,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==3);
+    CHECK(pixels(dir,got) && !memcmp(got,original,sizeof(got)));
+    CHECK(meiso_ingress_video_scene_submit(v,3,&scene)==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    CHECK(meiso_ingress_video_overlay_submit(v,4,8,8,16,16,green,sizeof(green))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    CHECK(!meiso_ingress_video_close(v));
+    for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
     CHECK(!rmdir(dir) && !rmdir(root));puts("desktop stereo, native HUD move/hide and completion identities passed");return 0;
 }

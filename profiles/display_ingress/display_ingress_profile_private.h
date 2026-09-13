@@ -10,6 +10,11 @@
 #define MEISO_DISPLAY_INGRESS_PRIVATE_API
 #endif
 
+MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoRuntimeEndpointDescriptor
+meiso_display_overlay_private_endpoint(uint64_t incarnation);
+MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoRuntimeV4RouteDescriptor
+meiso_display_overlay_private_route(unsigned index,uint64_t incarnation);
+
 MEISO_DISPLAY_INGRESS_PRIVATE_API bool
 meiso_display_ingress_private_ranges_overlap(
     const void *lhs,

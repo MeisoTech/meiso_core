@@ -512,6 +512,7 @@ int main(int argc, char **argv)
             (strcmp(argv[i+1], "native") == 0 || strcmp(argv[i+1], "side-by-side") == 0))
             service.stereo_video=strcmp(argv[i+1], "side-by-side") == 0;
         else if (strcmp(argv[i], "--native-overlay") == 0 && strcmp(argv[i+1], "on") == 0) service.overlay_enabled=true;
+        else if (strcmp(argv[i], "--native-overlay") == 0 && strcmp(argv[i+1], "scene") == 0) service.overlay_enabled=service.scene_enabled=true;
 #endif
         else return 2;
     }
@@ -587,6 +588,9 @@ int main(int argc, char **argv)
                 meiso_ingress_video_close(video); return 2;
             }
             service.overlay_capability.fonts|=2;
+        }
+        if(service.scene_enabled && meiso_ingress_video_scene_prepare(video,service.overlay_capability.fonts,&service.scene_capability)) {
+            fprintf(stderr,"native scene output/resource budget unavailable\n");meiso_ingress_video_close(video);return 1;
         }
         if (meiso_ingress_video_output_size(video,&service.overlay_capability.output_width,
                 &service.overlay_capability.output_height)) { meiso_ingress_video_close(video); return 1; }

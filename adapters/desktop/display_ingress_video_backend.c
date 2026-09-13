@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../../applications/display_ingress/video_backend.h"
+#include "../../targets/k230d-linux/display_ingress_scene_raster.h"
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <errno.h>
@@ -18,6 +19,8 @@ struct MeisoIngressVideo {
     struct SwsContext *scaler;
     uint8_t *rgba, *canvas;
     uint32_t *overlay;
+    uint16_t *scene_pixels;
+    MeisoDisplaySceneCapability scene_capability;
     uint32_t output_width, output_height, overlay_x, overlay_y, overlay_w, overlay_h;
     uint64_t overlay_sequence, overlay_completed;
     bool stereo, overlay_pending, overlay_visible;
@@ -135,7 +138,13 @@ static void compose(MeisoIngressVideo *v)
                 v->rgba+((size_t)row*v->width+eye*width)*4,(size_t)width*4);
     }
     if(v->overlay_visible) for(uint32_t y=0;y<v->overlay_h;++y) for(uint32_t x=0;x<v->overlay_w;++x) {
-        uint32_t argb=v->overlay[(size_t)y*v->overlay_w+x], alpha=argb>>24;
+        uint32_t argb;
+        if(v->scene_pixels) {
+            const uint16_t pixel=v->scene_pixels[(size_t)y*v->overlay_w+x];
+            argb=((uint32_t)(pixel>>12)*17U<<24)|((uint32_t)((pixel>>8)&15)*17U<<16)|
+                ((uint32_t)((pixel>>4)&15)*17U<<8)|(uint32_t)(pixel&15)*17U;
+        } else argb=v->overlay[(size_t)y*v->overlay_w+x];
+        const uint32_t alpha=argb>>24;
         uint8_t *out=v->canvas+((size_t)(y+v->overlay_y)*v->output_width+x+v->overlay_x)*4;
         const uint32_t rgb[]={(argb>>16)&255,(argb>>8)&255,argb&255};
         for(unsigned i=0;i<3;++i) out[i]=(uint8_t)((rgb[i]*alpha+out[i]*(255-alpha)+127)/255);
@@ -166,19 +175,19 @@ int meiso_ingress_video_output_size(const MeisoIngressVideo *v,uint32_t *w,uint3
 {if(!v || !w || !h)return -1;*w=v->output_width;*h=v->output_height;return 0;}
 int meiso_ingress_video_set_output_size(MeisoIngressVideo *v,uint32_t w,uint32_t h)
 {
-    if(!v || v->sequence || v->overlay_sequence || v->stereo || w<v->width || h<v->height || w>4096 || h>4096) return -1;
+    if(!v || v->scene_pixels || v->sequence || v->overlay_sequence || v->stereo || w<v->width || h<v->height || w>4096 || h>4096) return -1;
     uint8_t *canvas=calloc((size_t)w*h,4);if(!canvas) return -1;
     free(v->canvas);v->canvas=canvas;v->output_width=w;v->output_height=h;return 0;
 }
 int meiso_ingress_video_set_stereo(MeisoIngressVideo *v)
 {
-    if(!v || v->sequence || v->overlay_sequence || v->stereo || v->width%16 || v->output_width%2) return -1;
+    if(!v || v->scene_pixels || v->sequence || v->overlay_sequence || v->stereo || v->width%16 || v->output_width%2) return -1;
     v->stereo=true;return 0;
 }
 MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(MeisoIngressVideo *v,uint64_t seq,
     uint32_t x,uint32_t y,uint32_t w,uint32_t h,const uint32_t *pixels,size_t bytes)
 {
-    if(!v || !seq || seq<=v->overlay_sequence) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if(!v || v->scene_pixels || !seq || seq<=v->overlay_sequence) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if(v->overlay_pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
     const bool visible=w!=0 || h!=0;
     if(visible) {
@@ -191,6 +200,31 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(MeisoIngressVid
     } else if(x || y || bytes || !v->overlay_visible) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     v->overlay_x=x;v->overlay_y=y;v->overlay_w=w;v->overlay_h=h;
     v->overlay_visible=visible;v->overlay_sequence=seq;v->overlay_pending=true;
+    return MEISO_INGRESS_VIDEO_ACCEPTED;
+}
+int meiso_ingress_video_scene_prepare(MeisoIngressVideo *v,uint32_t fonts,MeisoDisplaySceneCapability *out)
+{
+    if(!v || !out || !fonts || (fonts&~3U) || v->sequence || v->overlay_sequence || v->scene_pixels ||
+        v->output_width<16 || v->output_height<16) return -1;
+    const uint32_t area=v->output_width*v->output_height;
+    v->scene_capability=(MeisoDisplaySceneCapability){v->output_width,v->output_height,
+        area<1152000?area:1152000,48,10,16,16,8,1,16,fonts};
+    v->scene_pixels=malloc((size_t)v->scene_capability.max_pixels*2);
+    if(!v->scene_pixels) return -1;
+    *out=v->scene_capability;return 0;
+}
+MeisoIngressVideoSubmitResult meiso_ingress_video_scene_submit(MeisoIngressVideo *v,uint64_t seq,
+    const MeisoDisplayScenePlan *plan)
+{
+    MeisoDisplaySceneRegion r;
+    if(!v || !v->scene_pixels || !seq || seq<=v->overlay_sequence || !plan ||
+        !meiso_display_scene_supported(&v->scene_capability,plan,plan->video_desired_version,&r))
+        return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if(v->overlay_pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
+    if(!meiso_k230d_scene_raster(&v->scene_capability,plan,v->scene_pixels,v->scene_capability.max_pixels,&r))
+        return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    v->overlay_x=r.x;v->overlay_y=r.y;v->overlay_w=r.width;v->overlay_h=r.height;
+    v->overlay_visible=r.width!=0;v->overlay_sequence=seq;v->overlay_pending=true;
     return MEISO_INGRESS_VIDEO_ACCEPTED;
 }
 MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(MeisoIngressVideo *v,MeisoIngressVideoPresentation *p)
@@ -212,5 +246,5 @@ int meiso_ingress_video_close(MeisoIngressVideo *v)
     if (v->capture && fclose(v->capture)) result=-1;
     fprintf(stderr,"DESKTOP_BACKEND_CLOSED decoded=%"PRIu64" capture_bytes=%"PRIu64" physical=false\n",v->completed,v->capture_bytes);
     sws_freeContext(v->scaler);av_frame_free(&v->frame);avcodec_free_context(&v->decoder);
-    free(v->rgba);free(v->canvas);free(v->overlay);free(v->directory);free(v);return result;
+    free(v->rgba);free(v->canvas);free(v->overlay);free(v->scene_pixels);free(v->directory);free(v);return result;
 }

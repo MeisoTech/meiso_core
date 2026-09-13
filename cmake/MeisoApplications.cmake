@@ -348,6 +348,7 @@ if(UNIX)
         add_executable(meiso_desktop_edge ${MEISO_VIDEO_SERVICE_SOURCES}
             devtools/display_ingress_video_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
+            targets/k230d-linux/display_ingress_scene_raster.c
             adapters/desktop/display_ingress_video_backend.c)
         target_compile_definitions(meiso_desktop_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
@@ -358,9 +359,11 @@ if(UNIX)
         meiso_enable_warnings(meiso_desktop_edge)
         if(BUILD_TESTING)
             add_executable(meiso_desktop_video_backend_test tests/test_desktop_video_backend.c
-                adapters/desktop/display_ingress_video_backend.c)
+                adapters/desktop/display_ingress_video_backend.c
+                targets/k230d-linux/display_ingress_overlay_raster.c
+                targets/k230d-linux/display_ingress_scene_raster.c)
             target_compile_definitions(meiso_desktop_video_backend_test PRIVATE MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
-            target_link_libraries(meiso_desktop_video_backend_test PRIVATE PkgConfig::MEISO_DESKTOP_AV)
+            target_link_libraries(meiso_desktop_video_backend_test PRIVATE PkgConfig::MEISO_DESKTOP_AV meiso_display_ingress_profile)
             meiso_enable_warnings(meiso_desktop_video_backend_test)
             add_test(NAME meiso_desktop_video_backend_test COMMAND meiso_desktop_video_backend_test)
         endif()
@@ -389,6 +392,7 @@ if(UNIX)
         add_executable(meiso_display_ingress_video_edge ${MEISO_VIDEO_SERVICE_SOURCES}
             devtools/display_ingress_video_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
+            targets/k230d-linux/display_ingress_scene_raster.c
             targets/k230d-linux/display_ingress_video_backend.c)
         target_compile_definitions(meiso_display_ingress_video_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1)

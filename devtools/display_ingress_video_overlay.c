@@ -10,14 +10,15 @@
 static struct {
     MeisoIngressVideo *video;
     MeisoStateReplica *replica;
-    ServiceStateArena arena;
+    union { max_align_t alignment;uint8_t bytes[8192]; } arena;
     uint32_t *pixels;
     uint32_t raster_width, raster_height;
     MeisoDisplayOverlayPlan plan;
+    MeisoDisplayScenePlan scene;
     MeisoDisplayOverlayEvidence evidence;
     uint64_t desired_version, last_generation, last_submit_ns, flip_ns;
     uint64_t actual_version, epoch, evidence_sequence, accepted, presented;
-    bool pending, drawn, submitted, status_queued;
+    bool enabled, pending, drawn, submitted, status_queued;
 } hud;
 
 static uint64_t get64(const uint8_t *b)
@@ -42,6 +43,8 @@ bool service_overlay_initialize(Service *s, MeisoIngressVideo *video)
         meiso_state_replica_init(hud.arena.bytes,bytes,r,&hud.replica)!=MEISO_STATE_INIT_OK ||
         meiso_state_replica_begin_owner(hud.replica,s->host_owner)!=MEISO_STATE_OWNER_STARTED)
         return service_fail(s,"hud","state-init");
+    hud.enabled=true;
+    if(s->scene_enabled) return true;
     hud.pixels=calloc(MEISO_DISPLAY_OVERLAY_MAX_PIXELS,sizeof(uint32_t));
     return hud.pixels!=NULL || service_fail(s,"hud","pixel-budget");
 }
@@ -55,11 +58,15 @@ bool service_overlay_consume(Service *s, const MeisoRuntimeEvent *event)
     if(event->type!=MEISO_RUNTIME_EVENT_STATE_OFFER || !route_is(s,event->route,MEISO_DISPLAY_OVERLAY_ROUTE_PLAN))
         return service_consume_optional_accept(s,event);
     const MeisoStateOffer *offer=&event->state_offer;
-    MeisoRuntimeDesiredState desired; MeisoDisplayOverlayPlan plan;
+    MeisoRuntimeDesiredState desired; MeisoDisplayOverlayPlan plan={0};
+    MeisoDisplayScenePlan scene={0};MeisoDisplaySceneRegion region;
     if(!meiso_owner_scope_equal(offer->state.owner,s->host_owner) || offer->generation.value!=9 ||
         !meiso_runtime_desired_state_decode(offer->state.payload,&desired) || !desired.enabled ||
-        !meiso_display_overlay_plan_decode(desired.profile,&plan) ||
-        !meiso_display_overlay_plan_supported(&s->overlay_capability,&plan,s->applied_desired_version)) {
+        (s->scene_enabled ?
+            !meiso_display_scene_plan_decode(desired.profile,&scene) ||
+            !meiso_display_scene_supported(&s->scene_capability,&scene,s->applied_desired_version,&region) :
+            !meiso_display_overlay_plan_decode(desired.profile,&plan) ||
+            !meiso_display_overlay_plan_supported(&s->overlay_capability,&plan,s->applied_desired_version))) {
         (void)meiso_runtime_commit_state_receive(s->runtime,event->route,offer,MEISO_STATE_RECEIVE_INVALID);
         return service_fail(s,"hud","invalid-plan");
     }
@@ -74,10 +81,11 @@ bool service_overlay_consume(Service *s, const MeisoRuntimeEvent *event)
     if(meiso_runtime_commit_state_receive(s->runtime,event->route,offer,received)!=MEISO_RUNTIME_OK)
         return service_fail(s,"hud","plan-commit");
     if(received==MEISO_STATE_RECEIVE_DUPLICATE || received==MEISO_STATE_RECEIVE_STALE) return true;
-    if(received!=MEISO_STATE_RECEIVE_NEW || hud.pending || plan.generation<=hud.last_generation)
+    const uint64_t generation=s->scene_enabled?scene.generation:plan.generation;
+    if(received!=MEISO_STATE_RECEIVE_NEW || hud.pending || generation<=hud.last_generation)
         return service_fail(s,"hud","plan-order");
-    hud.plan=plan; hud.desired_version=version; hud.last_generation=plan.generation;
-    hud.evidence=(MeisoDisplayOverlayEvidence){.plan_generation=plan.generation,.desired_version=version};
+    hud.plan=plan;hud.scene=scene; hud.desired_version=version; hud.last_generation=generation;
+    hud.evidence=(MeisoDisplayOverlayEvidence){.plan_generation=generation,.desired_version=version};
     memcpy(hud.evidence.plan_sha256,digest,sizeof(digest));
     hud.pending=true; hud.drawn=false; hud.submitted=false; hud.status_queued=false; hud.flip_ns=0; ++hud.accepted;
     return true;
@@ -95,15 +103,18 @@ bool service_overlay_poll(Service *s)
     }
     if(!hud.submitted) {
         uint64_t now=service_now_ns();
-        if(now-hud.last_submit_ns<UINT64_C(1000000000)/s->overlay_capability.max_updates_per_second) return true;
-        if(!hud.drawn) {
+        const uint32_t rate=s->scene_enabled?s->scene_capability.max_updates_per_second:s->overlay_capability.max_updates_per_second;
+        if(now-hud.last_submit_ns<UINT64_C(1000000000)/rate) return true;
+        if(!s->scene_enabled && !hud.drawn) {
             if(!meiso_k230d_overlay_raster(&s->overlay_capability,&hud.plan,hud.pixels,
                     MEISO_DISPLAY_OVERLAY_MAX_PIXELS,&hud.raster_width,&hud.raster_height))
                 return service_fail(s,"hud","raster");
             hud.drawn=true;
         }
         const MeisoDisplayOverlayPlan *p=&hud.plan;
-        MeisoIngressVideoSubmitResult r=meiso_ingress_video_overlay_submit(hud.video,hud.desired_version,
+        MeisoIngressVideoSubmitResult r=s->scene_enabled ?
+            meiso_ingress_video_scene_submit(hud.video,hud.desired_version,&hud.scene) :
+            meiso_ingress_video_overlay_submit(hud.video,hud.desired_version,
             p->visible?p->x:0,p->visible?p->y:0,hud.raster_width,hud.raster_height,
             hud.pixels,(size_t)hud.raster_width*hud.raster_height*4);
         if(r==MEISO_INGRESS_VIDEO_WOULD_BLOCK) return true;
@@ -113,7 +124,7 @@ bool service_overlay_poll(Service *s)
     if(!hud.flip_ns || !service_session_tx_idle(s)) return true;
     if(!hud.status_queued) {
         uint8_t profile[8],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+8]; MeisoByteView bytes;
-        put64(profile,hud.plan.generation);
+        put64(profile,hud.last_generation);
         MeisoRuntimeActualState actual={0};
         actual.observed_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,hud.desired_version};
         actual.applied_desired=actual.observed_desired; actual.apply_result=MEISO_RUNTIME_APPLY_APPLIED;
@@ -134,13 +145,15 @@ bool service_overlay_poll(Service *s)
     sample.source_time=(MeisoTimePoint){SERVICE_EVIDENCE_CLOCK_EPOCH,hud.flip_ns}; sample.payload=(MeisoByteView){wire,56};
     if(meiso_runtime_send_stream_sample(s->runtime,service_route_key(s,MEISO_DISPLAY_OVERLAY_ROUTE_EVIDENCE),hud.epoch,&sample)!=MEISO_RUNTIME_OK)
         return service_fail(s,"hud","evidence-send");
-    fprintf(stderr,"HUD_PRESENTED evidence=%u version=%"PRIu64" plan=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" visible=%u layout=%u x=%u y=%u width=%u height=%u\n",
+    if(!s->scene_enabled) fprintf(stderr,"HUD_PRESENTED evidence=%u version=%"PRIu64" plan=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" visible=%u layout=%u x=%u y=%u width=%u height=%u\n",
         SERVICE_EVIDENCE_CLASS,hud.desired_version,get64(wire+8),hud.epoch,hud.flip_ns,hud.plan.visible,hud.plan.layout,hud.plan.x,hud.plan.y,hud.raster_width,hud.raster_height);
+    if(s->scene_enabled) fprintf(stderr,"SCENE_PRESENTED evidence=%u version=%"PRIu64" generation=%"PRIu64" epoch=%"PRIu64" flip_ns=%"PRIu64" items=%u\n",
+        SERVICE_EVIDENCE_CLASS,hud.desired_version,hud.last_generation,hud.epoch,hud.flip_ns,hud.scene.item_count);
     hud.pending=false; return true;
 }
 void service_overlay_finish(void)
 {
-    if(hud.pixels) fprintf(stderr,"HUD_RESULT accepted=%"PRIu64" presented=%"PRIu64" pending=%d cpu_bytes=262144\n",
-        hud.accepted,hud.presented,hud.pending);
+    if(hud.enabled) fprintf(stderr,"HUD_RESULT accepted=%"PRIu64" presented=%"PRIu64" pending=%d cpu_bytes=%u\n",
+        hud.accepted,hud.presented,hud.pending,hud.pixels?262144U:0U);
     free(hud.pixels); hud.pixels=NULL;
 }

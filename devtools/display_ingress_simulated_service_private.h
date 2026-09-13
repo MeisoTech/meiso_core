@@ -130,11 +130,12 @@ typedef struct {
     MeisoOwnerScope host_owner;
     MeisoOwnerScope edge_owner;
     MeisoDisplayIngressCapability capability;
-    bool overlay_enabled, stereo_video, camera_enabled;
+    bool overlay_enabled, scene_enabled, stereo_video, camera_enabled;
     int camera_media_fd, camera_input_fd;
     MeisoCompositionMediaCapability camera_capability;
     uint32_t selected_input_width, selected_input_height;
     MeisoDisplayOverlayCapability overlay_capability;
+    MeisoDisplaySceneCapability scene_capability;
     uint32_t output_width, output_height;
     uint8_t capability_wire[MEISO_DISPLAY_APPLICATION_MAX_CAPABILITY_BYTES];
     MeisoRuntimeEndpointDescriptor endpoints[MEISO_DISPLAY_APPLICATION_MAX_ENDPOINTS];
