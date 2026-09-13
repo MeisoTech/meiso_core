@@ -187,12 +187,19 @@ static MeisoDisplayCameraChannel *camera;
 static uint8_t capture_pixels[320*240*4];
 static size_t capture_used;
 static bool capture_started;
-static uint64_t capture_sequence,capture_last,capture_next,camera_deadline;
+static uint64_t capture_sequence,capture_last,capture_next,camera_deadline,camera_eof_deadline;
 static bool camera_tick(Service *s)
 {
     if(!camera) return true;
-    if(!meiso_display_camera_channel_poll(camera)) return service_fail(s,"camera","transport");
     const uint64_t now=service_now_ns();
+    if(camera_eof_deadline) return now<camera_eof_deadline || service_fail(s,"camera","control-close-timeout");
+    if(!meiso_display_camera_channel_poll(camera)) {
+        if(!meiso_display_camera_channel_peer_eof(camera)) return service_fail(s,"camera","transport");
+        /* Independent carriers can deliver camera EOF before Session CLOSE.
+         * Stop capture/submit now; only a real control close can finish cleanly. */
+        camera_eof_deadline=service_deadline_after_ms(SERVICE_TIMEOUT_MS);
+        return true;
+    }
     if(!meiso_display_camera_channel_ready(camera))
         return now<camera_deadline || service_fail(s,"camera","negotiation-timeout");
     if(!capture_started) { capture_started=true;capture_last=now; }

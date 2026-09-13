@@ -21,6 +21,9 @@ MeisoDisplayCameraChannel *meiso_display_camera_channel_open(const MeisoDisplayC
 int meiso_display_camera_channel_consume(MeisoDisplayCameraChannel *, const MeisoRuntimeEvent *);
 bool meiso_display_camera_channel_poll(MeisoDisplayCameraChannel *);
 bool meiso_display_camera_channel_ready(const MeisoDisplayCameraChannel *);
+/* EOF revokes camera data immediately. It is not proof of normal Session close;
+ * callers may await that independent control result within a bounded grace. */
+bool meiso_display_camera_channel_peer_eof(const MeisoDisplayCameraChannel *);
 bool meiso_display_camera_channel_submit(MeisoDisplayCameraChannel *, uint64_t sequence,
     MeisoTimePoint source_time, MeisoByteView rgba);
 bool meiso_display_camera_channel_latest(MeisoDisplayCameraChannel *, MeisoCompositionMediaLatestView *);

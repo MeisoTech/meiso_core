@@ -182,6 +182,12 @@ bool meiso_display_camera_channel_ready(const MeisoDisplayCameraChannel *c)
     return c && !c->failed && c->transport && meiso_composition_media_transport_snapshot(c->transport,&s)==MEISO_COMPOSITION_MEDIA_TRANSPORT_OK &&
         (s.phase==MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE || s.phase==MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE);
 }
+bool meiso_display_camera_channel_peer_eof(const MeisoDisplayCameraChannel *c)
+{
+    MeisoCompositionMediaPosixTcpSnapshot s;
+    return c && c->failed && c->tcp && meiso_composition_media_posix_tcp_snapshot(c->tcp,&s) &&
+        s.terminal && s.terminal_reason==MEISO_COMPOSITION_MEDIA_TERMINAL_MEDIA_TRANSPORT_LOST && s.last_error==0;
+}
 bool meiso_display_camera_channel_submit(MeisoDisplayCameraChannel *c,uint64_t sequence,MeisoTimePoint time,MeisoByteView pixels)
 {
     if(!meiso_display_camera_channel_ready(c) || c->role!=MEISO_SESSION_ROLE_EDGE) return false;

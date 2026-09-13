@@ -51,8 +51,8 @@ int main(void)
     runtime(&h);runtime(&e);
     MeisoDisplayIngressCatalogConfig v={1,{1280,720,30000,131072,1024,1,MEISO_STREAM_DEADLINE_UNSUPPORTED,MEISO_DISPLAY_INGRESS_FRAME_H264_IDR}};
     MeisoCompositionMediaCapability c={.source=MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,.pixel_formats=1,.codecs=1,
-        .min_width=16,.min_height=16,.max_width=16,.max_height=16,.max_fps_millihz=2000,
-        .max_access_unit_bytes=1024,.max_fragment_payload_bytes=128};
+        .min_width=320,.min_height=240,.max_width=320,.max_height=240,.max_fps_millihz=2000,
+        .max_access_unit_bytes=307200,.max_fragment_payload_bytes=4096};
     uint8_t caps[96];MeisoRuntimeEndpointDescriptor ep[2];MeisoRuntimeV4RouteDescriptor rt[7];
     CHECK(meiso_display_camera_build_catalog(&v,&c,(MeisoMutableBuffer){caps,96},ep,2,rt,7));
     CHECK(meiso_runtime_v4_offer_catalog(e.r,1,ep,2,rt,7)==MEISO_RUNTIME_OK);transfer(&e,&h);transfer(&h,&e);
@@ -64,28 +64,30 @@ int main(void)
     CHECK(connect(edge_fd,(struct sockaddr*)&address,sizeof(address))==0);
     int host_fd=accept(listener,NULL,NULL);CHECK(host_fd>=0);close(listener);
     CHECK(fcntl(edge_fd,F_SETFL,O_NONBLOCK)==0 && fcntl(host_fd,F_SETFL,O_NONBLOCK)==0);
-    MeisoDisplayCameraChannelConfig hc={.session=h.s,.runtime=h.r,.media_fd=host_fd,.desired={1,1,16,16,2000,0,1,0}};
+    MeisoDisplayCameraChannelConfig hc={.session=h.s,.runtime=h.r,.media_fd=host_fd,.desired={1,1,320,240,2000,0,1,0}};
     MeisoDisplayCameraChannelConfig ec={.session=e.s,.runtime=e.r,.media_fd=edge_fd,.edge_nonce={91,92}};
     h.c=meiso_display_camera_channel_open(&hc);e.c=meiso_display_camera_channel_open(&ec);CHECK(h.c && e.c);
     CHECK(!meiso_display_camera_channel_ready(h.c) && !meiso_display_camera_channel_ready(e.c));
     for(unsigned i=0;i<2000 && !(meiso_display_camera_channel_ready(h.c) && meiso_display_camera_channel_ready(e.c));++i) tick();
     CHECK(meiso_display_camera_channel_ready(h.c) && meiso_display_camera_channel_ready(e.c));
-    uint8_t pixels[1024];for(unsigned i=0;i<sizeof(pixels);++i)pixels[i]=(uint8_t)i;
-    CHECK(meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,1024}));
-    CHECK(!meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,1024}));
+    CHECK(!meiso_display_camera_channel_peer_eof(h.c));
+    uint8_t pixels[307200];for(unsigned i=0;i<sizeof(pixels);++i)pixels[i]=(uint8_t)i;
+    CHECK(meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,sizeof(pixels)}));
+    CHECK(!meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,sizeof(pixels)}));
     MeisoCompositionMediaLatestView frame;bool found=false;
     for(unsigned i=0;i<2000 && !found;++i) {tick();found=meiso_display_camera_channel_latest(h.c,&frame);}
     CHECK(found && frame.unit.frame_sequence==1 && frame.unit.source_time.clock_epoch==9 && frame.unit.source_time.monotonic_ns==100);
-    CHECK(frame.unit.access_unit.size==1024 && !memcmp(frame.unit.access_unit.data,pixels,1024));
+    CHECK(frame.unit.access_unit.size==sizeof(pixels) && !memcmp(frame.unit.access_unit.data,pixels,sizeof(pixels)));
     MeisoCompositionMediaFrameRef wrong=frame.ref;wrong.frame_sequence=2;
     CHECK(!meiso_display_camera_channel_release(h.c,&wrong));CHECK(meiso_display_camera_channel_release(h.c,&frame.ref));
     CHECK(!meiso_display_camera_channel_latest(h.c,&frame));
-    CHECK(meiso_display_camera_channel_submit(e.c,3,(MeisoTimePoint){9,300},(MeisoByteView){pixels,1024}));
+    CHECK(meiso_display_camera_channel_submit(e.c,3,(MeisoTimePoint){9,300},(MeisoByteView){pixels,sizeof(pixels)}));
     found=false;for(unsigned i=0;i<2000 && !found;++i) {tick();found=meiso_display_camera_channel_latest(h.c,&frame);}
     CHECK(found && frame.unit.frame_sequence==3 && frame.unit.producer_dropped_frames==1);
     meiso_display_camera_channel_close(e.c);close(edge_fd);
     bool lost=false;for(unsigned i=0;i<100 && !lost;++i) {lost=!meiso_display_camera_channel_poll(h.c);(void)poll(NULL,0,1);}
     CHECK(lost && !meiso_display_camera_channel_ready(h.c) && !meiso_display_camera_channel_latest(h.c,&frame));
+    CHECK(meiso_display_camera_channel_peer_eof(h.c));
     meiso_display_camera_channel_close(h.c);close(host_fd);
     puts("camera control, TCP bytes, readiness, source identity, stale release and close passed");return 0;
 }

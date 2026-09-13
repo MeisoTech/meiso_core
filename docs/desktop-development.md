@@ -84,6 +84,9 @@ true -i ''`); on Linux it is a V4L2 path. No audio is opened. It captures
 640x480/30, reduces to 320x240 RGBA/5 Hz, and publishes at the Host-requested
 rate (initially 2 Hz). Missing devices, capture stalls or partial-frame EOF fail
 the run and reclaim its children. Stopping the launcher stops its camera.
+Camera TCP EOF immediately revokes that source. Because media and control can
+use independent carriers, the Edge waits at most five seconds for the existing
+normal Session close; EOF alone never makes a run successful.
 
 The matching Looking Glass `meiso-host-serve` selects `--camera-port PORT`,
 `--camera-fixture off` and `--native-overlay off`. Both sides select Display
