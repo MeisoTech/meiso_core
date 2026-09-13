@@ -40,6 +40,8 @@ int main(void)
     CHECK(meiso_ingress_video_overlay_submit(v,4,0,0,0,0,NULL,0)==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
     CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_NONE);
     CHECK(!meiso_ingress_video_close(v));
+    CHECK(pixels(dir,got));
+    for(unsigned i=0;i<sizeof(got);++i)CHECK(got[i]==0);
     const char *files[]={"latest.ppm","first.ppm","last.ppm","received.h264"};
     for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
     CHECK(!rmdir(dir));snprintf(dir,sizeof(dir),"%s/scene",root);
@@ -66,7 +68,13 @@ int main(void)
     CHECK(pixels(dir,got) && !memcmp(got,original,sizeof(got)));
     CHECK(meiso_ingress_video_scene_submit(v,3,&scene)==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
     CHECK(meiso_ingress_video_overlay_submit(v,4,8,8,16,16,green,sizeof(green))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    // Closing an active scene (e.g. abrupt control loss) also clears current output.
+    scene.item_count=2;scene.generation=4;
+    CHECK(meiso_ingress_video_scene_submit(v,4,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
     CHECK(!meiso_ingress_video_close(v));
+    CHECK(pixels(dir,got));
+    for(unsigned i=0;i<sizeof(got);++i)CHECK(got[i]==0);
     for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
     CHECK(!rmdir(dir) && !rmdir(root));puts("desktop stereo, native HUD move/hide and completion identities passed");return 0;
 }

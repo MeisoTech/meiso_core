@@ -242,7 +242,13 @@ int meiso_ingress_video_close(MeisoIngressVideo *v)
 {
     if (!v) return 0;
     int result=0;
-    if ((v->completed || v->overlay_completed) && save_frame(v,"last.ppm")) result=-1;
+    if (v->completed || v->overlay_completed) {
+        if(save_frame(v,"last.ppm")) result=-1;
+        // A diagnostic last image is not a still-active software display.
+        // Clear the current canvas on every terminal path without inventing a receipt.
+        memset(v->canvas,0,(size_t)v->output_width*v->output_height*4);
+        if(save_frame(v,"latest.ppm")) result=-1;
+    }
     if (v->capture && fclose(v->capture)) result=-1;
     fprintf(stderr,"DESKTOP_BACKEND_CLOSED decoded=%"PRIu64" capture_bytes=%"PRIu64" physical=false\n",v->completed,v->capture_bytes);
     sws_freeContext(v->scaler);av_frame_free(&v->frame);avcodec_free_context(&v->decoder);

@@ -37,6 +37,9 @@ owned decoded RGBA raster and output canvas, and returns **SIMULATED** evidence 
 sequence/digest. `first.ppm`, `latest.ppm`, `last.ppm` allow inspection; the
 received elementary stream is recorded up to 64 MiB, then recording stops while
 decoding continues. This is a finite debugging capture, not platform history.
+When the backend closes, `last.ppm` preserves its final presented image for
+diagnosis and `latest.ppm` becomes black, including after a control disconnect.
+That cleanup does not create a frame or application presentation receipt.
 The installed commands are `meiso-desktop-pair`, `meiso-desktop-launch`,
 `meiso_desktop_host` and `meiso_desktop_edge`; the same pair invocation works
 with their installed paths. FFmpeg shared libraries remain a runtime dependency.
