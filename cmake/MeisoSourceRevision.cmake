@@ -1,5 +1,7 @@
 # A package revision identifies the source used to build it, not its ABI.
 # git archive (including release source archives) substitutes the tracked file.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/cmake/source-revision.txt")
 file(READ "${PROJECT_SOURCE_DIR}/cmake/source-revision.txt" MEISO_SOURCE_REVISION)
 string(STRIP "${MEISO_SOURCE_REVISION}" MEISO_SOURCE_REVISION)
 string(LENGTH "${MEISO_SOURCE_REVISION}" revision_length)
