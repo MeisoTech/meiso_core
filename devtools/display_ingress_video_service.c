@@ -268,6 +268,12 @@ static bool camera_tick(Service *s)
                 payload)) return service_fail(s,"camera","capture-submit");
             capture_next=now+UINT64_C(1000000000000)/d->fps_millihz;
             fprintf(stderr,"CAMERA_SUBMITTED frame=%"PRIu64" source_ns=%"PRIu64" bytes=%zu codec=%u exposure=unknown\n",capture_sequence,now,payload.size,d->codec);
+            if(d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
+                uint8_t digest[32];char hex[65];
+                if(!meiso_display_ingress_host_fixture_input_sha256(payload,digest)) return service_fail(s,"camera","digest");
+                for(unsigned i=0;i<32;++i)(void)snprintf(hex+2*i,3,"%02x",digest[i]);
+                fprintf(stderr,"CAMERA_JPEG frame=%"PRIu64" sha256=%s\n",capture_sequence,hex);
+            }
         }
     }
 #else
