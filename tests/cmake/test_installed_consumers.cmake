@@ -217,138 +217,167 @@ unset(difi_forbidden_artifacts)
 unset(difi_prefix)
 unset(difi_stage)
 
-set(client_stage "${MEISO_TEST_ROOT}/client-stage")
-set(client_prefix "${MEISO_TEST_ROOT}/client-relocated")
-foreach(component Core Runtime Profiles Client)
-    meiso_install_component(${component} "${client_stage}")
-endforeach()
-file(RENAME "${client_stage}" "${client_prefix}")
-meiso_assert_installed_composition_profile_surface("${client_prefix}")
-foreach(required_path
-        "${client_prefix}/include/meiso/host/edge.h"
-        "${client_prefix}/include/meiso/host/composition.h")
-    if(NOT EXISTS "${required_path}")
-        message(FATAL_ERROR "Client prefix is missing ${required_path}")
-    endif()
-endforeach()
-foreach(forbidden_path
-        "${client_prefix}/include/meiso/host/composition_runtime.h"
-        "${client_prefix}/include/meiso/host/remote_edge.h"
-        "${client_prefix}/include/meiso/simulation"
-        "${client_prefix}/include/meiso/composition")
-    if(EXISTS "${forbidden_path}")
-        message(FATAL_ERROR "Client prefix leaked ${forbidden_path}")
-    endif()
-endforeach()
-meiso_build_consumer(
-    client-consumer
-    "${MEISO_SOURCE_DIR}/tests/installed-consumers/client"
-    "${client_prefix}"
-)
-
-set(composition_stage "${MEISO_TEST_ROOT}/composition-stage")
-set(composition_prefix "${MEISO_TEST_ROOT}/composition-relocated")
-foreach(component Core Runtime Profiles Composition)
-    meiso_install_component(${component} "${composition_stage}")
-endforeach()
-file(RENAME "${composition_stage}" "${composition_prefix}")
-meiso_assert_installed_composition_profile_surface("${composition_prefix}")
-foreach(forbidden_path
-        "${composition_prefix}/include/meiso/adapters"
-        "${composition_prefix}/include/meiso/composition/control_session.h"
-        "${composition_prefix}/include/meiso/host")
-    if(EXISTS "${forbidden_path}")
-        message(FATAL_ERROR "Portable Composition prefix leaked ${forbidden_path}")
-    endif()
-endforeach()
-meiso_build_consumer(
-    composition-consumer
-    "${MEISO_SOURCE_DIR}/tests/installed-consumers/composition"
-    "${composition_prefix}"
-)
-
-set(simulation_stage "${MEISO_TEST_ROOT}/simulation-stage")
-set(simulation_prefix "${MEISO_TEST_ROOT}/simulation-relocated")
-foreach(component Core Runtime Profiles Client Composition Simulation)
-    meiso_install_component(${component} "${simulation_stage}")
-endforeach()
-file(RENAME "${simulation_stage}" "${simulation_prefix}")
-meiso_assert_installed_composition_profile_surface("${simulation_prefix}")
-foreach(required_path
-        "${simulation_prefix}/include/meiso/simulation/composition_edge.h"
-        "${simulation_prefix}/include/meiso/simulation/composition_trace.h")
-    if(NOT EXISTS "${required_path}")
-        message(FATAL_ERROR "Simulation prefix is missing ${required_path}")
-    endif()
-endforeach()
-foreach(forbidden_path
-        "${simulation_prefix}/include/meiso/adapters"
-        "${simulation_prefix}/include/meiso/composition/control_session.h"
-        "${simulation_prefix}/include/meiso/host/composition_runtime.h"
-        "${simulation_prefix}/include/meiso/host/remote_edge.h")
-    if(EXISTS "${forbidden_path}")
-        message(FATAL_ERROR "Simulation prefix leaked ${forbidden_path}")
-    endif()
-endforeach()
-meiso_build_consumer(
-    simulation-consumer
-    "${MEISO_SOURCE_DIR}/tests/installed-consumers/simulation"
-    "${simulation_prefix}"
-)
-
-if(DEFINED MEISO_HAVE_HOST AND MEISO_HAVE_HOST)
-    set(host_stage "${MEISO_TEST_ROOT}/host-stage")
-    set(host_prefix "${MEISO_TEST_ROOT}/host-relocated")
-    foreach(component Core Runtime Profiles Client Posix Control Host)
-        meiso_install_component(${component} "${host_stage}")
-    endforeach()
-    file(RENAME "${host_stage}" "${host_prefix}")
-    meiso_assert_installed_composition_profile_surface("${host_prefix}")
+if(NOT MEISO_LEGACY)
+    set(product_prefix "${MEISO_TEST_ROOT}/product-default")
+    meiso_run("${CMAKE_COMMAND}" --install "${MEISO_BUILD_DIR}" --prefix "${product_prefix}")
     foreach(forbidden_path
-            "${host_prefix}/include/meiso/simulation"
-            "${host_prefix}/include/meiso/internal"
-            "${host_prefix}/include/meiso/edge"
-            "${host_prefix}/include/meiso/composition/scene_store.h"
-            "${host_prefix}/include/meiso/composition/coordinator.h"
-            "${host_prefix}/include/meiso/composition/reference_renderer.h"
-            "${host_prefix}/include/meiso/composition/cpu_raster_renderer.h")
-        if(EXISTS "${forbidden_path}")
-            message(FATAL_ERROR "Host prefix leaked mixed SDK API: ${forbidden_path}")
+            include/meiso/runtime/scheduler.h
+            include/meiso/composition
+            include/meiso/simulation
+            include/meiso/host/edge.h
+            include/meiso/host/composition.h
+            include/meiso/host/composition_runtime.h
+            include/meiso/host/remote_edge.h)
+        if(EXISTS "${product_prefix}/${forbidden_path}")
+            message(FATAL_ERROR "Default package leaked historical API: ${forbidden_path}")
         endif()
     endforeach()
+    file(GLOB_RECURSE forbidden_exports
+        "${product_prefix}/*MeisoClientTargets*"
+        "${product_prefix}/*MeisoCompositionTargets*"
+        "${product_prefix}/*MeisoSimulationTargets*"
+        "${product_prefix}/*MeisoControlTargets*"
+        "${product_prefix}/*MeisoHostTargets*"
+        "${product_prefix}/*meiso_runtime_scheduler*")
+    if(forbidden_exports)
+        message(FATAL_ERROR "Default package leaked historical exports: ${forbidden_exports}")
+    endif()
+endif()
+
+if(MEISO_LEGACY)
+    set(client_stage "${MEISO_TEST_ROOT}/client-stage")
+    set(client_prefix "${MEISO_TEST_ROOT}/client-relocated")
+    foreach(component Core Runtime Profiles Client)
+        meiso_install_component(${component} "${client_stage}")
+    endforeach()
+    file(RENAME "${client_stage}" "${client_prefix}")
+    meiso_assert_installed_composition_profile_surface("${client_prefix}")
     foreach(required_path
-            "${host_prefix}/include/meiso/host/edge.h"
-            "${host_prefix}/include/meiso/host/composition.h"
-            "${host_prefix}/include/meiso/host/composition_runtime.h"
-            "${host_prefix}/include/meiso/host/remote_edge.h")
+            "${client_prefix}/include/meiso/host/edge.h"
+            "${client_prefix}/include/meiso/host/composition.h")
         if(NOT EXISTS "${required_path}")
-            message(FATAL_ERROR "Host prefix is missing ${required_path}")
+            message(FATAL_ERROR "Client prefix is missing ${required_path}")
         endif()
     endforeach()
-    file(
-        GLOB_RECURSE forbidden_sdk_artifacts
-        LIST_DIRECTORIES FALSE
-        "${host_prefix}/*meiso_composition_sdk*"
-        "${host_prefix}/*meiso_composition_edge_simulator*"
-        "${host_prefix}/*meiso_composition_edge_trace*"
-        "${host_prefix}/*meiso_composition_session_v2*"
-        "${host_prefix}/*meiso_four_kind*"
-        "${host_prefix}/*meiso_k230*"
-        "${host_prefix}/*meiso_composition_scene_store*"
-        "${host_prefix}/*meiso_composition_coordinator*"
-        "${host_prefix}/*meiso_composition_reference_renderer*"
-        "${host_prefix}/*meiso_composition_cpu_raster_renderer*"
-        "${host_prefix}/*MeisoCompositionTargets*"
+    foreach(forbidden_path
+            "${client_prefix}/include/meiso/host/composition_runtime.h"
+            "${client_prefix}/include/meiso/host/remote_edge.h"
+            "${client_prefix}/include/meiso/simulation"
+            "${client_prefix}/include/meiso/composition")
+        if(EXISTS "${forbidden_path}")
+            message(FATAL_ERROR "Client prefix leaked ${forbidden_path}")
+        endif()
+    endforeach()
+    meiso_build_consumer(
+        client-consumer
+        "${MEISO_SOURCE_DIR}/tests/installed-consumers/client"
+        "${client_prefix}"
     )
-    if(forbidden_sdk_artifacts)
-        message(
-            FATAL_ERROR
-            "Installed SDK leaked build-only artifacts: ${forbidden_sdk_artifacts}"
+
+    set(composition_stage "${MEISO_TEST_ROOT}/composition-stage")
+    set(composition_prefix "${MEISO_TEST_ROOT}/composition-relocated")
+    foreach(component Core Runtime Profiles Composition)
+        meiso_install_component(${component} "${composition_stage}")
+    endforeach()
+    file(RENAME "${composition_stage}" "${composition_prefix}")
+    meiso_assert_installed_composition_profile_surface("${composition_prefix}")
+    foreach(forbidden_path
+            "${composition_prefix}/include/meiso/adapters"
+            "${composition_prefix}/include/meiso/composition/control_session.h"
+            "${composition_prefix}/include/meiso/host")
+        if(EXISTS "${forbidden_path}")
+            message(FATAL_ERROR "Portable Composition prefix leaked ${forbidden_path}")
+        endif()
+    endforeach()
+    meiso_build_consumer(
+        composition-consumer
+        "${MEISO_SOURCE_DIR}/tests/installed-consumers/composition"
+        "${composition_prefix}"
+    )
+
+    set(simulation_stage "${MEISO_TEST_ROOT}/simulation-stage")
+    set(simulation_prefix "${MEISO_TEST_ROOT}/simulation-relocated")
+    foreach(component Core Runtime Profiles Client Composition Simulation)
+        meiso_install_component(${component} "${simulation_stage}")
+    endforeach()
+    file(RENAME "${simulation_stage}" "${simulation_prefix}")
+    meiso_assert_installed_composition_profile_surface("${simulation_prefix}")
+    foreach(required_path
+            "${simulation_prefix}/include/meiso/simulation/composition_edge.h"
+            "${simulation_prefix}/include/meiso/simulation/composition_trace.h")
+        if(NOT EXISTS "${required_path}")
+            message(FATAL_ERROR "Simulation prefix is missing ${required_path}")
+        endif()
+    endforeach()
+    foreach(forbidden_path
+            "${simulation_prefix}/include/meiso/adapters"
+            "${simulation_prefix}/include/meiso/composition/control_session.h"
+            "${simulation_prefix}/include/meiso/host/composition_runtime.h"
+            "${simulation_prefix}/include/meiso/host/remote_edge.h")
+        if(EXISTS "${forbidden_path}")
+            message(FATAL_ERROR "Simulation prefix leaked ${forbidden_path}")
+        endif()
+    endforeach()
+    meiso_build_consumer(
+        simulation-consumer
+        "${MEISO_SOURCE_DIR}/tests/installed-consumers/simulation"
+        "${simulation_prefix}"
+    )
+
+    if(DEFINED MEISO_HAVE_HOST AND MEISO_HAVE_HOST)
+        set(host_stage "${MEISO_TEST_ROOT}/host-stage")
+        set(host_prefix "${MEISO_TEST_ROOT}/host-relocated")
+        foreach(component Core Runtime Profiles Client Posix Control Host)
+            meiso_install_component(${component} "${host_stage}")
+        endforeach()
+        file(RENAME "${host_stage}" "${host_prefix}")
+        meiso_assert_installed_composition_profile_surface("${host_prefix}")
+        foreach(forbidden_path
+                "${host_prefix}/include/meiso/simulation"
+                "${host_prefix}/include/meiso/internal"
+                "${host_prefix}/include/meiso/edge"
+                "${host_prefix}/include/meiso/composition/scene_store.h"
+                "${host_prefix}/include/meiso/composition/coordinator.h"
+                "${host_prefix}/include/meiso/composition/reference_renderer.h"
+                "${host_prefix}/include/meiso/composition/cpu_raster_renderer.h")
+            if(EXISTS "${forbidden_path}")
+                message(FATAL_ERROR "Host prefix leaked mixed SDK API: ${forbidden_path}")
+            endif()
+        endforeach()
+        foreach(required_path
+                "${host_prefix}/include/meiso/host/edge.h"
+                "${host_prefix}/include/meiso/host/composition.h"
+                "${host_prefix}/include/meiso/host/composition_runtime.h"
+                "${host_prefix}/include/meiso/host/remote_edge.h")
+            if(NOT EXISTS "${required_path}")
+                message(FATAL_ERROR "Host prefix is missing ${required_path}")
+            endif()
+        endforeach()
+        file(
+            GLOB_RECURSE forbidden_sdk_artifacts
+            LIST_DIRECTORIES FALSE
+            "${host_prefix}/*meiso_composition_sdk*"
+            "${host_prefix}/*meiso_composition_edge_simulator*"
+            "${host_prefix}/*meiso_composition_edge_trace*"
+            "${host_prefix}/*meiso_composition_session_v2*"
+            "${host_prefix}/*meiso_four_kind*"
+            "${host_prefix}/*meiso_k230*"
+            "${host_prefix}/*meiso_composition_scene_store*"
+            "${host_prefix}/*meiso_composition_coordinator*"
+            "${host_prefix}/*meiso_composition_reference_renderer*"
+            "${host_prefix}/*meiso_composition_cpu_raster_renderer*"
+            "${host_prefix}/*MeisoCompositionTargets*"
+        )
+        if(forbidden_sdk_artifacts)
+            message(
+                FATAL_ERROR
+                "Installed SDK leaked build-only artifacts: ${forbidden_sdk_artifacts}"
+            )
+        endif()
+        meiso_build_consumer(
+            host-consumer
+            "${MEISO_SOURCE_DIR}/tests/installed-consumers/host"
+            "${host_prefix}"
         )
     endif()
-    meiso_build_consumer(
-        host-consumer
-        "${MEISO_SOURCE_DIR}/tests/installed-consumers/host"
-        "${host_prefix}"
-    )
 endif()

@@ -3,7 +3,7 @@
 # Composition Editor tests are a distinct tool lane. The native bridge test owns a
 # child process and fixed deadlines, so it is serialized under parallel CTest.
 find_package(Python3 COMPONENTS Interpreter QUIET)
-if(Python3_Interpreter_FOUND)
+if(Python3_Interpreter_FOUND AND MEISO_BUILD_LEGACY_COMPOSITION)
     add_test(
         NAME meiso_composition_editor_server_test
         COMMAND
@@ -31,6 +31,7 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 set(meiso_installed_consumer_test_arguments
+    "-DMEISO_LEGACY=${MEISO_BUILD_LEGACY_COMPOSITION}"
     "-DMEISO_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
     "-DMEISO_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
     "-DMEISO_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/installed-consumer-e2e"
@@ -67,7 +68,7 @@ unset(meiso_have_installed_host)
 unset(meiso_installed_consumer_test_arguments)
 
 find_program(MEISO_NODE_EXECUTABLE node)
-if(MEISO_NODE_EXECUTABLE)
+if(MEISO_NODE_EXECUTABLE AND MEISO_BUILD_LEGACY_COMPOSITION)
     add_test(
         NAME meiso_composition_editor_model_test
         COMMAND

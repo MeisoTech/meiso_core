@@ -21,14 +21,16 @@ meiso_enable_warnings(meiso_runtime)
 meiso_set_target_folder(meiso_runtime "Meiso/Runtime")
 add_library(Meiso::Runtime ALIAS meiso_runtime)
 
-add_library(meiso_runtime_scheduler
-    src/runtime/meiso_runtime_scheduler.c
-    src/runtime/meiso_runtime_scheduler_boundary.c
-    src/runtime/meiso_runtime_scheduler_work.c
-    src/runtime/meiso_runtime_scheduler_step.c
-)
-meiso_configure_public_target(meiso_runtime_scheduler RuntimeScheduler)
-target_link_libraries(meiso_runtime_scheduler PUBLIC meiso_runtime)
-meiso_enable_warnings(meiso_runtime_scheduler)
-meiso_set_target_folder(meiso_runtime_scheduler "Meiso/Runtime")
-add_library(Meiso::RuntimeScheduler ALIAS meiso_runtime_scheduler)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    add_library(meiso_runtime_scheduler
+        src/runtime/meiso_runtime_scheduler.c
+        src/runtime/meiso_runtime_scheduler_boundary.c
+        src/runtime/meiso_runtime_scheduler_work.c
+        src/runtime/meiso_runtime_scheduler_step.c
+    )
+    meiso_configure_public_target(meiso_runtime_scheduler RuntimeScheduler)
+    target_link_libraries(meiso_runtime_scheduler PUBLIC meiso_runtime)
+    meiso_enable_warnings(meiso_runtime_scheduler)
+    meiso_set_target_folder(meiso_runtime_scheduler "Meiso/Runtime")
+    add_library(Meiso::RuntimeScheduler ALIAS meiso_runtime_scheduler)
+endif()

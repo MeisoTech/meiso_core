@@ -5,8 +5,7 @@ project(MeisoGlassInstalledRuntimeConsumer LANGUAGES C)
 find_package(MeisoGlass 0.1 REQUIRED CONFIG COMPONENTS Runtime)
 
 if(NOT TARGET Meiso::Core OR
-   NOT TARGET Meiso::Runtime OR
-   NOT TARGET Meiso::RuntimeScheduler)
+   NOT TARGET Meiso::Runtime)
     message(FATAL_ERROR "Runtime component did not load its Core dependency")
 endif()
 if(TARGET Meiso::WifiTelemetryProfile OR
@@ -19,7 +18,7 @@ endif()
 add_executable(meiso_installed_runtime_consumer main.c)
 target_link_libraries(
     meiso_installed_runtime_consumer
-    PRIVATE Meiso::Runtime Meiso::RuntimeScheduler
+    PRIVATE Meiso::Runtime
 )
 set_property(TARGET meiso_installed_runtime_consumer PROPERTY C_STANDARD 11)
 

@@ -52,28 +52,30 @@ add_library(
     ALIAS meiso_composition_scene_schema
 )
 
-add_library(
-    meiso_composition_session_v2_profile
-    profiles/internal/composition_v2/composition_session_v2.c
-    profiles/internal/composition_v2/composition_profile_fixture.h
-)
-meiso_configure_public_target(
-    meiso_composition_session_v2_profile
-    CompositionSessionV2Profile
-)
-target_link_libraries(
-    meiso_composition_session_v2_profile
-    PUBLIC meiso_composition_scene_schema meiso_wifi_telemetry_profile
-)
-meiso_enable_warnings(meiso_composition_session_v2_profile)
-target_include_directories(
-    meiso_composition_session_v2_profile
-    PRIVATE profiles/internal/composition_v2
-)
-meiso_set_target_folder(
-    meiso_composition_session_v2_profile
-    "Meiso/Internal/Protocol"
-)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    add_library(
+        meiso_composition_session_v2_profile
+        profiles/internal/composition_v2/composition_session_v2.c
+        profiles/internal/composition_v2/composition_profile_fixture.h
+    )
+    meiso_configure_public_target(
+        meiso_composition_session_v2_profile
+        CompositionSessionV2Profile
+    )
+    target_link_libraries(
+        meiso_composition_session_v2_profile
+        PUBLIC meiso_composition_scene_schema meiso_wifi_telemetry_profile
+    )
+    meiso_enable_warnings(meiso_composition_session_v2_profile)
+    target_include_directories(
+        meiso_composition_session_v2_profile
+        PRIVATE profiles/internal/composition_v2
+    )
+    meiso_set_target_folder(
+        meiso_composition_session_v2_profile
+        "Meiso/Internal/Protocol"
+    )
+endif()
 
 add_library(
     meiso_composition_profile
@@ -164,13 +166,15 @@ add_library(
     ALIAS meiso_display_ingress_media_transport
 )
 
-add_library(
-    meiso_four_kind_lab_protocol
-    profiles/internal/four_kind/lab_protocol.c
-    profiles/internal/four_kind/lab_protocol_message.c
-    profiles/internal/four_kind/lab_protocol_order.c
-)
-meiso_configure_public_target(meiso_four_kind_lab_protocol FourKindLabProtocol)
-target_link_libraries(meiso_four_kind_lab_protocol PUBLIC meiso_core_resources)
-meiso_enable_warnings(meiso_four_kind_lab_protocol)
-meiso_set_target_folder(meiso_four_kind_lab_protocol "Meiso/Internal/Lab")
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    add_library(
+        meiso_four_kind_lab_protocol
+        profiles/internal/four_kind/lab_protocol.c
+        profiles/internal/four_kind/lab_protocol_message.c
+        profiles/internal/four_kind/lab_protocol_order.c
+    )
+    meiso_configure_public_target(meiso_four_kind_lab_protocol FourKindLabProtocol)
+    target_link_libraries(meiso_four_kind_lab_protocol PUBLIC meiso_core_resources)
+    meiso_enable_warnings(meiso_four_kind_lab_protocol)
+    meiso_set_target_folder(meiso_four_kind_lab_protocol "Meiso/Internal/Lab")
+endif()

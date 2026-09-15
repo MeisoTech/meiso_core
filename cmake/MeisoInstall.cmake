@@ -49,7 +49,7 @@ install(
 )
 
 install(
-    TARGETS meiso_runtime meiso_runtime_scheduler
+    TARGETS meiso_runtime
     EXPORT MeisoRuntimeTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Runtime
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Runtime
@@ -71,10 +71,18 @@ install(
 install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/runtime/runtime.h"
-        "${PROJECT_SOURCE_DIR}/include/meiso/runtime/scheduler.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/runtime"
     COMPONENT Runtime
 )
+
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    install(TARGETS meiso_runtime_scheduler EXPORT MeisoRuntimeTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Runtime
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Runtime
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Runtime)
+    install(FILES "${PROJECT_SOURCE_DIR}/include/meiso/runtime/scheduler.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/runtime" COMPONENT Runtime)
+endif()
 
 install(
     TARGETS
@@ -151,88 +159,90 @@ install(
     COMPONENT DisplayIngressHostFixtureInput
 )
 
-install(
-    TARGETS meiso_composition_edge
-    EXPORT MeisoClientTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Client
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Client
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Client
-    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-)
-install(
-    EXPORT MeisoClientTargets
-    FILE MeisoClientTargets.cmake
-    NAMESPACE Meiso::
-    DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
-    COMPONENT Client
-)
-install(
-    FILES
-        "${PROJECT_SOURCE_DIR}/include/meiso/host/edge.h"
-        "${PROJECT_SOURCE_DIR}/include/meiso/host/composition.h"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/host"
-    COMPONENT Client
-)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    install(
+        TARGETS meiso_composition_edge
+        EXPORT MeisoClientTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Client
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Client
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Client
+        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(
+        EXPORT MeisoClientTargets
+        FILE MeisoClientTargets.cmake
+        NAMESPACE Meiso::
+        DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
+        COMPONENT Client
+    )
+    install(
+        FILES
+            "${PROJECT_SOURCE_DIR}/include/meiso/host/edge.h"
+            "${PROJECT_SOURCE_DIR}/include/meiso/host/composition.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/host"
+        COMPONENT Client
+    )
 
-set(
-    meiso_composition_install_targets
-    meiso_composition_scene_store
-    meiso_composition_coordinator
-    meiso_composition_reference_renderer
-    meiso_composition_cpu_raster_renderer
-)
-install(
-    TARGETS ${meiso_composition_install_targets}
-    EXPORT MeisoCompositionTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Composition
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Composition
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Composition
-    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-)
-install(
-    EXPORT MeisoCompositionTargets
-    FILE MeisoCompositionTargets.cmake
-    NAMESPACE Meiso::
-    DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
-    COMPONENT Composition
-)
-set(
-    meiso_composition_headers
-    "${PROJECT_SOURCE_DIR}/include/meiso/composition/scene_store.h"
-    "${PROJECT_SOURCE_DIR}/include/meiso/composition/coordinator.h"
-    "${PROJECT_SOURCE_DIR}/include/meiso/composition/reference_renderer.h"
-    "${PROJECT_SOURCE_DIR}/include/meiso/composition/cpu_raster_renderer.h"
-)
-install(
-    FILES ${meiso_composition_headers}
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/composition"
-    COMPONENT Composition
-)
+    set(
+        meiso_composition_install_targets
+        meiso_composition_scene_store
+        meiso_composition_coordinator
+        meiso_composition_reference_renderer
+        meiso_composition_cpu_raster_renderer
+    )
+    install(
+        TARGETS ${meiso_composition_install_targets}
+        EXPORT MeisoCompositionTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Composition
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Composition
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Composition
+        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(
+        EXPORT MeisoCompositionTargets
+        FILE MeisoCompositionTargets.cmake
+        NAMESPACE Meiso::
+        DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
+        COMPONENT Composition
+    )
+    set(
+        meiso_composition_headers
+        "${PROJECT_SOURCE_DIR}/include/meiso/composition/scene_store.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/composition/coordinator.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/composition/reference_renderer.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/composition/cpu_raster_renderer.h"
+    )
+    install(
+        FILES ${meiso_composition_headers}
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/composition"
+        COMPONENT Composition
+    )
 
-install(
-    TARGETS
-        meiso_composition_edge_simulator
-        meiso_composition_edge_trace
-    EXPORT MeisoSimulationTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Simulation
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Simulation
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Simulation
-    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-)
-install(
-    EXPORT MeisoSimulationTargets
-    FILE MeisoSimulationTargets.cmake
-    NAMESPACE Meiso::
-    DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
-    COMPONENT Simulation
-)
-install(
-    FILES
-        "${PROJECT_SOURCE_DIR}/include/meiso/simulation/composition_edge.h"
-        "${PROJECT_SOURCE_DIR}/include/meiso/simulation/composition_trace.h"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/simulation"
-    COMPONENT Simulation
-)
+    install(
+        TARGETS
+            meiso_composition_edge_simulator
+            meiso_composition_edge_trace
+        EXPORT MeisoSimulationTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Simulation
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Simulation
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Simulation
+        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(
+        EXPORT MeisoSimulationTargets
+        FILE MeisoSimulationTargets.cmake
+        NAMESPACE Meiso::
+        DESTINATION "${MEISO_INSTALL_CMAKEDIR}"
+        COMPONENT Simulation
+    )
+    install(
+        FILES
+            "${PROJECT_SOURCE_DIR}/include/meiso/simulation/composition_edge.h"
+            "${PROJECT_SOURCE_DIR}/include/meiso/simulation/composition_trace.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/simulation"
+        COMPONENT Simulation
+    )
+endif()
 
 if(TARGET meiso_composition_control_session)
     install(

@@ -23,7 +23,7 @@ add_library(
     ALIAS meiso_display_ingress_host_fixture_input
 )
 
-if(UNIX)
+if(UNIX AND MEISO_BUILD_LEGACY_COMPOSITION)
     add_library(
         meiso_composition_host_runtime
         integrations/host/composition_host_runtime.c

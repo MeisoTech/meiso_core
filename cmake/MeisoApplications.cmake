@@ -451,57 +451,62 @@ if(UNIX)
         meiso_set_target_folder(meiso_display_ingress_drm_service "Meiso/Applications/Lab")
     endif()
 
-    set(
-        MEISO_FOUR_KIND_LAB_APPLICATION_SOURCES
-        devtools/four_kind_lab/four_kind_lab.c
-        devtools/four_kind_lab/four_kind_lab_system.c
-        devtools/four_kind_lab/four_kind_lab_thermal.c
-        devtools/four_kind_lab/four_kind_lab_network.c
-        devtools/four_kind_lab/four_kind_lab_connection.c
-        devtools/four_kind_lab/four_kind_lab_output.c
-        devtools/four_kind_lab/four_kind_lab_host.c
-        devtools/four_kind_lab/four_kind_lab_edge.c
-        devtools/four_kind_lab/four_kind_lab_selftest.c
-    )
+    if(MEISO_BUILD_LEGACY_COMPOSITION)
+        set(
+            MEISO_FOUR_KIND_LAB_APPLICATION_SOURCES
+            devtools/four_kind_lab/four_kind_lab.c
+            devtools/four_kind_lab/four_kind_lab_system.c
+            devtools/four_kind_lab/four_kind_lab_thermal.c
+            devtools/four_kind_lab/four_kind_lab_network.c
+            devtools/four_kind_lab/four_kind_lab_connection.c
+            devtools/four_kind_lab/four_kind_lab_output.c
+            devtools/four_kind_lab/four_kind_lab_host.c
+            devtools/four_kind_lab/four_kind_lab_edge.c
+            devtools/four_kind_lab/four_kind_lab_selftest.c
+        )
+        add_executable(
+            meiso_four_kind_lab
+            ${MEISO_FOUR_KIND_LAB_APPLICATION_SOURCES}
+        )
+        target_link_libraries(
+            meiso_four_kind_lab
+            PRIVATE meiso_posix_tcp_adapter meiso_four_kind_lab_protocol
+        )
+        if(MEISO_BUILD_K230D_LINUX_APPS)
+            target_link_libraries(
+                meiso_four_kind_lab
+                PRIVATE meiso_k230d_linux_target_contract
+            )
+        endif()
+        meiso_enable_warnings(meiso_four_kind_lab)
+        meiso_set_target_folder(meiso_four_kind_lab "Meiso/Applications/Lab")
+    endif()
+
+endif()
+
+if(MEISO_BUILD_LEGACY_COMPOSITION)
     add_executable(
-        meiso_four_kind_lab
-        ${MEISO_FOUR_KIND_LAB_APPLICATION_SOURCES}
+        meiso_composition_offscreen_runner
+        targets/k230d-linux/composition_offscreen_runner.c
     )
     target_link_libraries(
-        meiso_four_kind_lab
-        PRIVATE meiso_posix_tcp_adapter meiso_four_kind_lab_protocol
+        meiso_composition_offscreen_runner
+        PRIVATE
+            meiso_composition_coordinator
+            meiso_composition_reference_renderer
     )
     if(MEISO_BUILD_K230D_LINUX_APPS)
         target_link_libraries(
-            meiso_four_kind_lab
+            meiso_composition_offscreen_runner
             PRIVATE meiso_k230d_linux_target_contract
         )
     endif()
-    meiso_enable_warnings(meiso_four_kind_lab)
-    meiso_set_target_folder(meiso_four_kind_lab "Meiso/Applications/Lab")
-endif()
-
-add_executable(
-    meiso_composition_offscreen_runner
-    targets/k230d-linux/composition_offscreen_runner.c
-)
-target_link_libraries(
-    meiso_composition_offscreen_runner
-    PRIVATE
-        meiso_composition_coordinator
-        meiso_composition_reference_renderer
-)
-if(MEISO_BUILD_K230D_LINUX_APPS)
-    target_link_libraries(
+    meiso_enable_warnings(meiso_composition_offscreen_runner)
+    meiso_set_target_folder(
         meiso_composition_offscreen_runner
-        PRIVATE meiso_k230d_linux_target_contract
+        "Meiso/Applications/Evidence"
     )
 endif()
-meiso_enable_warnings(meiso_composition_offscreen_runner)
-meiso_set_target_folder(
-    meiso_composition_offscreen_runner
-    "Meiso/Applications/Evidence"
-)
 
 if(MEISO_BUILD_K230D_LINUX_APPS)
     add_executable(
@@ -520,45 +525,48 @@ if(MEISO_BUILD_K230D_LINUX_APPS)
         "Meiso/Applications/Edge"
     )
 
-    add_executable(
-        meiso_k230d_wifi_runtime_edge
-        targets/k230d-linux/wifi_runtime_edge.c
-        targets/k230d-linux/wifi_runtime_edge_config.c
-        targets/k230d-linux/wifi_runtime_edge_bootstrap.c
-        targets/k230d-linux/wifi_runtime_edge_truth.c
-        targets/k230d-linux/wifi_runtime_edge_telemetry.c
-        targets/k230d-linux/wifi_runtime_edge_pump.c
-        targets/k230d-linux/wifi_runtime_edge_lifecycle.c
-    )
-    target_link_libraries(
-        meiso_k230d_wifi_runtime_edge
-        PRIVATE
-            meiso_wifi_linux_adapter
-            meiso_posix_tcp_adapter
-            meiso_k230d_linux_target_contract
-    )
-    meiso_enable_warnings(meiso_k230d_wifi_runtime_edge)
-    meiso_set_target_folder(
-        meiso_k230d_wifi_runtime_edge
-        "Meiso/Applications/Edge"
-    )
+    if(MEISO_BUILD_LEGACY_COMPOSITION)
+        add_executable(
+            meiso_k230d_wifi_runtime_edge
+            targets/k230d-linux/wifi_runtime_edge.c
+            targets/k230d-linux/wifi_runtime_edge_config.c
+            targets/k230d-linux/wifi_runtime_edge_bootstrap.c
+            targets/k230d-linux/wifi_runtime_edge_truth.c
+            targets/k230d-linux/wifi_runtime_edge_telemetry.c
+            targets/k230d-linux/wifi_runtime_edge_pump.c
+            targets/k230d-linux/wifi_runtime_edge_lifecycle.c
+        )
+        target_link_libraries(
+            meiso_k230d_wifi_runtime_edge
+            PRIVATE
+                meiso_wifi_linux_adapter
+                meiso_posix_tcp_adapter
+                meiso_k230d_linux_target_contract
+        )
+        meiso_enable_warnings(meiso_k230d_wifi_runtime_edge)
+        meiso_set_target_folder(
+            meiso_k230d_wifi_runtime_edge
+            "Meiso/Applications/Edge"
+        )
+    endif()
 
     add_custom_target(
         meiso_k230d_linux_applications
         DEPENDS
             meiso_k230d_camera_v4l2_capture_once
-            meiso_k230d_composition_edge_service
-            meiso_composition_offscreen_runner
-            meiso_four_kind_lab
-            meiso_k230d_wifi_runtime_edge
     )
+    if(MEISO_BUILD_LEGACY_COMPOSITION)
+        add_dependencies(meiso_k230d_linux_applications
+            meiso_k230d_composition_edge_service meiso_composition_offscreen_runner
+            meiso_four_kind_lab meiso_k230d_wifi_runtime_edge)
+    endif()
     meiso_set_target_folder(
         meiso_k230d_linux_applications
         "Meiso/Targets/K230D Linux"
     )
 endif()
 
-if(APPLE AND TARGET meiso_posix_tcp_adapter)
+if(APPLE AND TARGET meiso_posix_tcp_adapter AND MEISO_BUILD_LEGACY_COMPOSITION)
     add_executable(
         meiso_session_tcp_loopback
         devtools/macos/session_tcp_loopback.c

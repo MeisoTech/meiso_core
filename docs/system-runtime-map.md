@@ -49,6 +49,10 @@ Host复用systemd用户服务，Edge复用BusyBox init和单子进程重连器�
 完整XR设备兼容、Edge实机姿态反馈/微调、光学标定、安全通信和正式发行仍有缺口。
 已传递源渲染姿态不表示已有实机跟踪闭环；初步链路成立不等于完整产品已上线。
 
+默认构建已隔离旧Composition应用栈；它仅在 `MEISO_BUILD_LEGACY_COMPOSITION=ON` 时生成。
+当前相机链使用的CameraMedia schema/profile/media/POSIX依赖保留，scene与视频后端不受该开关控制。
+组件与保留清单见[SDK构建边界](sdk-guide.md#3-cmake-package-与组件)；下方仍是历史记录。
+
 <details>
 <summary>历史 Composition 工程记录（截至2026-09-02，包含当时的资源与架构问题）</summary>
 

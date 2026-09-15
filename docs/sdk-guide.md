@@ -7,25 +7,17 @@
 ## 1. 边界
 
 ```text
-Application
-  ↓ typed commands / snapshots
-Portable Edge facade (MeisoEdgeHandle)
-  ↓
-Host Runtime                 K230D Edge Runtime
-  ↓                              ↓
-Composition Control Session / Runtime / Scheduler
-  ↓                              ↓
-Core Session + Resource primitives
-  ↕ transport adapters           ↑ platform adapters
+Locate / Echo / native application
+  ↓ installed Looking Glass Host SDK (separate repository)
+Looking Glass HostRuntime / presentation + camera services
+  ↓ Meiso Display Ingress + CameraMedia / Runtime / Core
+POSIX transport ↔ Edge platform capture / native scene / video backend
 ```
 
-- Core 拥有 identity、Session 和 bounded Resource delivery，不依赖 socket、线程、Profile 或板卡。
-- Runtime 拥有 catalog、endpoint、desired/actual、production route 和 Blob transfer，不解释业务 payload。
-- Profile 选择 schema、codec、route graph 和上限；当前 Composition 为
-  `COMPOSE_/_PROFILE:v1` + MRT0 v4 + 6/18 graph。版本号是协议数据，不进入正式组件名。
-- Control Session 组合 Runtime/Scheduler 与 POSIX Session adapter，不解 codec、不持有 camera/renderer truth。
-- Host Runtime 拥有 desired、actual、Blob 和 media lifecycle；Edge Runtime 只在真实 apply/produce 后发布 actual。
-- `CompositionHostBridge` 和 `K230dCompositionEdgeService` 是正式进程入口，不是第二套 SDK 或 wire owner。
+- Core 拥有identity、Session与有界Resource传输；Runtime管理catalog、endpoint、desired/actual和transfer。
+- Display Ingress的scene/overlay/video和CameraMedia仍走已有Profile与传输语义。
+- 旧Composition facade、ControlSession/Scheduler、HostBridge、EdgeService只在显式历史构建中可用，
+  不代表当前Looking Glass应用入口。协议规范仍保留；构建选项不会另立协议。
 
 IP、port、TCP、NDJSON 与 CMFB 都是 bootstrap/adapter 边界，不是 peer identity 或产品 Resource。
 
@@ -55,14 +47,26 @@ Package 名为 `MeisoGlass 0.1.0`，imported target namespace 为 `Meiso::`。
 | Component | 主要 target | 用途 |
 |---|---|---|
 | `Core` | `Meiso::Core`, `CoreResources`, `CoreSession` | 只保留 Core 二次开发 |
-| `Runtime` | `Meiso::Runtime`, `RuntimeScheduler` | Core 上的 catalog/route/policy |
-| `Profiles` | Wi-Fi、Device、Composition schema/profile/media | 当前 typed contract |
-| `Client` | `Meiso::CompositionEdge` | portable opaque Edge facade |
+| `Runtime` | `Meiso::Runtime` | Core上的catalog/route/policy；Scheduler仅历史构建 |
+| `Profiles` | Wi-Fi、Device、Composition schema/profile/media、Display Ingress | 当前typed contract与CameraMedia依赖 |
+| `Client`（历史） | `Meiso::CompositionEdge` | portable opaque Edge facade |
 | `Posix` | POSIX Session/media adapters | UNIX transport adapter |
-| `Composition` | SceneStore、Coordinator、两个 renderer | portable composition implementation |
-| `Simulation` | Edge simulator、trace | deterministic local backend |
-| `Control` | `Meiso::CompositionControlSession` | connected control fd integration |
-| `Host` | Host Runtime、Remote Edge | native Host integration |
+| `Composition`（历史） | SceneStore、Coordinator、两个 renderer | portable composition implementation |
+| `Simulation`（历史） | Edge simulator、trace | deterministic local backend |
+| `Control`（历史） | `Meiso::CompositionControlSession` | connected control fd integration |
+| `Host`（历史） | Host Runtime、Remote Edge | native Host integration |
+
+默认 `MEISO_BUILD_LEGACY_COMPOSITION=OFF`：不生成上述历史组件、RuntimeScheduler、internal
+profiles、旧Composition进程/renderer/simulation及web/macOS/four-kind外壳的专属测试；默认CI
+也不运行旧dashboard。需要追溯时在独立构建目录显式打开该选项，CI可手动选择legacy。
+历史K230D构建脚本在请求旧目标时显式选入；`runtime.h`仅聚合当前Runtime API，使用旧
+scheduler的消费者需要直接包含 `meiso/runtime/scheduler.h`。源码、规范和[历史证据](archive/README.md)继续保留。默认安装不导出历史组件，旧prefix不会
+被安装命令自动卸载，切换默认产品包请用干净prefix，避免遗留旧头文件/库。
+
+**必须保留的相机依赖清单：** CompositionSceneSchema → CompositionProfile（CameraMedia类型和
+catalog）→ CompositionMediaTransport → CompositionMediaPosixTcpAdapter → DisplayCameraChannel；
+DisplayIngressProfile仍链接CompositionProfile。V4L2、显示后端与当前桌面Edge保留。这里保留
+schema/catalog的链接闭包，不代表重新启用旧Composition应用栈；本次不重写或复制CameraMedia。
 
 K230D/Linux adapter 不进入 portable 库导出；视频程序与启动入口可通过独立的
 `K230dVideoRuntime` 组件安装。两端应用包和构建依赖见[快速开始](host-edge-quickstart.md)。
@@ -104,7 +108,9 @@ find_package(MeisoGlass 0.1 CONFIG REQUIRED COMPONENTS Runtime)
 target_link_libraries(my_runtime PRIVATE Meiso::Runtime)
 ```
 
-### Host 或 simulator
+### 历史 Host 或 simulator（显式选入）
+
+以下不是Looking Glass Host SDK。先以 `-DMEISO_BUILD_LEGACY_COMPOSITION=ON` 构建并安装旧组件：
 
 ```cmake
 find_package(MeisoGlass 0.1 CONFIG REQUIRED COMPONENTS Host)
@@ -124,7 +130,7 @@ Package gate 会把 prefix 移动到新路径，然后从仓外 fresh configure/
 #include <meiso/core/state.h>
 #include <meiso/runtime/runtime.h>
 #include <meiso/profiles/composition/profile.h>
-#include <meiso/host/edge.h>
+#include <meiso/profiles/display_ingress/profile.h>
 ```
 
 当前 API 尚未对外发布，本轮因此选择零 legacy 硬迁移：

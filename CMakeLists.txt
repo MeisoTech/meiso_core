@@ -18,17 +18,30 @@ configure_file(
     @ONLY
 )
 
+option(MEISO_BUILD_LEGACY_COMPOSITION
+    "Build historical Composition applications, scheduler and developer shells" OFF)
+
 include(cmake/MeisoBuild.cmake)
 include(cmake/MeisoCore.cmake)
 include(cmake/MeisoRuntime.cmake)
 include(cmake/MeisoProfiles.cmake)
-include(cmake/MeisoComposition.cmake)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    include(cmake/MeisoComposition.cmake)
+endif()
 include(cmake/MeisoAdapters.cmake)
-include(cmake/MeisoControl.cmake)
-include(cmake/MeisoClient.cmake)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    include(cmake/MeisoControl.cmake)
+endif()
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    include(cmake/MeisoClient.cmake)
+endif()
 include(cmake/MeisoHost.cmake)
-include(cmake/MeisoSimulation.cmake)
-include(cmake/MeisoEdgeLinux.cmake)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    include(cmake/MeisoSimulation.cmake)
+endif()
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    include(cmake/MeisoEdgeLinux.cmake)
+endif()
 
 option(
     MEISO_BUILD_APPLICATIONS

@@ -45,13 +45,15 @@ meiso_add_c_test(
     runtime
     meiso_runtime
 )
-meiso_add_c_test(
-    meiso_runtime_blob_wire_test
-    tests/test_runtime_blob_wire.c
-    runtime
-    meiso_composition_scene_store
-)
-target_include_directories(
-    meiso_runtime_blob_wire_test
-    PRIVATE profiles/internal/composition_v2
-)
+if(MEISO_BUILD_LEGACY_COMPOSITION)
+    meiso_add_c_test(
+        meiso_runtime_blob_wire_test
+        tests/test_runtime_blob_wire.c
+        runtime
+        meiso_composition_scene_store
+    )
+    target_include_directories(
+        meiso_runtime_blob_wire_test
+        PRIVATE profiles/internal/composition_v2
+    )
+endif()

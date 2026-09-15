@@ -24,6 +24,14 @@ case "$target" in
         ;;
 esac
 
+# Requesting a historical executable explicitly opts into its archived stack.
+legacy_option=OFF
+case "$target" in
+    meiso_k230d_composition_edge_service|meiso_composition_offscreen_runner|\
+    meiso_four_kind_lab|meiso_k230d_wifi_runtime_edge)
+        legacy_option=ON ;;
+esac
+
 if [ -z "$output" ] || [ -d "$output" ]; then
     echo "output must name a file: $output" >&2
     exit 2
@@ -85,6 +93,7 @@ if [ "$target" = meiso_k230d_drm_topology_admission_once ] ||
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \
         -DMEISO_BUILD_APPLICATIONS=ON \
+        -DMEISO_BUILD_LEGACY_COMPOSITION="$legacy_option" \
         -DMEISO_BUILD_K230D_LINUX_APPS=ON \
         -DMEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER="$drm_topology_option" \
         -DMEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER="$drm_test_only_option" \
@@ -98,6 +107,7 @@ else
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \
         -DMEISO_BUILD_APPLICATIONS=ON \
+        -DMEISO_BUILD_LEGACY_COMPOSITION="$legacy_option" \
         -DMEISO_BUILD_K230D_LINUX_APPS=ON \
         -DCMAKE_TOOLCHAIN_FILE="$repo_root/cmake/toolchains/k230d-linux-xuantie.cmake"
 fi

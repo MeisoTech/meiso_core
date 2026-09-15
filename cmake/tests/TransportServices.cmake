@@ -114,31 +114,33 @@ if(TARGET meiso_posix_tcp_adapter)
         meiso_posix_tcp_adapter
         meiso_wifi_telemetry_profile
     )
-    meiso_add_c_test(
-        meiso_composition_runtime_tcp_test
-        tests/test_composition_runtime_tcp.c
-        integration
-        meiso_posix_tcp_adapter
-        meiso_runtime_scheduler
-        meiso_composition_session_v2_profile
-        meiso_composition_coordinator
-    )
-    meiso_add_c_test(
-        meiso_composition_runtime_tcp_adversarial_test
-        tests/test_composition_runtime_tcp_adversarial.c
-        integration
-        meiso_posix_tcp_adapter
-        meiso_runtime_scheduler
-        meiso_composition_session_v2_profile
-    )
-    target_include_directories(
-        meiso_composition_runtime_tcp_test
-        PRIVATE profiles/internal/composition_v2
-    )
-    target_include_directories(
-        meiso_composition_runtime_tcp_adversarial_test
-        PRIVATE profiles/internal/composition_v2
-    )
+    if(MEISO_BUILD_LEGACY_COMPOSITION)
+        meiso_add_c_test(
+            meiso_composition_runtime_tcp_test
+            tests/test_composition_runtime_tcp.c
+            integration
+            meiso_posix_tcp_adapter
+            meiso_runtime_scheduler
+            meiso_composition_session_v2_profile
+            meiso_composition_coordinator
+        )
+        meiso_add_c_test(
+            meiso_composition_runtime_tcp_adversarial_test
+            tests/test_composition_runtime_tcp_adversarial.c
+            integration
+            meiso_posix_tcp_adapter
+            meiso_runtime_scheduler
+            meiso_composition_session_v2_profile
+        )
+        target_include_directories(
+            meiso_composition_runtime_tcp_test
+            PRIVATE profiles/internal/composition_v2
+        )
+        target_include_directories(
+            meiso_composition_runtime_tcp_adversarial_test
+            PRIVATE profiles/internal/composition_v2
+        )
+    endif()
 endif()
 
 if(TARGET meiso_four_kind_lab)

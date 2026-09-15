@@ -6,6 +6,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      legacy:
+        description: Run historical Composition and dashboard checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,12 +59,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check Markdown links
+        if: matrix.name == 'gcc-debug'
+        run: python3 devtools/check_markdown_links.py
+
       - name: Configure
         run: |
           cmake -S . -B "build/${{ matrix.name }}" \
             -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
             -DCMAKE_C_FLAGS="${{ matrix.c_flags }}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.linker_flags }}"
+            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.linker_flags }}" \
+            -DMEISO_BUILD_LEGACY_COMPOSITION=${{ inputs.legacy && 'ON' || 'OFF' }}
 
       - name: Build
         run: cmake --build "build/${{ matrix.name }}" --parallel 2
@@ -72,7 +82,8 @@ jobs:
           --timeout 180
 
   dashboards:
-    name: Dashboards
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy }}
+    name: Historical dashboards
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -92,9 +103,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
-
-      - name: Check Markdown links
-        run: python devtools/check_markdown_links.py
 
       - name: Test four-kind dashboard
         working-directory: devtools/web/four_kind_dashboard

@@ -8,13 +8,11 @@ set(
     Runtime
     Profiles
     DisplayIngressHostFixtureInput
-    Client
     Posix
-    Composition
-    Simulation
-    Control
-    Host
 )
+if(@MEISO_BUILD_LEGACY_COMPOSITION@)
+    list(APPEND MeisoGlass_SUPPORTED_COMPONENTS Client Composition Simulation Control Host)
+endif()
 
 if(NOT MeisoGlass_FIND_COMPONENTS)
     set(MeisoGlass_FIND_COMPONENTS Core)
