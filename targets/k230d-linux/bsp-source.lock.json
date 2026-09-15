@@ -1,7 +1,7 @@
 {
   "schema": "meiso-k230d-bsp-source-reference-v1",
   "repository": "https://github.com/MeisoTech/looking_glass.git",
-  "commit": "fce368eaba79e6c05ca1fa37ec60cc9ba5f79eb7",
+  "commit": "9e016c8c15b782450e2914c742ab42cd895b2cf3",
   "manifest": "glass/platform/k230d/linux.lock.json",
   "manifest_sha256": "cdd102b4379d4ffb7e8aab21dde6c2eb21674f2d4206d65155b750c6fc59ce43",
   "purpose": "BSP source provenance only; not a Host SDK/runtime dependency or a booted image claim"

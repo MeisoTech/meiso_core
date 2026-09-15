@@ -20,7 +20,7 @@ CMake 是 K230D Linux source/link graph 的唯一权威。各个 `build_*.sh` �
 ## BSP source
 
 板级补丁统一由 Looking Glass 的
-[固定版本 BSP 目录](https://github.com/MeisoTech/looking_glass/tree/fce368eaba79e6c05ca1fa37ec60cc9ba5f79eb7/glass/platform/k230d)
+[固定版本 BSP 目录](https://github.com/MeisoTech/looking_glass/tree/9e016c8c15b782450e2914c742ab42cd895b2cf3/glass/platform/k230d)
 维护；本仓 [bsp-source.lock.json](bsp-source.lock.json) 固定该来源提交和清单 SHA-256。
 完整目录包含 32 个 Linux 补丁、单独作用于 SDK 的 GC2093/VVCAM 补丁和可选显示背景 DT overlay。
 此前本仓的相机 BSP 补丁和只读 checker 已迁至该目录，不能在构建完整补丁集后再应用一遍。
