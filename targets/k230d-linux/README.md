@@ -17,6 +17,18 @@ CMake 是 K230D Linux source/link graph 的唯一权威。各个 `build_*.sh` �
 `MEISO_BUILD_K230D_LINUX_APPS=ON`。RT-Smart overlay 因外部 SDK 约束保留 Makefile，
 但只是受 manifest gate 约束的集成副本，不能反向定义 product graph。
 
+## BSP source
+
+板级补丁统一由 Looking Glass 的
+[固定版本 BSP 目录](https://github.com/MeisoTech/looking_glass/tree/fce368eaba79e6c05ca1fa37ec60cc9ba5f79eb7/glass/platform/k230d)
+维护；本仓 [bsp-source.lock.json](bsp-source.lock.json) 固定该来源提交和清单 SHA-256。
+完整目录包含 32 个 Linux 补丁、单独作用于 SDK 的 GC2093/VVCAM 补丁和可选显示背景 DT overlay。
+此前本仓的相机 BSP 补丁和只读 checker 已迁至该目录，不能在构建完整补丁集后再应用一遍。
+
+此引用只描述 BSP 源码来源；不使 Meiso 公共 SDK 依赖 Looking Glass Host，也不改变 Host SDK
+版本配对锁。跨平台 Runtime 保留在本仓，内核/设备树来源与用户态 SDK 的版本分别记录。
+来源整合已验证补丁应用，尚未建立新的交叉编译镜像/实板启动证明。
+
 ## Targets
 
 | wrapper | CMake target | 用途 |
