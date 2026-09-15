@@ -350,7 +350,7 @@ if(UNIX)
             devtools/display_ingress_video_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
             targets/k230d-linux/display_ingress_scene_raster.c
-            adapters/desktop/display_ingress_video_backend.c adapters/desktop/camera_jpeg.c)
+            adapters/desktop/display_ingress_video_backend.c adapters/media/camera_jpeg.c)
         target_compile_definitions(meiso_desktop_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
             MEISO_DISPLAY_INGRESS_DESKTOP_EDGE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
@@ -359,7 +359,7 @@ if(UNIX)
             PkgConfig::MEISO_DESKTOP_AV JPEG::JPEG)
         meiso_enable_warnings(meiso_desktop_edge)
         if(BUILD_TESTING)
-            add_executable(meiso_desktop_camera_jpeg_test tests/test_desktop_camera_jpeg.c adapters/desktop/camera_jpeg.c)
+            add_executable(meiso_desktop_camera_jpeg_test tests/test_desktop_camera_jpeg.c adapters/media/camera_jpeg.c)
             target_link_libraries(meiso_desktop_camera_jpeg_test PRIVATE JPEG::JPEG)
             meiso_enable_warnings(meiso_desktop_camera_jpeg_test)
             add_test(NAME meiso_desktop_camera_jpeg_test COMMAND meiso_desktop_camera_jpeg_test)
@@ -388,6 +388,7 @@ if(UNIX)
 
     option(MEISO_BUILD_K230D_VIDEO_SERVICE "Build native K230D MVX/DRM video service" OFF)
     if(MEISO_BUILD_K230D_VIDEO_SERVICE)
+        find_package(JPEG REQUIRED)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
             message(FATAL_ERROR "K230D video service requires Linux")
         endif()
@@ -398,7 +399,7 @@ if(UNIX)
             devtools/display_ingress_video_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
             targets/k230d-linux/display_ingress_scene_raster.c
-            targets/k230d-linux/display_ingress_video_backend.c)
+            targets/k230d-linux/display_ingress_video_backend.c adapters/media/camera_jpeg.c)
         target_compile_definitions(meiso_display_ingress_video_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1)
         target_include_directories(meiso_display_ingress_video_edge SYSTEM PRIVATE
@@ -406,7 +407,7 @@ if(UNIX)
         target_link_libraries(meiso_display_ingress_video_edge PRIVATE meiso_posix_tcp_adapter
             meiso_display_camera_channel meiso_camera_v4l2_adapter
             meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
-            "${MEISO_DISPLAY_DRM_LIBRARY}")
+            "${MEISO_DISPLAY_DRM_LIBRARY}" JPEG::JPEG)
         set_target_properties(meiso_display_ingress_video_edge PROPERTIES SKIP_BUILD_RPATH TRUE)
         meiso_enable_warnings(meiso_display_ingress_video_edge)
         add_executable(meiso_display_ingress_edge_launch

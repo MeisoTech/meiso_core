@@ -777,3 +777,15 @@ With native overlay enabled, periodic `MEMORY_PROGRESS` lines sample
 `MemAvailable` and `CmaFree` inside the existing video process. They avoid a
 separate on-board sampler. `CmaFree` is not the allocatable CMA budget; use
 actual DMA allocations and board-wide memory observations together.
+
+## Optional JPEG camera keyframes
+
+The video Edge can select `--camera-codec jpeg --camera-colorimetry bt601-limited`
+with its existing `--camera-device` input. This advertises CameraMedia JPEG at
+320×240, at most 0.5 Hz and 30 KiB per independent frame. The encoder reads the current
+NV12 frame using row-sized RGB scratch, preserves its source sequence/time, and
+releases the V4L2 buffer even if the encoded frame is too large and dropped.
+This does not reduce ISP capture power or enable continuous local video recording.
+Omit these options to keep RAW NV12. Cross builds need matching target libjpeg
+headers/library (`JPEG_INCLUDE_DIR`, `JPEG_LIBRARY`) in addition to libdrm.
+Capability support does not by itself establish board performance or power.

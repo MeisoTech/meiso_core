@@ -186,15 +186,16 @@ bool service_run_edge_media(Service *s) { return service_fail(s, "application", 
 #else
 static MeisoIngressVideo *video;
 static MeisoDisplayCameraChannel *camera;
-#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
-#include "../adapters/desktop/camera_jpeg.h"
-static uint8_t capture_pixels[320*240*4];
+#include "../adapters/media/camera_jpeg.h"
 static bool capture_jpeg;
 static uint8_t capture_encoded[30720];
+#ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+static uint8_t capture_pixels[320*240*4];
 static size_t capture_used;
 static bool capture_started;
 static uint64_t capture_sequence;
 #else
+static bool capture_bt601_known;
 static MeisoCameraV4l2Adapter *capture;
 static void *capture_arena;
 static bool capture_stop(void)
@@ -256,7 +257,7 @@ static bool camera_tick(Service *s)
             if(!d) return service_fail(s,"camera","capture-desired");
             MeisoByteView payload={capture_pixels,sizeof(capture_pixels)};
             if(d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
-                const size_t size=meiso_desktop_camera_jpeg(capture_pixels,capture_encoded,sizeof(capture_encoded));
+                const size_t size=meiso_camera_jpeg_rgba(capture_pixels,capture_encoded,sizeof(capture_encoded));
                 if(!size) {
                     capture_next=now+UINT64_C(1000000000000)/d->fps_millihz;
                     fprintf(stderr,"CAMERA_DROPPED frame=%"PRIu64" reason=jpeg-invalid-or-oversize\n",capture_sequence);
@@ -284,11 +285,32 @@ static bool camera_tick(Service *s)
         capture_last=now;
         if(now>=capture_next) {
             const MeisoCompositionMediaDesired *d=meiso_display_camera_channel_effective(camera);
-            ok=d && meiso_display_camera_channel_submit(camera,frame.ref.driver_sequence,frame.source_time,frame.bytes);
+            MeisoByteView payload=frame.bytes;
+            const uint64_t encode_started=service_now_ns();
+            bool dropped=false;
+            if(d && d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
+                if(frame.bytes.size!=320U*240U*3U/2U) ok=false;
+                else {
+                    const size_t size=meiso_camera_jpeg_nv12_bt601(frame.bytes.data,capture_encoded,sizeof(capture_encoded));
+                    payload=(MeisoByteView){capture_encoded,size};dropped=!size;
+                }
+            }
+            ok=ok && d && (dropped || meiso_display_camera_channel_submit(camera,frame.ref.driver_sequence,frame.source_time,payload));
             if(ok) {
                 capture_next=now+UINT64_C(1000000000000)/d->fps_millihz;
-                fprintf(stderr,"CAMERA_SUBMITTED frame=%u source_ns=%"PRIu64" bytes=%zu fixture=false exposure=unknown timestamp_provenance=%u sequence_provenance=%u\n",
-                    frame.ref.driver_sequence,frame.source_time.monotonic_ns,frame.bytes.size,frame.timestamp_provenance,frame.sequence_provenance);
+                if(dropped) fprintf(stderr,"CAMERA_DROPPED frame=%u reason=jpeg-invalid-or-oversize\n",frame.ref.driver_sequence);
+                else {
+                    fprintf(stderr,"CAMERA_SUBMITTED frame=%u source_ns=%"PRIu64" bytes=%zu codec=%u encode_submit_ns=%"PRIu64" exposure=unknown timestamp_provenance=%u sequence_provenance=%u\n",
+                        frame.ref.driver_sequence,frame.source_time.monotonic_ns,payload.size,d->codec,service_now_ns()-encode_started,frame.timestamp_provenance,frame.sequence_provenance);
+                    if(d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
+                        uint8_t digest[32];char hex[65];
+                        ok=meiso_display_ingress_host_fixture_input_sha256(payload,digest);
+                        if(ok) {
+                            for(unsigned i=0;i<32;++i)(void)snprintf(hex+2*i,3,"%02x",digest[i]);
+                            fprintf(stderr,"CAMERA_JPEG frame=%u sha256=%s\n",frame.ref.driver_sequence,hex);
+                        }
+                    }
+                }
             }
         }
         if(meiso_camera_v4l2_release_frame(capture,&frame.ref)!=MEISO_CAMERA_V4L2_RELEASE_RELEASED)
@@ -521,12 +543,13 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--output-height") == 0 && number(argv[i+1],4096U,&n) && n) service.output_height=(uint32_t)n;
         else if (strcmp(argv[i], "--output-directory") == 0) drm_path = argv[i+1];
         else if (strcmp(argv[i], "--camera-input-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_input_fd=(int)n;
-        else if (strcmp(argv[i], "--camera-codec") == 0 && strcmp(argv[i+1],"jpeg")==0) capture_jpeg=true;
 #endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+        else if (strcmp(argv[i], "--camera-codec") == 0 && strcmp(argv[i+1],"jpeg")==0) capture_jpeg=true;
         else if (strcmp(argv[i], "--camera-media-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_media_fd=(int)n;
 #ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
         else if (strcmp(argv[i], "--camera-device") == 0) camera_path=argv[i+1];
+        else if (strcmp(argv[i], "--camera-colorimetry") == 0 && strcmp(argv[i+1],"bt601-limited")==0) capture_bt601_known=true;
 #endif
         else if (strcmp(argv[i], "--continuous") == 0 && strcmp(argv[i+1], "on") == 0) continuous_edge=true;
         else if (strcmp(argv[i], "--video-layout") == 0 &&
@@ -579,6 +602,16 @@ int main(int argc, char **argv)
         .source=MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,.pixel_formats=MEISO_COMPOSITION_MEDIA_PIXEL_MASK_NV12,
         .codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW,.min_width=320,.min_height=240,.max_width=320,.max_height=240,
         .max_fps_millihz=5000,.max_access_unit_bytes=320*240*3/2,.max_fragment_payload_bytes=4096};
+    if(capture_jpeg) {
+        if(!service.camera_enabled || !capture_bt601_known) {
+            fprintf(stderr,"JPEG mode requires camera and explicit --camera-colorimetry bt601-limited\n");return 2;
+        }
+        service.camera_capability.pixel_formats=MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888;
+        service.camera_capability.codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_JPEG;
+        service.camera_capability.max_fps_millihz=500;
+        service.camera_capability.max_access_unit_bytes=sizeof(capture_encoded);
+        service.camera_capability.max_bitrate_bps=150000;
+    }
 #endif
     if (continuous_edge && !local_set) {
         fprintf(stderr, "continuous Edge requires --local-peer and --expected-peer\n");
