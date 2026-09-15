@@ -46,6 +46,7 @@ CSRF_PLACEHOLDER = "__MEISO_CSRF_TOKEN__"
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 NATIVE_RECONNECT_INITIAL_SECONDS = 0.1
 NATIVE_RECONNECT_MAX_SECONDS = 5.0
+NATIVE_STATE_CLOSE_TIMEOUT_SECONDS = 10.0
 _RECONNECTABLE_NATIVE_TERMINALS = frozenset({
     "HOST_RUNTIME_TRANSPORT_TERMINAL",
     "HOST_RUNTIME_SESSION_TERMINAL",
@@ -209,9 +210,13 @@ class CompositionEditorState:
         self._snapshot = _default_snapshot()
         self._native_bridge: NativeBridge | None = None
         self._native_spec: tuple[str, str | None, bool] | None = None
+        self._native_binding_token: object | None = None
         self._native_generation = 0
         self._native_reconnect_thread: threading.Thread | None = None
         self._native_reconnect_stop = threading.Event()
+        self._native_retiring_bridge: NativeBridge | None = None
+        self._native_cleanup_error: Exception | None = None
+        self._native_close_in_progress = False
         self._native_refresh_pending = False
         with self._condition:
             self._append_event_locked("bootstrap", "READY")
@@ -254,20 +259,78 @@ class CompositionEditorState:
     ) -> None:
         if (self._native_spec is None or self._native_spec[2] or
                 self._native_reconnect_stop.is_set() or
-                (self._native_reconnect_thread is not None and
-                 self._native_reconnect_thread.is_alive())):
+                self._native_reconnect_thread is not None or
+                self._native_close_in_progress):
             return
-        thread = threading.Thread(
-            target=self._native_reconnect_loop,
-            args=(stale_bridge,),
-            daemon=True,
-            name="native_reconnect",
-        )
+        self._native_retiring_bridge = stale_bridge
+        self._native_cleanup_error = None
+        try:
+            thread = threading.Thread(
+                target=self._native_reconnect_loop,
+                args=(stale_bridge,),
+                daemon=True,
+                name="native_reconnect",
+            )
+        except Exception as error:
+            scheduling_error = NativeBridgeError("NATIVE_RECONNECT_START")
+            self._record_native_cleanup_failure_locked(
+                stale_bridge, scheduling_error, "native.reconnect"
+            )
+            return
         self._native_reconnect_thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception as error:
+            self._native_reconnect_thread = None
+            scheduling_error = NativeBridgeError("NATIVE_RECONNECT_START")
+            self._record_native_cleanup_failure_locked(
+                stale_bridge, scheduling_error, "native.reconnect"
+            )
+
+    def _record_native_cleanup_failure_locked(
+        self, bridge: NativeBridge, error: Exception, command: str
+    ) -> None:
+        """Retain exclusive ownership of an unreaped child until recovery."""
+        self._native_retiring_bridge = bridge
+        self._native_cleanup_error = error
+        if (self._native_spec is not None and
+                not self._native_reconnect_stop.is_set() and
+                self._native_bridge is None):
+            self._native_bridge = bridge
+            self._snapshot["backend"].update({
+                "native_host_bound": False,
+                "device_connected": False,
+                "session_status": "FAILED",
+                "catalog_status": "PENDING",
+            })
+            self._append_event_locked(
+                command, "NATIVE_RECONNECT_BLOCKED",
+                {"type": "native.reconnect", "status": "blocked",
+                 "code": str(error)},
+            )
+        self._condition.notify_all()
+
+    def _record_native_cleanup_success_locked(
+        self, bridge: NativeBridge
+    ) -> None:
+        if self._native_retiring_bridge is bridge:
+            self._native_retiring_bridge = None
+            self._native_cleanup_error = None
+        self._condition.notify_all()
 
     def _native_reconnect_loop(self, stale_bridge: NativeBridge) -> None:
-        stale_bridge.close()
+        try:
+            stale_bridge.close()
+        except Exception as error:
+            with self._condition:
+                self._record_native_cleanup_failure_locked(
+                    stale_bridge, error, "native.reconnect"
+                )
+                self._native_reconnect_thread = None
+                self._condition.notify_all()
+            return
+        with self._condition:
+            self._record_native_cleanup_success_locked(stale_bridge)
         attempt = 0
         delay = NATIVE_RECONNECT_INITIAL_SECONDS
         while not self._native_reconnect_stop.wait(delay):
@@ -327,7 +390,20 @@ class CompositionEditorState:
                              "attempt": attempt},
                         )
                         return
-            bridge.close()
+                self._native_retiring_bridge = bridge
+                self._native_cleanup_error = None
+            try:
+                bridge.close()
+            except Exception as error:
+                with self._condition:
+                    self._record_native_cleanup_failure_locked(
+                        bridge, error, "native.reconnect"
+                    )
+                    self._native_reconnect_thread = None
+                    self._condition.notify_all()
+                return
+            with self._condition:
+                self._record_native_cleanup_success_locked(bridge)
             if self._native_reconnect_stop.is_set():
                 break
             if not failed:
@@ -565,9 +641,18 @@ class CompositionEditorState:
         self, executable: str, config: str | None, *, simulator: bool = False
     ) -> None:
         with self._condition:
-            if self._native_bridge is not None or self._native_spec is not None:
+            if (self._native_close_in_progress or
+                    self._native_reconnect_thread is not None):
+                raise NativeBridgeError("NATIVE_PROCESS_SHUTDOWN")
+            if (self._native_retiring_bridge is not None or
+                    self._native_cleanup_error is not None):
+                raise NativeBridgeError("NATIVE_PROCESS_SHUTDOWN")
+            if (self._native_bridge is not None or
+                    self._native_spec is not None or
+                    self._native_binding_token is not None):
                 raise NativeBridgeError("NATIVE_ALREADY_BOUND")
             spec = (executable, config, simulator)
+            binding_token = object()
             self._native_reconnect_stop.clear()
             self._native_generation += 1
             generation = self._native_generation
@@ -576,6 +661,7 @@ class CompositionEditorState:
             events_before = copy.deepcopy(list(self._events))
             next_event_before = self._next_event_id
             self._native_spec = spec
+            self._native_binding_token = binding_token
             self._native_bridge = bridge
             self._native_refresh_pending = False
             self._snapshot["backend"].update({
@@ -597,35 +683,149 @@ class CompositionEditorState:
                 bootstrap_commands(candidate), origin="native.bootstrap",
                 revision=candidate["revision"],
             )
-        except Exception:
-            bridge.close()
+        except Exception as error:
+            close_error: Exception | None = None
+            try:
+                bridge.close()
+            except Exception as cleanup_error:
+                close_error = cleanup_error
             with self._condition:
-                self._native_spec = None
-                self._native_bridge = None
-                self._native_generation += 1
-                self._native_refresh_pending = False
-                self._snapshot = snapshot_before
-                self._events.clear()
-                self._events.extend(events_before)
-                self._next_event_id = next_event_before
+                if (close_error is None and
+                        self._native_retiring_bridge is bridge):
+                    self._record_native_cleanup_success_locked(bridge)
+                owned = (
+                    self._native_bridge is bridge and
+                    self._native_generation == generation and
+                    self._native_binding_token is binding_token
+                )
+                reconnecting = bool(
+                    not owned and close_error is None and
+                    self._native_spec == spec and
+                    self._native_binding_token is binding_token and
+                    self._native_cleanup_error is None and
+                    not self._native_reconnect_stop.is_set() and
+                    self._native_generation != generation and
+                    (self._native_reconnect_thread is not None or
+                     (self._native_bridge is not None and
+                      self._native_bridge is not bridge) or
+                     self._native_retiring_bridge is bridge)
+                )
+                failed_handoff = bool(
+                    close_error is None and
+                    self._native_cleanup_error is None and
+                    not owned and not reconnecting and
+                    self._native_binding_token is binding_token and
+                    self._native_bridge is bridge and
+                    self._native_reconnect_thread is None
+                )
+                if owned and close_error is None:
+                    self._native_spec = None
+                    self._native_binding_token = None
+                    self._native_bridge = None
+                    self._native_generation += 1
+                    self._native_refresh_pending = False
+                    self._snapshot = snapshot_before
+                    self._events.clear()
+                    self._events.extend(events_before)
+                    self._next_event_id = next_event_before
+                elif owned:
+                    self._native_retiring_bridge = bridge
+                    self._native_cleanup_error = close_error
+                    self._snapshot["backend"].update({
+                        "native_host_bound": False,
+                        "device_connected": False,
+                        "session_status": "FAILED",
+                        "catalog_status": "PENDING",
+                    })
+                    self._append_event_locked(
+                        "native.start", "NATIVE_START_CLEANUP_BLOCKED",
+                        {"type": "native.start", "status": "blocked",
+                         "code": str(close_error)},
+                    )
+                elif reconnecting:
+                    self._append_event_locked(
+                        "native.start", "NATIVE_RECONNECTING"
+                    )
+                elif failed_handoff:
+                    self._native_spec = None
+                    self._native_binding_token = None
+                    self._native_bridge = None
+                    self._native_generation += 1
+                    self._native_refresh_pending = False
+                    self._snapshot["backend"].update({
+                        "native_host_bound": False,
+                        "device_connected": False,
+                        "session_status": "FAILED",
+                        "catalog_status": "PENDING",
+                    })
+                    self._append_event_locked(
+                        "native.start", "NATIVE_RECONNECT_START_FAILED"
+                    )
+            if reconnecting:
+                return
+            if close_error is not None:
+                raise close_error from error
             raise
         with self._condition:
-            self._append_event_locked("native.start", "NATIVE_STARTING")
+            if (self._native_bridge is bridge and
+                    self._native_generation == generation):
+                self._append_event_locked("native.start", "NATIVE_STARTING")
 
     def close(self) -> None:
         with self._condition:
+            while self._native_close_in_progress:
+                self._condition.wait()
+            self._native_close_in_progress = True
             bridge = self._native_bridge
             reconnect_thread = self._native_reconnect_thread
+            retiring_bridge = self._native_retiring_bridge
+            if bridge is not None:
+                self._native_retiring_bridge = bridge
+                self._native_cleanup_error = None
+                retiring_bridge = bridge
             self._native_spec = None
+            self._native_binding_token = None
             self._native_bridge = None
             self._native_generation += 1
             self._native_refresh_pending = False
             self._native_reconnect_stop.set()
-        if bridge is not None:
-            bridge.close()
-        if (reconnect_thread is not None and
-                reconnect_thread is not threading.current_thread()):
-            reconnect_thread.join(4.0)
+        cleanup_error: Exception | None = None
+        thread_alive = False
+        try:
+            close_target = bridge
+            if (close_target is None and reconnect_thread is None and
+                    retiring_bridge is not None):
+                close_target = retiring_bridge
+            if close_target is not None:
+                try:
+                    close_target.close()
+                except Exception as error:
+                    cleanup_error = error
+                    with self._condition:
+                        self._native_retiring_bridge = close_target
+                        self._native_cleanup_error = error
+                else:
+                    with self._condition:
+                        self._record_native_cleanup_success_locked(close_target)
+            if (reconnect_thread is not None and
+                    reconnect_thread is not threading.current_thread()):
+                reconnect_thread.join(NATIVE_STATE_CLOSE_TIMEOUT_SECONDS)
+            with self._condition:
+                thread_alive = bool(
+                    reconnect_thread is not None and
+                    reconnect_thread is not threading.current_thread() and
+                    reconnect_thread.is_alive()
+                )
+                if cleanup_error is None:
+                    cleanup_error = self._native_cleanup_error
+        finally:
+            with self._condition:
+                self._native_close_in_progress = False
+                self._condition.notify_all()
+        if thread_alive:
+            raise NativeBridgeError("NATIVE_RECONNECT_SHUTDOWN")
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def latest_frame(
         self, source: str
@@ -916,8 +1116,10 @@ class CompositionEditorServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
     def server_close(self) -> None:
-        self.state.close()
-        super().server_close()
+        try:
+            self.state.close()
+        finally:
+            super().server_close()
 
 
 class CompositionEditorHandler(BaseHTTPRequestHandler):

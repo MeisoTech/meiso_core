@@ -19,6 +19,7 @@ import socket
 import struct
 import subprocess
 import threading
+import time
 from typing import Any, Callable
 
 
@@ -29,6 +30,12 @@ CMFB_HEADER_BYTES = 80
 MAX_RENDER_FRAME_BYTES = 320 * 240 * 4
 MAX_CAMERA_FRAME_BYTES = 640 * 480 * 3 // 2
 MAX_CMFB_RECORD_BYTES = CMFB_HEADER_BYTES + MAX_CAMERA_FRAME_BYTES
+NATIVE_DRAIN_TIMEOUT_SECONDS = 2.0
+NATIVE_EXIT_ARBITRATION_GRACE_SECONDS = 0.25
+NATIVE_CLOSE_JOIN_SECONDS = 3.0
+NATIVE_PROCESS_WAIT_POLL_SECONDS = 0.05
+NATIVE_TERMINAL_EXIT_TIMEOUT_SECONDS = 1.0
+NATIVE_TERMINAL_KILL_TIMEOUT_SECONDS = 1.0
 
 # Fixed COMPOSE_/_PROFILE:v1 editor envelope. A connected catalog may expose
 # a smaller dynamic subset; the native Host Runtime remains final authority.
@@ -586,31 +593,62 @@ class NativeBridge:
         self._on_event = on_event
         self._on_frame = on_frame
         self._condition = threading.Condition()
+        self._dispatch_lock = threading.RLock()
+        self._stdin_lock = threading.Lock()
         self._outbound: deque[bytes] = deque()
         self._next_request_id = 1
         self._requests: dict[int, dict[str, Any]] = {}
         self._frames: dict[str, tuple[bytes, dict[str, Any]]] = {}
         self._process: subprocess.Popen[bytes] | None = None
         self._frame_socket: socket.socket | None = None
+        self._stdin_fd: int | None = None
         self._threads: list[threading.Thread] = []
+        self._lifecycle_state = "NEW"
         self._stopping = False
         self._terminal_emitted = False
+        self._terminal_code: str | None = None
+        self._owner_close_requested = False
+        self._stdin_open = False
+        self._stdin_close_origin = "NOT_OPENED"
+        self._stdin_close_attempt_origin = "NONE"
+        self._stdin_close_result = "NOT_ATTEMPTED"
+        self._stdin_close_errno: int | None = None
+        self._stdin_open_at_process_exit: bool | None = None
+        self._process_return_code: int | None = None
+        self._shutdown_failure: str | None = None
+        self._drain_timeout_pending = False
+        self._stdout_drain_result = "PENDING"
+        self._stdout_drained = threading.Event()
+        self._stderr_drained = threading.Event()
+        self._frame_drained = threading.Event()
+        self._process_exited = threading.Event()
+        self._terminal_shutdown_complete = threading.Event()
 
     def start(self) -> None:
         with self._condition:
-            if self._process is not None or self._stopping:
+            if self._lifecycle_state != "NEW":
                 raise NativeBridgeError("NATIVE_ALREADY_BOUND")
+            self._lifecycle_state = "STARTING"
+            self._condition.notify_all()
         if (not self.executable.is_file() or
             not os.access(self.executable, os.X_OK) or
             (self.simulator and self.config is not None) or
             (not self.simulator and
              (self.config is None or not self.config.is_file()))):
+            self._finish_failed_start()
             raise NativeBridgeError("NATIVE_PATH")
-        parent_frame, child_frame = socket.socketpair(
-            socket.AF_UNIX, socket.SOCK_STREAM
-        )
-        child_frame.setblocking(False)
+
+        parent_frame: socket.socket | None = None
+        child_frame: socket.socket | None = None
+        stdin_read_fd: int | None = None
+        stdin_write_fd: int | None = None
+        process: subprocess.Popen[bytes] | None = None
         try:
+            parent_frame, child_frame = socket.socketpair(
+                socket.AF_UNIX, socket.SOCK_STREAM
+            )
+            child_frame.setblocking(False)
+            stdin_read_fd, stdin_write_fd = os.pipe()
             arguments = [str(self.executable)]
             if self.simulator:
                 arguments.append("--simulator")
@@ -621,36 +659,249 @@ class NativeBridge:
             ])
             process = subprocess.Popen(
                 arguments,
-                stdin=subprocess.PIPE,
+                stdin=stdin_read_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 close_fds=True,
                 pass_fds=(child_frame.fileno(),),
                 bufsize=0,
             )
-        except OSError as error:
-            parent_frame.close()
+            os.close(stdin_read_fd)
+            stdin_read_fd = None
             child_frame.close()
-            raise NativeBridgeError("NATIVE_START") from error
-        child_frame.close()
-        if process.stdin is None or process.stdout is None or process.stderr is None:
-            parent_frame.close()
-            process.terminate()
-            raise NativeBridgeError("NATIVE_PIPES")
-        os.set_blocking(process.stdin.fileno(), False)
-        self._process = process
-        self._frame_socket = parent_frame
+            child_frame = None
+            if process.stdout is None or process.stderr is None:
+                raise NativeBridgeError("NATIVE_PIPES")
+            os.set_blocking(stdin_write_fd, False)
+        except BaseException as error:
+            self._close_fd(stdin_read_fd)
+            if process is not None and stdin_write_fd is not None:
+                with self._stdin_lock:
+                    self._stdin_fd = stdin_write_fd
+                with self._condition:
+                    self._stdin_open = True
+                    self._stdin_close_origin = "OPEN"
+                self._close_stdin_writer("START_ABORT")
+                stdin_write_fd = None
+            else:
+                self._close_fd(stdin_write_fd)
+            if child_frame is not None:
+                try:
+                    child_frame.close()
+                except OSError:
+                    pass
+            if parent_frame is not None:
+                try:
+                    parent_frame.close()
+                except OSError:
+                    pass
+            cleanup_failed = bool(
+                process is not None and not self._stop_process(process)
+            )
+            if process is not None:
+                self._close_process_streams(process)
+            self._finish_failed_start(
+                process if cleanup_failed else None
+            )
+            if cleanup_failed:
+                raise NativeBridgeError(
+                    "NATIVE_PROCESS_SHUTDOWN"
+                ) from error
+            if isinstance(error, NativeBridgeError):
+                raise
+            if isinstance(error, Exception):
+                raise NativeBridgeError("NATIVE_START") from error
+            raise
+
+        assert parent_frame is not None
+        assert process is not None
+        assert stdin_write_fd is not None
+        with self._stdin_lock:
+            self._stdin_fd = stdin_write_fd
+        with self._condition:
+            self._process = process
+            self._frame_socket = parent_frame
+            self._stdin_open = True
+            self._stdin_close_origin = "OPEN"
         targets = (
             self._writer_loop, self._stdout_loop, self._stderr_loop,
             self._frame_loop, self._wait_loop,
         )
-        self._threads = []
-        for target in targets:
-            thread = threading.Thread(
-                target=target, daemon=True, name=target.__name__
+        try:
+            threads = [
+                threading.Thread(
+                    target=target, daemon=True, name=target.__name__
+                )
+                for target in targets
+            ]
+        except BaseException as error:
+            with self._condition:
+                self._stopping = True
+                self._lifecycle_state = "STOPPING"
+                self._condition.notify_all()
+            cleanup_succeeded = self._cleanup_start_abort(process, [])
+            if not cleanup_succeeded:
+                raise NativeBridgeError(
+                    "NATIVE_PROCESS_SHUTDOWN"
+                ) from error
+            if isinstance(error, Exception):
+                raise NativeBridgeError("NATIVE_START") from error
+            raise
+        start_error: BaseException | None = None
+        abort_start = False
+        with self._condition:
+            self._threads = threads
+            if self._stopping:
+                self._lifecycle_state = "STOPPING"
+                abort_start = True
+            else:
+                try:
+                    for thread in threads:
+                        thread.start()
+                except BaseException as error:
+                    start_error = error
+                    self._stopping = True
+                    self._lifecycle_state = "STOPPING"
+                else:
+                    self._lifecycle_state = "RUNNING"
+            self._condition.notify_all()
+
+        if abort_start or start_error is not None:
+            cleanup_succeeded = self._cleanup_start_abort(process, threads)
+            if not cleanup_succeeded:
+                raise NativeBridgeError(
+                    "NATIVE_PROCESS_SHUTDOWN"
+                ) from start_error
+            if start_error is not None:
+                if isinstance(start_error, Exception):
+                    raise NativeBridgeError("NATIVE_START") from start_error
+                raise start_error
+
+    @staticmethod
+    def _close_fd(fd: int | None) -> None:
+        if fd is None:
+            return
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _stop_process(process: subprocess.Popen[bytes]) -> bool:
+        if process.poll() is not None:
+            return True
+        try:
+            process.wait(timeout=0.5)
+            return True
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1.0)
+            return True
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return False
+        return process.poll() is not None
+
+    def _finish_failed_start(
+        self, unreaped_process: subprocess.Popen[bytes] | None = None
+    ) -> None:
+        with self._condition:
+            self._stopping = True
+            if unreaped_process is None:
+                self._lifecycle_state = "CLOSED"
+            else:
+                self._process = unreaped_process
+                self._shutdown_failure = "NATIVE_PROCESS_SHUTDOWN"
+                self._lifecycle_state = "FAILED"
+            self._condition.notify_all()
+
+    def _cleanup_start_abort(
+        self,
+        process: subprocess.Popen[bytes],
+        threads: list[threading.Thread],
+    ) -> bool:
+        self._close_stdin_writer("BRIDGE_CLOSE")
+        stopped = self._stop_process(process)
+        if not stopped:
+            with self._condition:
+                self._shutdown_failure = "NATIVE_PROCESS_SHUTDOWN"
+        self._record_process_exit(process)
+        self._close_frame_socket()
+        self._close_process_streams(process)
+        workers_stopped = self._join_workers(threads)
+        with self._condition:
+            self._lifecycle_state = (
+                "CLOSED" if stopped and workers_stopped else "FAILED"
             )
-            thread.start()
-            self._threads.append(thread)
+            self._condition.notify_all()
+        return stopped and workers_stopped
+
+    def _record_process_exit(self, process: subprocess.Popen[bytes]) -> None:
+        return_code = process.poll()
+        if return_code is None:
+            return
+        with self._condition:
+            if self._process_return_code is None:
+                self._process_return_code = return_code
+                self._stdin_open_at_process_exit = self._stdin_open
+                self._condition.notify_all()
+        self._process_exited.set()
+
+    def _worker_may_run(self) -> bool:
+        with self._condition:
+            while (self._lifecycle_state == "STARTING" and
+                   not self._stopping):
+                self._condition.wait()
+            return (
+                self._lifecycle_state == "RUNNING" and
+                not self._stopping
+            )
+
+    def _lifecycle_snapshot(self) -> dict[str, Any]:
+        """Return fixed local process ownership evidence for tests/audits."""
+        with self._condition:
+            return {
+                "state": self._lifecycle_state,
+                "owner_close_requested": self._owner_close_requested,
+                "stdin_close_origin": self._stdin_close_origin,
+                "stdin_close_attempt_origin": (
+                    self._stdin_close_attempt_origin
+                ),
+                "stdin_close_result": self._stdin_close_result,
+                "stdin_close_errno": self._stdin_close_errno,
+                "stdin_open": self._stdin_open,
+                "stdin_open_at_process_exit": (
+                    self._stdin_open_at_process_exit
+                ),
+                "process_return_code": self._process_return_code,
+                "stdout_drain_result": self._stdout_drain_result,
+                "stdout_drained": self._stdout_drained.is_set(),
+                "stderr_drained": self._stderr_drained.is_set(),
+                "frame_drained": self._frame_drained.is_set(),
+                "terminal_code": self._terminal_code,
+                "shutdown_failure": self._shutdown_failure,
+            }
 
     def submit_batch(
         self,
@@ -662,7 +913,8 @@ class NativeBridge:
         if not commands:
             return []
         with self._condition:
-            if (self._stopping or self._process is None or
+            if (self._lifecycle_state != "RUNNING" or self._stopping or
+                not self._stdin_open or self._process is None or
                 self._terminal_emitted or self._process.poll() is not None):
                 raise NativeBridgeError("NATIVE_TERMINAL")
             if (len(self._outbound) + len(commands) > MAX_NATIVE_QUEUE_LINES or
@@ -719,7 +971,8 @@ class NativeBridge:
         if source not in {"render", "camera"}:
             raise NativeBridgeError("INVALID_FRAME_SOURCE")
         with self._condition:
-            if self._stopping or self._terminal_emitted:
+            if (self._lifecycle_state != "RUNNING" or self._stopping or
+                    self._terminal_emitted):
                 return None
             value = self._frames.get(source)
             if value is None:
@@ -727,90 +980,296 @@ class NativeBridge:
             return bytes(value[0]), copy.deepcopy(value[1])
 
     def close(self) -> None:
-        with self._condition:
-            if self._stopping:
-                return
-            self._stopping = True
-            self._outbound.clear()
-            self._requests.clear()
-            self._frames.clear()
-            self._condition.notify_all()
+        owns_shutdown = False
+        wait_for_start = False
+        terminal_shutdown = False
+        with self._dispatch_lock:
+            with self._condition:
+                state = self._lifecycle_state
+                if state == "CLOSED":
+                    return
+                if state == "FAILED":
+                    self._owner_close_requested = True
+                    self._condition.notify_all()
+                    process = self._process
+                    if process is not None and process.poll() is None:
+                        raise NativeBridgeError(
+                            self._shutdown_failure or
+                            "NATIVE_PROCESS_SHUTDOWN"
+                        )
+                    self._lifecycle_state = "STOPPING"
+                    terminal_shutdown = False
+                    owns_shutdown = True
+                if state == "NEW":
+                    self._stopping = True
+                    self._owner_close_requested = True
+                    self._stdin_close_attempt_origin = "BRIDGE_CLOSE"
+                    self._stdin_close_result = "NOT_OPENED"
+                    self._lifecycle_state = "CLOSED"
+                    self._condition.notify_all()
+                    return
+                if state == "STARTING":
+                    self._stopping = True
+                    self._owner_close_requested = True
+                    self._condition.notify_all()
+                    wait_for_start = True
+                elif state == "RUNNING":
+                    terminal_shutdown = self._terminal_emitted
+                    self._stopping = True
+                    self._owner_close_requested = True
+                    self._lifecycle_state = "STOPPING"
+                    self._outbound.clear()
+                    self._requests.clear()
+                    self._frames.clear()
+                    self._condition.notify_all()
+                    owns_shutdown = True
+
+        if wait_for_start:
+            with self._condition:
+                while self._lifecycle_state not in {"CLOSED", "FAILED"}:
+                    self._condition.wait()
+                if self._lifecycle_state == "FAILED":
+                    raise NativeBridgeError(
+                        self._shutdown_failure or "NATIVE_PROCESS_SHUTDOWN"
+                    )
+            return
+        if not owns_shutdown:
+            with self._condition:
+                while self._lifecycle_state not in {"CLOSED", "FAILED"}:
+                    self._condition.wait()
+                if self._lifecycle_state == "FAILED":
+                    raise NativeBridgeError(
+                        self._shutdown_failure or "NATIVE_PROCESS_SHUTDOWN"
+                    )
+            return
+
+        self._close_stdin_writer("BRIDGE_CLOSE")
         process = self._process
         if process is not None:
-            if process.stdin is not None:
-                try:
-                    process.stdin.close()
-                except OSError:
-                    pass
-            try:
-                process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                process.terminate()
-                try:
-                    process.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1.0)
-        frame_socket = self._frame_socket
-        if frame_socket is not None:
-            try:
-                frame_socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            frame_socket.close()
-            self._frame_socket = None
-        for thread in self._threads:
-            if thread is not threading.current_thread():
-                thread.join(timeout=1.0)
+            if terminal_shutdown:
+                terminal_wait = (
+                    NATIVE_TERMINAL_EXIT_TIMEOUT_SECONDS +
+                    NATIVE_TERMINAL_KILL_TIMEOUT_SECONDS +
+                    NATIVE_DRAIN_TIMEOUT_SECONDS +
+                    NATIVE_CLOSE_JOIN_SECONDS +
+                    NATIVE_PROCESS_WAIT_POLL_SECONDS * 4.0
+                )
+                if not self._terminal_shutdown_complete.wait(terminal_wait):
+                    with self._condition:
+                        if self._process_exited.is_set():
+                            self._shutdown_failure = "NATIVE_OUTPUT_DRAIN"
+                            if not self._stdout_drained.is_set():
+                                self._stdout_drain_result = "FORCED_TIMEOUT"
+                        else:
+                            self._shutdown_failure = "NATIVE_PROCESS_SHUTDOWN"
+            elif not self._stop_process(process):
+                with self._condition:
+                    self._shutdown_failure = "NATIVE_PROCESS_SHUTDOWN"
+            self._record_process_exit(process)
+        self._close_frame_socket()
+        process_alive = process is not None and process.poll() is None
+        if process_alive:
+            with self._condition:
+                self._lifecycle_state = "FAILED"
+                self._shutdown_failure = "NATIVE_PROCESS_SHUTDOWN"
+                self._condition.notify_all()
+            raise NativeBridgeError("NATIVE_PROCESS_SHUTDOWN")
         if process is not None:
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None and not stream.closed:
+            self._close_process_streams(process)
+        workers_stopped = self._join_workers(self._threads)
+        with self._condition:
+            self._lifecycle_state = "CLOSED" if workers_stopped else "FAILED"
+            self._condition.notify_all()
+        if not workers_stopped:
+            raise NativeBridgeError("NATIVE_THREAD_SHUTDOWN")
+
+    def _close_frame_socket(self) -> None:
+        with self._condition:
+            frame_socket = self._frame_socket
+            self._frame_socket = None
+        if frame_socket is None:
+            return
+        try:
+            frame_socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            frame_socket.close()
+        except OSError:
+            pass
+
+    def _join_workers(self, threads: list[threading.Thread]) -> bool:
+        current = threading.current_thread()
+        deadline = time.monotonic() + NATIVE_CLOSE_JOIN_SECONDS
+        current_worker = False
+        for thread in threads:
+            if thread is current:
+                current_worker = True
+                continue
+            if thread.ident is None:
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining > 0.0:
+                thread.join(remaining)
+        alive = [
+            thread for thread in threads
+            if thread is not current and thread.is_alive()
+        ]
+        with self._condition:
+            if alive:
+                self._shutdown_failure = "NATIVE_THREAD_SHUTDOWN"
+            elif current_worker:
+                self._shutdown_failure = "NATIVE_CURRENT_WORKER_CLOSE"
+        return not alive and not current_worker
+
+    def _close_stdin_writer(self, origin: str) -> bool:
+        with self._condition:
+            if not self._stdin_open:
+                return False
+            self._stdin_open = False
+            self._stdin_close_attempt_origin = origin
+            self._stdin_close_result = "PENDING"
+            self._stdin_close_errno = None
+            self._condition.notify_all()
+        with self._stdin_lock:
+            fd = self._stdin_fd
+            self._stdin_fd = None
+            if fd is None:
+                closed = False
+                close_errno = None
+            else:
+                try:
+                    os.close(fd)
+                except OSError as error:
+                    closed = False
+                    close_errno = error.errno
+                else:
+                    closed = True
+                    close_errno = None
+        with self._condition:
+            self._stdin_close_result = "CLOSED" if closed else "FAILED"
+            self._stdin_close_errno = close_errno
+            self._stdin_close_origin = origin if closed else "UNPROVEN"
+            self._condition.notify_all()
+        return closed
+
+    def _request_owner_eof(self) -> None:
+        """Close only the owned stdin writer; private lifecycle test seam."""
+        with self._condition:
+            if (self._lifecycle_state != "RUNNING" or self._stopping or
+                    self._terminal_emitted or not self._stdin_open or
+                    self._outbound or self._requests):
+                raise NativeBridgeError("NATIVE_OWNER_EOF_UNSAFE")
+        if not self._close_stdin_writer("OWNER_EOF"):
+            raise NativeBridgeError("NATIVE_OWNER_EOF_FAILED")
+
+    def _publish_event(
+        self, event: dict[str, Any], *, correlate: bool = False
+    ) -> bool:
+        with self._dispatch_lock:
+            with self._condition:
+                if (self._stopping or self._terminal_emitted or
+                        self._drain_timeout_pending):
+                    return False
+                if correlate:
+                    request_id = event.get("request_id")
+                    if not isinstance(request_id, int) or request_id == 0:
+                        raise NativeBridgeError("NATIVE_REQUEST_CORRELATION")
+                    request = self._requests.pop(request_id, None)
+                    if (request is None or
+                            not _request_completion_matches(request, event)):
+                        raise NativeBridgeError("NATIVE_REQUEST_CORRELATION")
+                    event.update({
+                        "browser_command": request["origin"],
+                        "browser_revision": request["revision"],
+                        "native_command": request["native_command"],
+                        "native_batch_id": request["batch_id"],
+                        "native_batch_index": request["batch_index"],
+                        "native_batch_count": request["batch_count"],
+                    })
+            self._on_event(event)
+            return True
+
+    def _publish_frame(
+        self, source: str, record: bytes, metadata: dict[str, Any]
+    ) -> bool:
+        with self._dispatch_lock:
+            with self._condition:
+                if (self._stopping or self._terminal_emitted or
+                        self._drain_timeout_pending):
+                    return False
+                self._frames[source] = (record, metadata)
+            self._on_frame(source, copy.deepcopy(metadata))
+            return True
+
+    def _emit_terminal(
+        self, code: str, *, leading_event: dict[str, Any] | None = None
+    ) -> bool:
+        claimed = False
+        try:
+            with self._dispatch_lock:
+                with self._condition:
+                    if (self._stopping or self._terminal_emitted or
+                            (self._drain_timeout_pending and
+                             code != "NATIVE_OUTPUT_DRAIN")):
+                        return False
+                    self._terminal_emitted = True
+                    self._terminal_code = code
+                    self._drain_timeout_pending = False
+                    self._outbound.clear()
+                    self._requests.clear()
+                    self._frames.clear()
+                    self._condition.notify_all()
+                    claimed = True
+                if leading_event is not None:
                     try:
-                        stream.close()
+                        self._on_event(leading_event)
+                    finally:
+                        self._on_event({
+                            "type": "native.bridge_terminal", "code": code
+                        })
+                else:
+                    self._on_event({
+                        "type": "native.bridge_terminal", "code": code
+                    })
+        finally:
+            if claimed:
+                process = self._process
+                self._close_stdin_writer("TERMINAL")
+                self._close_frame_socket()
+                if process is not None and process.poll() is None:
+                    try:
+                        process.terminate()
                     except OSError:
                         pass
-
-    def _emit_terminal(self, code: str) -> None:
-        with self._condition:
-            if self._terminal_emitted:
-                return
-            self._terminal_emitted = True
-            self._outbound.clear()
-            self._requests.clear()
-            self._frames.clear()
-            self._condition.notify_all()
-        process = self._process
-        if process is not None and process.poll() is None:
-            try:
-                process.terminate()
-            except OSError:
-                pass
-        self._on_event({"type": "native.bridge_terminal", "code": code})
+        return True
 
     def _writer_loop(self) -> None:
+        if not self._worker_may_run():
+            return
         current = b""
         offset = 0
         while True:
             with self._condition:
                 while (not self._stopping and not self._terminal_emitted and
-                       not current and not self._outbound):
+                       self._stdin_open and not current and
+                       not self._outbound):
                     self._condition.wait(0.5)
-                if self._stopping or self._terminal_emitted:
+                if (self._stopping or self._terminal_emitted or
+                        not self._stdin_open):
                     return
                 if not current:
                     current = self._outbound.popleft()
                     offset = 0
-            process = self._process
-            if process is None or process.stdin is None:
-                self._emit_terminal("NATIVE_PIPE")
-                return
             try:
-                _, writable, _ = select.select(
-                    [], [process.stdin.fileno()], [], 0.5
-                )
-                if not writable:
-                    continue
-                written = os.write(process.stdin.fileno(), current[offset:])
+                with self._stdin_lock:
+                    fd = self._stdin_fd
+                    if fd is None:
+                        return
+                    _, writable, _ = select.select([], [fd], [], 0.1)
+                    if not writable:
+                        continue
+                    written = os.write(fd, current[offset:])
                 if written <= 0:
                     raise OSError("short native write")
                 offset += written
@@ -821,16 +1280,32 @@ class NativeBridge:
                     self._emit_terminal("NATIVE_STDIN")
                 return
 
+    def _finish_stdout_drain(self, result: str) -> None:
+        with self._condition:
+            if self._stdout_drain_result != "FORCED_TIMEOUT":
+                self._stdout_drain_result = result
+            self._stdout_drained.set()
+            self._condition.notify_all()
+
     def _stdout_loop(self) -> None:
+        if not self._worker_may_run():
+            self._finish_stdout_drain("NOT_STARTED")
+            return
         process = self._process
         if process is None or process.stdout is None:
+            self._finish_stdout_drain("ERROR")
             return
         buffer = bytearray()
+        clean_eof = False
+        discard_to_eof = False
         try:
             while True:
                 chunk = process.stdout.read(4096)
                 if not chunk:
+                    clean_eof = True
                     break
+                if discard_to_eof:
+                    continue
                 buffer.extend(chunk)
                 if len(buffer) > MAX_NATIVE_LINE_BYTES * 2:
                     raise NativeBridgeError("NATIVE_OUTPUT_SIZE")
@@ -848,42 +1323,30 @@ class NativeBridge:
                         )):
                         raise NativeBridgeError("NATIVE_MODE_MISMATCH")
                     event = sanitize_native_event(value)
-                    request_id = event.get("request_id")
-                    if event["type"] in {
+                    correlate = event["type"] in {
                         "command.receipt", "asset.loaded", "error",
                         "snapshot", "closing",
-                    }:
-                        if (not isinstance(request_id, int) or
-                                request_id == 0):
-                            raise NativeBridgeError(
-                                "NATIVE_REQUEST_CORRELATION"
-                            )
-                        with self._condition:
-                            request = self._requests.pop(request_id, None)
-                        if request is None:
-                            raise NativeBridgeError(
-                                "NATIVE_REQUEST_CORRELATION"
-                            )
-                        if not _request_completion_matches(request, event):
-                            raise NativeBridgeError(
-                                "NATIVE_REQUEST_CORRELATION"
-                            )
-                        event.update({
-                            "browser_command": request["origin"],
-                            "browser_revision": request["revision"],
-                            "native_command": request["native_command"],
-                            "native_batch_id": request["batch_id"],
-                            "native_batch_index": request["batch_index"],
-                            "native_batch_count": request["batch_count"],
-                        })
-                    self._on_event(event)
+                    }
                     if event["type"] == "terminal":
-                        self._emit_terminal("NATIVE_HOST_TERMINAL")
-                        return
+                        self._emit_terminal(
+                            "NATIVE_HOST_TERMINAL", leading_event=event
+                        )
+                        discard_to_eof = True
+                        buffer.clear()
+                        break
+                    if not self._publish_event(event, correlate=correlate):
+                        discard_to_eof = True
+                        buffer.clear()
+                        break
             if buffer:
                 raise NativeBridgeError("NATIVE_OUTPUT_PARTIAL")
-            if not self._stopping:
-                self._emit_terminal("NATIVE_STDOUT_EOF")
+            if clean_eof and not discard_to_eof and not self._stopping:
+                if (not self._process_exited.wait(
+                        NATIVE_EXIT_ARBITRATION_GRACE_SECONDS)):
+                    with self._condition:
+                        terminal = self._terminal_emitted
+                    if not terminal and process.poll() is None:
+                        self._emit_terminal("NATIVE_STDOUT_EOF")
         except NativeBridgeError as error:
             if not self._stopping:
                 self._emit_terminal(
@@ -894,32 +1357,63 @@ class NativeBridge:
         except (UnicodeDecodeError, json.JSONDecodeError):
             if not self._stopping:
                 self._emit_terminal("NATIVE_STDOUT")
+        except (OSError, ValueError):
+            if not self._stopping:
+                self._emit_terminal("NATIVE_STDOUT")
+        finally:
+            self._finish_stdout_drain("EOF" if clean_eof else "ERROR")
 
     def _stderr_loop(self) -> None:
+        if not self._worker_may_run():
+            self._stderr_drained.set()
+            return
         process = self._process
         if process is None or process.stderr is None:
+            self._stderr_drained.set()
             return
         buffer = bytearray()
-        while True:
-            chunk = process.stderr.read(256)
-            if not chunk:
-                break
-            buffer.extend(chunk)
-            while b"\n" in buffer:
-                raw, _, remainder = buffer.partition(b"\n")
-                buffer[:] = remainder
-                text = raw.decode("ascii", "ignore")
-                code = text if re.fullmatch(r"E_[A-Z_]{1,48}", text) else "E_NATIVE"
-                self._on_event({"type": "native.process_error", "code": code})
+        try:
+            while True:
+                chunk = process.stderr.read(256)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                while b"\n" in buffer:
+                    raw, _, remainder = buffer.partition(b"\n")
+                    buffer[:] = remainder
+                    text = raw.decode("ascii", "ignore")
+                    code = (
+                        text if re.fullmatch(r"E_[A-Z_]{1,48}", text)
+                        else "E_NATIVE"
+                    )
+                    self._emit_terminal(
+                        "NATIVE_STDERR",
+                        leading_event={
+                            "type": "native.process_error", "code": code
+                        },
+                    )
+                    return
+                if len(buffer) > 256:
+                    self._emit_terminal(
+                        "NATIVE_STDERR",
+                        leading_event={
+                            "type": "native.process_error",
+                            "code": "E_NATIVE",
+                        },
+                    )
+                    return
+            if buffer and not self._stopping:
+                self._emit_terminal(
+                    "NATIVE_STDERR",
+                    leading_event={
+                        "type": "native.process_error", "code": "E_NATIVE"
+                    },
+                )
+        except (OSError, ValueError):
+            if not self._stopping:
                 self._emit_terminal("NATIVE_STDERR")
-                return
-            if len(buffer) > 256:
-                self._on_event({"type": "native.process_error", "code": "E_NATIVE"})
-                self._emit_terminal("NATIVE_STDERR")
-                return
-        if buffer and not self._stopping:
-            self._on_event({"type": "native.process_error", "code": "E_NATIVE"})
-            self._emit_terminal("NATIVE_STDERR")
+        finally:
+            self._stderr_drained.set()
 
     @staticmethod
     def _parse_frame(record: bytes) -> tuple[str, dict[str, Any]]:
@@ -975,14 +1469,20 @@ class NativeBridge:
         }
 
     def _frame_loop(self) -> None:
+        if not self._worker_may_run():
+            self._frame_drained.set()
+            return
         frame_socket = self._frame_socket
         if frame_socket is None:
+            self._frame_drained.set()
             return
         buffer = bytearray()
+        clean_eof = False
         try:
             while not self._stopping and not self._terminal_emitted:
                 chunk = frame_socket.recv(65536)
                 if not chunk:
+                    clean_eof = True
                     break
                 buffer.extend(chunk)
                 if len(buffer) > MAX_CMFB_RECORD_BYTES * 2:
@@ -999,25 +1499,119 @@ class NativeBridge:
                     record = bytes(buffer[:record_size])
                     del buffer[:record_size]
                     source, metadata = self._parse_frame(record)
-                    with self._condition:
-                        if self._stopping or self._terminal_emitted:
-                            return
-                        self._frames[source] = (record, metadata)
-                    self._on_frame(source, copy.deepcopy(metadata))
+                    if not self._publish_frame(source, record, metadata):
+                        return
             if buffer and not self._stopping:
                 raise NativeBridgeError("CMFB_PARTIAL")
-            if not self._stopping:
-                self._emit_terminal("NATIVE_FRAME_EOF")
-        except (OSError, NativeBridgeError):
+            if clean_eof and not self._stopping:
+                if (not self._process_exited.wait(
+                        NATIVE_EXIT_ARBITRATION_GRACE_SECONDS)):
+                    process = self._process
+                    with self._condition:
+                        terminal = self._terminal_emitted
+                    if (not terminal and process is not None and
+                            process.poll() is None):
+                        self._emit_terminal("NATIVE_FRAME_EOF")
+        except NativeBridgeError:
             if not self._stopping:
                 self._emit_terminal("NATIVE_FRAME")
+        except OSError:
+            if not self._stopping:
+                with self._condition:
+                    terminal = self._terminal_emitted
+                if not terminal:
+                    self._emit_terminal("NATIVE_FRAME")
+        finally:
+            self._frame_drained.set()
+
+    def _wait_for_process_exit(
+        self, process: subprocess.Popen[bytes]
+    ) -> int | None:
+        terminal_deadline: float | None = None
+        kill_deadline: float | None = None
+        kill_sent = False
+        while True:
+            try:
+                return process.wait(timeout=NATIVE_PROCESS_WAIT_POLL_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+            with self._condition:
+                terminal = self._terminal_emitted
+            if not terminal:
+                continue
+            now = time.monotonic()
+            if terminal_deadline is None:
+                terminal_deadline = now + NATIVE_TERMINAL_EXIT_TIMEOUT_SECONDS
+                continue
+            if not kill_sent and now >= terminal_deadline:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                kill_sent = True
+                kill_deadline = now + NATIVE_TERMINAL_KILL_TIMEOUT_SECONDS
+                continue
+            if kill_sent and kill_deadline is not None and now >= kill_deadline:
+                with self._condition:
+                    self._shutdown_failure = "NATIVE_PROCESS_SHUTDOWN"
+                    self._condition.notify_all()
+                return None
+
+    def _wait_for_reader_drains(self, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        for drained in (
+            self._stdout_drained, self._stderr_drained, self._frame_drained,
+        ):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0 or not drained.wait(remaining):
+                return False
+        return True
 
     def _wait_loop(self) -> None:
+        if not self._worker_may_run():
+            return
         process = self._process
         if process is None:
             return
-        return_code = process.wait()
-        if not self._stopping:
-            self._emit_terminal(
-                "NATIVE_EXIT_OK" if return_code == 0 else "NATIVE_EXIT_FAILURE"
+        try:
+            return_code = self._wait_for_process_exit(process)
+            if return_code is None:
+                # The child still owns its output endpoints.  Do not force
+                # readers closed or report a completed drain: retain the
+                # process identity in FAILED so the owner cannot publish a
+                # replacement until an external recovery actually reaps it.
+                return
+            with self._condition:
+                self._process_return_code = return_code
+                self._stdin_open_at_process_exit = self._stdin_open
+                self._condition.notify_all()
+            self._process_exited.set()
+
+            complete = self._wait_for_reader_drains(
+                NATIVE_DRAIN_TIMEOUT_SECONDS
             )
+            if not complete:
+                with self._condition:
+                    terminal = self._terminal_emitted
+                    if terminal:
+                        self._shutdown_failure = "NATIVE_OUTPUT_DRAIN"
+                    elif not self._stopping:
+                        self._drain_timeout_pending = True
+                    if not self._stdout_drained.is_set():
+                        self._stdout_drain_result = "FORCED_TIMEOUT"
+                    self._condition.notify_all()
+                self._emit_terminal("NATIVE_OUTPUT_DRAIN")
+                self._close_frame_socket()
+                self._close_process_streams(process)
+                self._wait_for_reader_drains(NATIVE_CLOSE_JOIN_SECONDS)
+                return
+            with self._condition:
+                stopping = self._stopping
+                terminal = self._terminal_emitted
+            if not stopping and not terminal:
+                self._emit_terminal(
+                    "NATIVE_EXIT_OK" if return_code == 0 else
+                    "NATIVE_EXIT_FAILURE"
+                )
+        finally:
+            self._terminal_shutdown_complete.set()

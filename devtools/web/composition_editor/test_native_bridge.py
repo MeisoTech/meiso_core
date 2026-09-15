@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import http.client
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import struct
 import sys
@@ -18,6 +20,7 @@ import time
 import unittest
 from unittest import mock
 
+import native_bridge as native_bridge_module
 import server as server_module
 from native_bridge import (
     MAX_CAMERA_FRAME_BYTES,
@@ -39,8 +42,11 @@ from server import (
 
 FAKE_CHILD = r'''#!/usr/bin/env python3
 import json
+import os
 from pathlib import Path
+import signal
 import sys
+import time
 
 simulator = "--simulator" in sys.argv
 if simulator:
@@ -63,6 +69,65 @@ else:
         ), "asset_import": "builtin_cube_only",
         "frame_projection": "CMFB/v1",
     }, separators=(",", ":")), flush=True)
+    pump = {
+        "type": "pump.event", "event": "control_progress",
+        "command_id": 0, "desired_channel": "none",
+        "actual_channel": "none", "inline_channel": "none",
+        "media_source": "none",
+    }
+    if mode == "raw_terminal":
+        terminal = {
+            "type": "terminal", "code": "HOST_RUNTIME_TRANSPORT_TERMINAL"
+        }
+        os.write(1, (
+            json.dumps(terminal, separators=(",", ":")) + "\n" +
+            json.dumps(pump, separators=(",", ":")) + "\n"
+        ).encode("ascii"))
+        sys.exit(0)
+    if mode == "raw_terminal_split_tail":
+        signal.signal(signal.SIGTERM, lambda *_: None)
+        terminal = {
+            "type": "terminal", "code": "HOST_RUNTIME_TRANSPORT_TERMINAL"
+        }
+        os.write(1, (
+            json.dumps(terminal, separators=(",", ":")) + "\n"
+        ).encode("ascii"))
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            time.sleep(0.01)
+        tail = b"\xffpost-terminal-not-json\n" + b"x" * 4070
+        for _ in range(128):
+            os.write(1, tail)
+        while True:
+            time.sleep(1.0)
+    if mode == "exit_after_events":
+        os.write(1, (
+            json.dumps(pump, separators=(",", ":")) + "\n" +
+            json.dumps({**pump, "command_id": 1}, separators=(",", ":")) +
+            "\n"
+        ).encode("ascii"))
+        sys.exit(0)
+    if mode == "late_raw_after_pump":
+        terminal = {
+            "type": "terminal", "code": "HOST_RUNTIME_TRANSPORT_TERMINAL"
+        }
+        os.write(1, (
+            json.dumps(pump, separators=(",", ":")) + "\n" +
+            json.dumps(terminal, separators=(",", ":")) + "\n" +
+            json.dumps({**pump, "command_id": 1}, separators=(",", ":")) +
+            "\n"
+        ).encode("ascii"))
+        sys.exit(0)
+    if mode == "late_stderr":
+        os.write(2, b"E_LATE\n")
+        sys.exit(0)
+    if mode == "frame_eof_live":
+        frame_index = sys.argv.index("--frame-fd") + 1
+        os.close(int(sys.argv[frame_index]))
+        time.sleep(5.0)
+    if mode == "stdout_eof_live":
+        os.close(1)
+        time.sleep(5.0)
     for raw in sys.stdin:
         value = json.loads(raw)
         request_id = value["request_id"]
@@ -113,6 +178,8 @@ else:
         print(json.dumps(output, separators=(",", ":")), flush=True)
         if mode == "duplicate":
             print(json.dumps(output, separators=(",", ":")), flush=True)
+    if mode == "hold_after_stdin_eof":
+        time.sleep(5.0)
 '''
 
 ASYNC_TEST_TIMEOUT_SECONDS = 10.0
@@ -186,6 +253,561 @@ class NativeBridgeTests(unittest.TestCase):
                 )
                 self.assertEqual(snapshot["browser_command"], "scene.camera.set")
                 self.assertEqual(snapshot["browser_revision"], 7)
+            finally:
+                bridge.close()
+
+    def test_raw_host_terminal_wins_exit_and_drops_postterminal_chunk(
+        self,
+    ) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "raw_terminal"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event.get("code") == "NATIVE_HOST_TERMINAL"
+                    for event in events
+                ))
+                terminal_index = next(
+                    index for index, event in enumerate(events)
+                    if event.get("type") == "terminal"
+                )
+                self.assertEqual(
+                    events[terminal_index]["code"],
+                    "HOST_RUNTIME_TRANSPORT_TERMINAL",
+                )
+                self.assertEqual(events[terminal_index + 1], {
+                    "type": "native.bridge_terminal",
+                    "code": "NATIVE_HOST_TERMINAL",
+                })
+                self.assertEqual(sum(
+                    event.get("type") == "native.bridge_terminal"
+                    for event in events
+                ), 1)
+                self.assertFalse(any(
+                    event.get("type") == "pump.event" for event in events
+                ))
+                self.assertFalse(any(
+                    str(event.get("code", "")).startswith("NATIVE_EXIT_")
+                    for event in events
+                ))
+            finally:
+                bridge.close()
+
+    def test_raw_terminal_discards_split_tail_then_kills_and_reaps(
+        self,
+    ) -> None:
+        events: list[dict[str, object]] = []
+        kill_calls: list[object] = []
+        real_kill = native_bridge_module.subprocess.Popen.kill
+
+        def counted_kill(process) -> None:
+            kill_calls.append(process)
+            real_kill(process)
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "raw_terminal_split_tail"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            close_thread: threading.Thread | None = None
+            with (
+                mock.patch.object(
+                    native_bridge_module,
+                    "NATIVE_TERMINAL_EXIT_TIMEOUT_SECONDS",
+                    0.3,
+                ),
+                mock.patch.object(
+                    native_bridge_module,
+                    "NATIVE_TERMINAL_KILL_TIMEOUT_SECONDS",
+                    0.5,
+                ),
+                mock.patch.object(
+                    native_bridge_module.subprocess.Popen,
+                    "kill",
+                    counted_kill,
+                ),
+            ):
+                bridge.start()
+                try:
+                    _wait_for(lambda: any(
+                        event.get("code") == "NATIVE_HOST_TERMINAL"
+                        for event in events
+                    ))
+                    self.assertFalse(bridge._stdout_drained.wait(0.05))
+                    close_thread = threading.Thread(target=bridge.close)
+                    close_thread.start()
+                    close_thread.join(3.0)
+                    self.assertFalse(close_thread.is_alive())
+                    self.assertEqual(len(kill_calls), 1)
+                    lifecycle = bridge._lifecycle_snapshot()
+                    self.assertEqual(lifecycle["state"], "CLOSED")
+                    self.assertEqual(lifecycle["stdout_drain_result"], "EOF")
+                    self.assertTrue(lifecycle["stdout_drained"])
+                    self.assertTrue(lifecycle["stderr_drained"])
+                    self.assertTrue(lifecycle["frame_drained"])
+                    self.assertIsNotNone(lifecycle["process_return_code"])
+                    self.assertIsNone(lifecycle["shutdown_failure"])
+                    self.assertFalse(any(
+                        thread.is_alive() for thread in bridge._threads
+                    ))
+                    self.assertEqual([
+                        event.get("type") for event in events
+                        if event.get("type") in {
+                            "terminal", "native.bridge_terminal",
+                        }
+                    ], ["terminal", "native.bridge_terminal"])
+                    self.assertFalse(any(
+                        str(event.get("code", "")).startswith("NATIVE_EXIT_")
+                        for event in events
+                    ))
+                finally:
+                    bridge.close()
+                    if close_thread is not None:
+                        close_thread.join(1.0)
+
+    def test_unreaped_terminal_is_failed_until_external_recovery(
+        self,
+    ) -> None:
+        events: list[dict[str, object]] = []
+        kill_calls: list[int] = []
+
+        def ignored_kill(process) -> None:
+            kill_calls.append(process.pid)
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "raw_terminal_split_tail"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            process = None
+            try:
+                with (
+                    mock.patch.object(
+                        native_bridge_module,
+                        "NATIVE_TERMINAL_EXIT_TIMEOUT_SECONDS", 0.05,
+                    ),
+                    mock.patch.object(
+                        native_bridge_module,
+                        "NATIVE_TERMINAL_KILL_TIMEOUT_SECONDS", 0.05,
+                    ),
+                    mock.patch.object(
+                        native_bridge_module.subprocess.Popen,
+                        "kill", ignored_kill,
+                    ),
+                ):
+                    bridge.start()
+                    process = bridge._process
+                    self.assertIsNotNone(process)
+                    _wait_for(lambda: any(
+                        event.get("code") == "NATIVE_HOST_TERMINAL"
+                        for event in events
+                    ))
+                    with self.assertRaisesRegex(
+                        NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                    ):
+                        bridge.close()
+                    self.assertEqual(kill_calls, [process.pid])
+                    self.assertIsNone(process.poll())
+                    lifecycle = bridge._lifecycle_snapshot()
+                    self.assertEqual(lifecycle["state"], "FAILED")
+                    self.assertEqual(
+                        lifecycle["shutdown_failure"],
+                        "NATIVE_PROCESS_SHUTDOWN",
+                    )
+                    self.assertEqual(
+                        lifecycle["stdout_drain_result"], "PENDING"
+                    )
+                    with self.assertRaisesRegex(
+                        NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                    ):
+                        bridge.close()
+                    self.assertEqual(kill_calls, [process.pid])
+            finally:
+                if process is not None and process.poll() is None:
+                    os.kill(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2.0)
+                bridge.close()
+            self.assertEqual(bridge._lifecycle_snapshot()["state"], "CLOSED")
+            self.assertFalse(any(
+                thread.is_alive() for thread in bridge._threads
+            ))
+
+    def test_thread_construction_abort_retains_unreaped_process(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "hold_after_stdin_eof"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), lambda *_: None, lambda *_: None
+            )
+            process = None
+            try:
+                with (
+                    mock.patch.object(
+                        native_bridge_module.threading, "Thread",
+                        side_effect=RuntimeError("injected thread constructor"),
+                    ),
+                    mock.patch.object(
+                        NativeBridge, "_stop_process", return_value=False,
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                    ):
+                        bridge.start()
+                process = bridge._process
+                self.assertIsNotNone(process)
+                self.assertIsNone(process.poll())
+                self.assertEqual(
+                    bridge._lifecycle_snapshot()["state"], "FAILED"
+                )
+                with self.assertRaisesRegex(
+                    NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                ):
+                    bridge.close()
+            finally:
+                if process is not None and process.poll() is None:
+                    os.kill(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2.0)
+                bridge.close()
+
+    def test_post_popen_acquisition_abort_retains_unreaped_process(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "hold_after_stdin_eof"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), lambda *_: None, lambda *_: None
+            )
+            process = None
+            try:
+                with (
+                    mock.patch.object(
+                        native_bridge_module.os, "set_blocking",
+                        side_effect=OSError("injected post-Popen failure"),
+                    ),
+                    mock.patch.object(
+                        NativeBridge, "_stop_process", return_value=False,
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                    ):
+                        bridge.start()
+                process = bridge._process
+                self.assertIsNotNone(process)
+                self.assertIsNone(process.poll())
+                lifecycle = bridge._lifecycle_snapshot()
+                self.assertEqual(lifecycle["state"], "FAILED")
+                self.assertEqual(
+                    lifecycle["shutdown_failure"],
+                    "NATIVE_PROCESS_SHUTDOWN",
+                )
+                self.assertEqual(
+                    lifecycle["stdin_close_origin"], "START_ABORT"
+                )
+                self.assertEqual(
+                    lifecycle["stdin_close_attempt_origin"], "START_ABORT"
+                )
+                self.assertEqual(lifecycle["stdin_close_result"], "CLOSED")
+                self.assertIsNone(lifecycle["stdin_close_errno"])
+                self.assertFalse(lifecycle["stdin_open"])
+            finally:
+                if process is not None and process.poll() is None:
+                    os.kill(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2.0)
+                bridge.close()
+
+    def test_owner_eof_is_observable_and_only_falls_back_after_drain(
+        self,
+    ) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(Path(raw_directory), "valid")
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event.get("type") == "service.ready" for event in events
+                ))
+                process = bridge._process
+                self.assertIsNotNone(process)
+                self.assertIsNone(process.stdin)
+                bridge._request_owner_eof()
+                _wait_for(lambda: any(
+                    event.get("code") == "NATIVE_EXIT_OK" for event in events
+                ))
+                lifecycle = bridge._lifecycle_snapshot()
+                self.assertEqual(lifecycle, {
+                    "state": "RUNNING",
+                    "owner_close_requested": False,
+                    "stdin_close_origin": "OWNER_EOF",
+                    "stdin_close_attempt_origin": "OWNER_EOF",
+                    "stdin_close_result": "CLOSED",
+                    "stdin_close_errno": None,
+                    "stdin_open": False,
+                    "stdin_open_at_process_exit": False,
+                    "process_return_code": 0,
+                    "stdout_drain_result": "EOF",
+                    "stdout_drained": True,
+                    "stderr_drained": True,
+                    "frame_drained": True,
+                    "terminal_code": "NATIVE_EXIT_OK",
+                    "shutdown_failure": None,
+                })
+                self.assertEqual([
+                    event["code"] for event in events
+                    if event.get("type") == "native.bridge_terminal"
+                ], ["NATIVE_EXIT_OK"])
+            finally:
+                bridge.close()
+            self.assertEqual(
+                bridge._lifecycle_snapshot()["stdin_close_origin"],
+                "OWNER_EOF",
+            )
+
+    def test_external_stdin_close_is_unproven_and_never_retried(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "hold_after_stdin_eof"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            source_fd: int | None = None
+            reused_fd: int | None = None
+            try:
+                _wait_for(lambda: any(
+                    event.get("type") == "service.ready" for event in events
+                ))
+                stdin_fd = bridge._stdin_fd
+                self.assertIsNotNone(stdin_fd)
+                os.close(stdin_fd)
+                with self.assertRaisesRegex(
+                    NativeBridgeError, "NATIVE_OWNER_EOF_FAILED"
+                ):
+                    bridge._request_owner_eof()
+                lifecycle = bridge._lifecycle_snapshot()
+                self.assertEqual(lifecycle["stdin_close_origin"], "UNPROVEN")
+                self.assertEqual(
+                    lifecycle["stdin_close_attempt_origin"], "OWNER_EOF"
+                )
+                self.assertEqual(lifecycle["stdin_close_result"], "FAILED")
+                self.assertEqual(lifecycle["stdin_close_errno"], errno.EBADF)
+                self.assertFalse(lifecycle["stdin_open"])
+                self.assertIsNone(bridge._stdin_fd)
+                source_fd = os.open(os.devnull, os.O_RDONLY)
+                if source_fd == stdin_fd:
+                    reused_fd = source_fd
+                else:
+                    os.dup2(source_fd, stdin_fd)
+                    reused_fd = stdin_fd
+                bridge.close()
+                os.fstat(reused_fd)
+            finally:
+                bridge.close()
+                for fd in {source_fd, reused_fd} - {None}:
+                    os.close(fd)
+
+    def test_process_exit_waits_for_delayed_stdout_and_frame_drain(self) -> None:
+        events: list[dict[str, object]] = []
+        first_pump = threading.Event()
+        release = threading.Event()
+
+        def on_event(event: dict[str, object]) -> None:
+            if (event.get("type") == "pump.event" and
+                    event.get("command_id") == 0):
+                first_pump.set()
+                self.assertTrue(release.wait(5.0))
+            events.append(event)
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "exit_after_events"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), on_event, lambda *_: None
+            )
+            bridge.start()
+            try:
+                self.assertTrue(first_pump.wait(2.0))
+                _wait_for(lambda: (
+                    bridge._lifecycle_snapshot()["process_return_code"] == 0
+                ))
+                self.assertFalse(any(
+                    event.get("type") == "native.bridge_terminal"
+                    for event in events
+                ))
+                release.set()
+                _wait_for(lambda: any(
+                    event.get("code") == "NATIVE_EXIT_OK" for event in events
+                ))
+                self.assertEqual([
+                    event.get("command_id") for event in events
+                    if event.get("type") == "pump.event"
+                ], [0, 1])
+                self.assertEqual(events[-1], {
+                    "type": "native.bridge_terminal", "code": "NATIVE_EXIT_OK"
+                })
+                lifecycle = bridge._lifecycle_snapshot()
+                self.assertTrue(lifecycle["stdout_drained"])
+                self.assertTrue(lifecycle["stderr_drained"])
+                self.assertTrue(lifecycle["frame_drained"])
+            finally:
+                release.set()
+                bridge.close()
+
+    def test_bounded_drain_failure_suppresses_late_output_and_exit(self) -> None:
+        events: list[dict[str, object]] = []
+        first_pump = threading.Event()
+        release = threading.Event()
+
+        def on_event(event: dict[str, object]) -> None:
+            if (event.get("type") == "pump.event" and
+                    event.get("command_id") == 0):
+                first_pump.set()
+                self.assertTrue(release.wait(5.0))
+            events.append(event)
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "late_raw_after_pump"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), on_event, lambda *_: None
+            )
+            with mock.patch.object(
+                native_bridge_module, "NATIVE_DRAIN_TIMEOUT_SECONDS", 0.05
+            ):
+                bridge.start()
+                try:
+                    self.assertTrue(first_pump.wait(2.0))
+                    _wait_for(lambda: (
+                        bridge._lifecycle_snapshot()["process_return_code"] == 0
+                    ))
+                    time.sleep(0.1)
+                    release.set()
+                    _wait_for(lambda: any(
+                        event.get("code") == "NATIVE_OUTPUT_DRAIN"
+                        for event in events
+                    ))
+                    self.assertEqual([
+                        event.get("command_id") for event in events
+                        if event.get("type") == "pump.event"
+                    ], [0])
+                    self.assertEqual([
+                        event["code"] for event in events
+                        if event.get("type") == "native.bridge_terminal"
+                    ], ["NATIVE_OUTPUT_DRAIN"])
+                    self.assertFalse(any(
+                        event.get("type") == "terminal" for event in events
+                    ))
+                    _wait_for(lambda: not any(
+                        thread.is_alive() for thread in bridge._threads
+                    ))
+                finally:
+                    release.set()
+                    bridge.close()
+
+    def test_late_stderr_beats_exit_with_one_atomic_terminal(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "late_stderr"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event.get("code") == "NATIVE_STDERR" for event in events
+                ))
+                error_index = next(
+                    index for index, event in enumerate(events)
+                    if event.get("type") == "native.process_error"
+                )
+                self.assertEqual(events[error_index], {
+                    "type": "native.process_error", "code": "E_LATE"
+                })
+                self.assertEqual(events[error_index + 1], {
+                    "type": "native.bridge_terminal", "code": "NATIVE_STDERR"
+                })
+                self.assertEqual(sum(
+                    event.get("type") == "native.bridge_terminal"
+                    for event in events
+                ), 1)
+            finally:
+                bridge.close()
+
+    def test_live_child_frame_eof_remains_terminal(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "frame_eof_live"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event.get("code") == "NATIVE_FRAME_EOF"
+                    for event in events
+                ))
+                self.assertEqual([
+                    event["code"] for event in events
+                    if event.get("type") == "native.bridge_terminal"
+                ], ["NATIVE_FRAME_EOF"])
+            finally:
+                bridge.close()
+
+    def test_live_child_stdout_eof_is_bounded_terminal(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "stdout_eof_live"
+            )
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            try:
+                _wait_for(lambda: any(
+                    event.get("code") == "NATIVE_STDOUT_EOF"
+                    for event in events
+                ))
+                self.assertEqual([
+                    event["code"] for event in events
+                    if event.get("type") == "native.bridge_terminal"
+                ], ["NATIVE_STDOUT_EOF"])
+                _wait_for(lambda: (
+                    bridge._lifecycle_snapshot()["process_return_code"] is not
+                    None and
+                    bridge._lifecycle_snapshot()["stderr_drained"] and
+                    bridge._lifecycle_snapshot()["frame_drained"]
+                ))
+                _wait_for(lambda: not any(
+                    thread.is_alive() for thread in bridge._threads
+                ))
             finally:
                 bridge.close()
 
@@ -471,6 +1093,153 @@ class NativeBridgeTests(unittest.TestCase):
             finally:
                 bridge.close()
 
+    def test_close_claim_during_popen_cannot_publish_or_orphan_child(
+        self,
+    ) -> None:
+        events: list[dict[str, object]] = []
+        entered_popen = threading.Event()
+        release_popen = threading.Event()
+        close_done = threading.Event()
+        start_errors: list[BaseException] = []
+        real_popen = native_bridge_module.subprocess.Popen
+
+        def gated_popen(*args, **kwargs):
+            entered_popen.set()
+            if not release_popen.wait(5.0):
+                raise RuntimeError("test Popen gate timed out")
+            return real_popen(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(Path(raw_directory), "valid")
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+
+            def run_start() -> None:
+                try:
+                    bridge.start()
+                except BaseException as error:  # captured for thread assertion
+                    start_errors.append(error)
+
+            def run_close() -> None:
+                bridge.close()
+                close_done.set()
+
+            with mock.patch.object(
+                native_bridge_module.subprocess, "Popen", side_effect=gated_popen
+            ):
+                start_thread = threading.Thread(target=run_start)
+                start_thread.start()
+                self.assertTrue(entered_popen.wait(2.0))
+                close_thread = threading.Thread(target=run_close)
+                close_thread.start()
+                time.sleep(0.05)
+                self.assertFalse(close_done.is_set())
+                release_popen.set()
+                start_thread.join(5.0)
+                close_thread.join(5.0)
+
+            self.assertFalse(start_thread.is_alive())
+            self.assertFalse(close_thread.is_alive())
+            self.assertEqual(start_errors, [])
+            self.assertEqual(events, [])
+            lifecycle = bridge._lifecycle_snapshot()
+            self.assertEqual(lifecycle["state"], "CLOSED")
+            self.assertTrue(lifecycle["owner_close_requested"])
+            self.assertEqual(lifecycle["stdin_close_origin"], "BRIDGE_CLOSE")
+            self.assertFalse(lifecycle["stdin_open"])
+            self.assertIsNone(lifecycle["shutdown_failure"])
+            process = bridge._process
+            self.assertIsNotNone(process)
+            self.assertIsNotNone(process.poll())
+            self.assertFalse(any(thread.is_alive() for thread in bridge._threads))
+
+    def test_post_popen_thread_failure_wakes_concurrent_close(self) -> None:
+        events: list[dict[str, object]] = []
+        entered_constructor = threading.Event()
+        release_constructor = threading.Event()
+        close_done = threading.Event()
+        start_errors: list[BaseException] = []
+
+        def failing_thread(*_args, **_kwargs):
+            entered_constructor.set()
+            if not release_constructor.wait(5.0):
+                raise RuntimeError("test thread-constructor gate timed out")
+            raise RuntimeError("test post-Popen thread failure")
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(Path(raw_directory), "valid")
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+
+            def run_start() -> None:
+                try:
+                    bridge.start()
+                except BaseException as error:  # captured for thread assertion
+                    start_errors.append(error)
+
+            def run_close() -> None:
+                bridge.close()
+                close_done.set()
+
+            start_thread = threading.Thread(target=run_start)
+            close_thread = threading.Thread(target=run_close)
+            with mock.patch.object(
+                native_bridge_module.threading, "Thread",
+                side_effect=failing_thread,
+            ):
+                start_thread.start()
+                self.assertTrue(entered_constructor.wait(2.0))
+                close_thread.start()
+                time.sleep(0.05)
+                self.assertFalse(close_done.is_set())
+                release_constructor.set()
+                start_thread.join(5.0)
+                close_thread.join(5.0)
+
+            self.assertFalse(start_thread.is_alive())
+            self.assertFalse(close_thread.is_alive())
+            self.assertEqual(len(start_errors), 1)
+            self.assertIsInstance(start_errors[0], NativeBridgeError)
+            self.assertEqual(str(start_errors[0]), "NATIVE_START")
+            self.assertEqual(events, [])
+            lifecycle = bridge._lifecycle_snapshot()
+            self.assertEqual(lifecycle["state"], "CLOSED")
+            self.assertTrue(lifecycle["owner_close_requested"])
+            self.assertEqual(lifecycle["stdin_close_origin"], "BRIDGE_CLOSE")
+            self.assertIsNone(lifecycle["shutdown_failure"])
+            process = bridge._process
+            self.assertIsNotNone(process)
+            self.assertIsNotNone(process.poll())
+            self.assertIsNone(bridge._stdin_fd)
+            self.assertIsNone(bridge._frame_socket)
+
+    def test_running_close_reaps_all_owned_workers_and_channels(self) -> None:
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(Path(raw_directory), "valid")
+            bridge = NativeBridge(
+                str(executable), str(config), events.append, lambda *_: None
+            )
+            bridge.start()
+            _wait_for(lambda: any(
+                event.get("type") == "service.ready" for event in events
+            ))
+            bridge.close()
+            lifecycle = bridge._lifecycle_snapshot()
+            self.assertEqual(lifecycle["state"], "CLOSED")
+            self.assertTrue(lifecycle["owner_close_requested"])
+            self.assertEqual(lifecycle["stdin_close_origin"], "BRIDGE_CLOSE")
+            self.assertFalse(lifecycle["stdin_open"])
+            self.assertIsNone(lifecycle["shutdown_failure"])
+            process = bridge._process
+            self.assertIsNotNone(process)
+            self.assertIsNotNone(process.poll())
+            self.assertIsNone(bridge._stdin_fd)
+            self.assertIsNone(bridge._frame_socket)
+            self.assertFalse(any(thread.is_alive() for thread in bridge._threads))
+
     def test_sanitizer_rejects_unknown_fields_types_and_enums(self) -> None:
         ready = {
             "type": "service.ready", "profile": "composition",
@@ -530,6 +1299,8 @@ class NativeBridgeTests(unittest.TestCase):
             "/bin/false", "/dev/null", lambda _: None, lambda *_: None
         )
         bridge._process = process
+        bridge._lifecycle_state = "RUNNING"
+        bridge._stdin_open = True
         before = (
             bridge._next_request_id,
             list(bridge._outbound),
@@ -678,6 +1449,63 @@ class NativeBridgeTests(unittest.TestCase):
             state.snapshot(), list(state._events), state._next_event_id
         ))
         self.assertIsNone(state._native_bridge)
+
+    def test_close_wins_over_late_native_start_failure_without_rollback(
+        self,
+    ) -> None:
+        start_entered = threading.Event()
+        release_start = threading.Event()
+
+        class FailingBridge:
+            def __init__(self, _executable, _config, _on_event, _on_frame):
+                self.close_count = 0
+
+            def start(self) -> None:
+                start_entered.set()
+                if not release_start.wait(2.0):
+                    raise AssertionError("test did not release native start")
+                raise OSError("injected late native start failure")
+
+            @staticmethod
+            def submit_batch(*_args, **_kwargs):
+                raise AssertionError("submit must not follow failed start")
+
+            def close(self) -> None:
+                self.close_count += 1
+
+        state = CompositionEditorState()
+        failures: list[BaseException] = []
+
+        def enable() -> None:
+            try:
+                state.enable_native("unused", "unused")
+            except BaseException as error:
+                failures.append(error)
+
+        with mock.patch.object(server_module, "NativeBridge", FailingBridge):
+            thread = threading.Thread(target=enable)
+            thread.start()
+            self.assertTrue(start_entered.wait(2.0))
+            bridge = state._native_bridge
+            self.assertIsNotNone(bridge)
+            state.close()
+            event_id, after_close = state.apply({
+                "command": "scene.object.add", "asset": "builtin:cube",
+            })
+            events_after_close = copy.deepcopy(list(state._events))
+            release_start.set()
+            thread.join(2.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], OSError)
+        self.assertEqual(state.snapshot(), after_close)
+        self.assertEqual(list(state._events), events_after_close)
+        self.assertEqual(after_close["revision"], 1)
+        self.assertEqual(len(after_close["scene"]["objects"]), 2)
+        self.assertEqual(list(state._events)[-1][0], event_id)
+        self.assertIsNone(state._native_bridge)
+        self.assertEqual(bridge.close_count, 2)
 
     def test_remote_transport_terminal_restarts_fresh_child_and_replays_latest(
         self,
@@ -913,6 +1741,449 @@ class NativeBridgeTests(unittest.TestCase):
                 state._native_reconnect_thread is None or
                 not state._native_reconnect_thread.is_alive()
             )
+
+    def test_unreaped_terminal_blocks_replacement_and_preserves_state(
+        self,
+    ) -> None:
+        class CountingBridge(NativeBridge):
+            instances: list["CountingBridge"] = []
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.__class__.instances.append(self)
+
+        kill_calls: list[int] = []
+
+        def ignored_kill(process) -> None:
+            kill_calls.append(process.pid)
+
+        state = CompositionEditorState()
+        process = None
+        with tempfile.TemporaryDirectory() as raw_directory:
+            executable, config = self._fake_child(
+                Path(raw_directory), "raw_terminal_split_tail"
+            )
+            try:
+                with (
+                    mock.patch.object(
+                        server_module, "NativeBridge", CountingBridge
+                    ),
+                    mock.patch.object(
+                        native_bridge_module,
+                        "NATIVE_TERMINAL_EXIT_TIMEOUT_SECONDS", 0.05,
+                    ),
+                    mock.patch.object(
+                        native_bridge_module,
+                        "NATIVE_TERMINAL_KILL_TIMEOUT_SECONDS", 0.05,
+                    ),
+                    mock.patch.object(
+                        server_module, "NATIVE_RECONNECT_INITIAL_SECONDS", 0.01
+                    ),
+                    mock.patch.object(
+                        native_bridge_module.subprocess.Popen,
+                        "kill", ignored_kill,
+                    ),
+                ):
+                    try:
+                        state.enable_native(str(executable), str(config))
+                    except NativeBridgeError as error:
+                        self.assertEqual(
+                            str(error), "NATIVE_PROCESS_SHUTDOWN"
+                        )
+                    _wait_for(lambda: state._native_cleanup_error is not None)
+                    self.assertEqual(len(CountingBridge.instances), 1)
+                    bridge = CountingBridge.instances[0]
+                    process = bridge._process
+                    self.assertIsNotNone(process)
+                    self.assertIsNone(process.poll())
+                    self.assertEqual(kill_calls, [process.pid])
+                    generation = state._native_generation
+                    snapshot = state.snapshot()
+                    self.assertEqual(snapshot["revision"], 0)
+                    self.assertEqual(
+                        snapshot["backend"]["session_status"], "FAILED"
+                    )
+                    self.assertEqual(
+                        snapshot["native_truth"],
+                        _default_snapshot()["native_truth"],
+                    )
+                    time.sleep(0.05)
+                    self.assertEqual(len(CountingBridge.instances), 1)
+                    self.assertEqual(state._native_generation, generation)
+                    with self.assertRaisesRegex(
+                        NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                    ):
+                        state.enable_native(str(executable), str(config))
+            finally:
+                if process is not None and process.poll() is None:
+                    os.kill(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2.0)
+                state.close()
+        self.assertIsNone(state._native_retiring_bridge)
+        self.assertIsNone(state._native_cleanup_error)
+
+    def test_state_close_propagates_concurrent_stale_cleanup_failure(
+        self,
+    ) -> None:
+        close_entered = threading.Event()
+        release_close = threading.Event()
+
+        class FailingStaleBridge:
+            instances: list["FailingStaleBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, _on_frame):
+                self.on_event = on_event
+                self.fail_close = True
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            @staticmethod
+            def start() -> None:
+                return None
+
+            @staticmethod
+            def submit_batch(commands, *, origin, revision):
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                close_entered.set()
+                if self.fail_close:
+                    self.assert_release()
+                    raise NativeBridgeError("NATIVE_PROCESS_SHUTDOWN")
+                self.closed = True
+
+            @staticmethod
+            def assert_release() -> None:
+                if not release_close.wait(2.0):
+                    raise AssertionError("stale cleanup was not released")
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = CompositionEditorState()
+        close_errors: list[Exception] = []
+
+        def close_state() -> None:
+            try:
+                state.close()
+            except Exception as error:
+                close_errors.append(error)
+
+        with mock.patch.object(
+            server_module, "NativeBridge", FailingStaleBridge
+        ):
+            state.enable_native("unused", "unused")
+            stale = FailingStaleBridge.instances[0]
+            stale.on_event({
+                "type": "terminal",
+                "code": "HOST_RUNTIME_TRANSPORT_TERMINAL",
+            })
+            self.assertTrue(close_entered.wait(1.0))
+            close_thread = threading.Thread(target=close_state)
+            close_thread.start()
+            _wait_for(lambda: state._native_reconnect_stop.is_set())
+            release_close.set()
+            close_thread.join(2.0)
+            self.assertFalse(close_thread.is_alive())
+            self.assertEqual(
+                [str(error) for error in close_errors],
+                ["NATIVE_PROCESS_SHUTDOWN"],
+            )
+            self.assertEqual(len(FailingStaleBridge.instances), 1)
+            self.assertIs(state._native_retiring_bridge, stale)
+            self.assertIsNotNone(state._native_cleanup_error)
+            stale.fail_close = False
+            state.close()
+            self.assertTrue(stale.closed)
+            self.assertIsNone(state._native_retiring_bridge)
+            self.assertIsNone(state._native_cleanup_error)
+
+    def test_active_close_reserves_owner_until_enable_is_safe(self) -> None:
+        close_entered = threading.Event()
+        release_close = threading.Event()
+
+        class BlockingCloseBridge:
+            instances: list["BlockingCloseBridge"] = []
+
+            def __init__(self, _executable, _config, _on_event, _on_frame):
+                self.index = len(self.__class__.instances)
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            @staticmethod
+            def start() -> None:
+                return None
+
+            @staticmethod
+            def submit_batch(commands, *, origin, revision):
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                if self.index == 0:
+                    close_entered.set()
+                    if not release_close.wait(2.0):
+                        raise AssertionError("active close was not released")
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = CompositionEditorState()
+        close_errors: list[Exception] = []
+
+        def close_state() -> None:
+            try:
+                state.close()
+            except Exception as error:
+                close_errors.append(error)
+
+        with mock.patch.object(
+            server_module, "NativeBridge", BlockingCloseBridge
+        ):
+            state.enable_native("unused", "unused")
+            first = BlockingCloseBridge.instances[0]
+            close_thread = threading.Thread(target=close_state)
+            close_thread.start()
+            self.assertTrue(close_entered.wait(1.0))
+            generation = state._native_generation
+            self.assertIs(state._native_retiring_bridge, first)
+            with self.assertRaisesRegex(
+                NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+            ):
+                state.enable_native("unused", "unused")
+            self.assertEqual(len(BlockingCloseBridge.instances), 1)
+            self.assertEqual(state._native_generation, generation)
+            release_close.set()
+            close_thread.join(2.0)
+            self.assertFalse(close_thread.is_alive())
+            self.assertEqual(close_errors, [])
+            self.assertTrue(first.closed)
+            self.assertIsNone(state._native_retiring_bridge)
+            state.enable_native("unused", "unused")
+            self.assertEqual(len(BlockingCloseBridge.instances), 2)
+        state.close()
+        self.assertTrue(BlockingCloseBridge.instances[1].closed)
+
+    def test_reconnect_scheduler_failure_retains_stale_owner(self) -> None:
+        class RecordingBridge:
+            instances: list["RecordingBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, _on_frame):
+                self.on_event = on_event
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            @staticmethod
+            def start() -> None:
+                return None
+
+            @staticmethod
+            def submit_batch(commands, *, origin, revision):
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        class StartFailThread:
+            @staticmethod
+            def start() -> None:
+                raise RuntimeError("injected reconnect thread start failure")
+
+        failures = (
+            mock.patch.object(
+                server_module.threading, "Thread",
+                side_effect=RuntimeError(
+                    "injected reconnect thread constructor failure"
+                ),
+            ),
+            mock.patch.object(
+                server_module.threading, "Thread",
+                return_value=StartFailThread(),
+            ),
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                RecordingBridge.instances.clear()
+                state = CompositionEditorState()
+                with mock.patch.object(
+                    server_module, "NativeBridge", RecordingBridge
+                ):
+                    state.enable_native("unused", "unused")
+                    stale = RecordingBridge.instances[0]
+                    with failure:
+                        stale.on_event({
+                            "type": "terminal",
+                            "code": "HOST_RUNTIME_TRANSPORT_TERMINAL",
+                        })
+                    self.assertIs(state._native_bridge, stale)
+                    self.assertIs(state._native_retiring_bridge, stale)
+                    self.assertIsNone(state._native_reconnect_thread)
+                    self.assertFalse(stale.closed)
+                    self.assertEqual(
+                        state.snapshot()["backend"]["session_status"],
+                        "FAILED",
+                    )
+                    self.assertTrue(any(
+                        event[1]["status"] == "NATIVE_RECONNECT_BLOCKED"
+                        for event in state._events
+                    ))
+                    with self.assertRaisesRegex(
+                        NativeBridgeError, "^NATIVE_PROCESS_SHUTDOWN$"
+                    ):
+                        state.enable_native("unused", "unused")
+                    self.assertEqual(len(RecordingBridge.instances), 1)
+                    state.close()
+                    self.assertTrue(stale.closed)
+                    self.assertIsNone(state._native_retiring_bridge)
+
+    def test_old_enable_failure_cannot_claim_same_spec_rebind(self) -> None:
+        old_start_entered = threading.Event()
+        release_old_start = threading.Event()
+
+        class DelayedStartBridge:
+            instances: list["DelayedStartBridge"] = []
+
+            def __init__(self, _executable, _config, _on_event, _on_frame):
+                self.index = len(self.__class__.instances)
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            def start(self) -> None:
+                if self.index == 0:
+                    old_start_entered.set()
+                    if not release_old_start.wait(2.0):
+                        raise AssertionError("old start was not released")
+                    raise OSError("injected old start failure")
+
+            @staticmethod
+            def submit_batch(commands, *, origin, revision):
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = CompositionEditorState()
+        old_errors: list[Exception] = []
+
+        def start_old() -> None:
+            try:
+                state.enable_native("same", "same")
+            except Exception as error:
+                old_errors.append(error)
+
+        with mock.patch.object(
+            server_module, "NativeBridge", DelayedStartBridge
+        ):
+            old_thread = threading.Thread(target=start_old)
+            old_thread.start()
+            self.assertTrue(old_start_entered.wait(1.0))
+            state.close()
+            state.enable_native("same", "same")
+            replacement = DelayedStartBridge.instances[1]
+            generation = state._native_generation
+            release_old_start.set()
+            old_thread.join(2.0)
+            self.assertFalse(old_thread.is_alive())
+            self.assertEqual(
+                [str(error) for error in old_errors],
+                ["injected old start failure"],
+            )
+            self.assertIs(state._native_bridge, replacement)
+            self.assertEqual(state._native_generation, generation)
+            self.assertFalse(any(
+                event[1]["status"] == "NATIVE_RECONNECTING"
+                for event in state._events
+            ))
+        state.close()
+        self.assertTrue(replacement.closed)
+
+    def test_synchronous_terminal_start_hands_off_one_bootstrap(
+        self,
+    ) -> None:
+        fresh_ready = threading.Event()
+
+        class TerminalOnStartBridge:
+            instances: list["TerminalOnStartBridge"] = []
+
+            def __init__(self, _executable, _config, on_event, _on_frame):
+                self.on_event = on_event
+                self.closed = False
+                self.submit_calls: list[tuple[str, int]] = []
+                self.index = len(self.__class__.instances)
+                self.__class__.instances.append(self)
+
+            def start(self) -> None:
+                if self.index == 0:
+                    self.on_event({
+                        "type": "terminal",
+                        "code": "HOST_RUNTIME_TRANSPORT_TERMINAL",
+                    })
+                    return
+                self.on_event({"type": "service.ready"})
+                self.on_event({
+                    "type": "snapshot", "phase": "ready",
+                    "control_ready": True, "catalog_generation": 1,
+                    "media_bound": False, "media_mask": "none",
+                })
+                fresh_ready.set()
+
+            def submit_batch(self, commands, *, origin, revision):
+                self.submit_calls.append((origin, revision))
+                if self.index == 0:
+                    if not fresh_ready.wait(2.0):
+                        raise AssertionError("fresh bridge did not become ready")
+                    raise NativeBridgeError("NATIVE_TERMINAL")
+                return list(range(1, len(commands) + 1))
+
+            def close(self) -> None:
+                self.closed = True
+
+            @staticmethod
+            def latest_frame(_source):
+                return None
+
+        state = CompositionEditorState()
+        with (
+            mock.patch.object(
+                server_module, "NativeBridge", TerminalOnStartBridge
+            ),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_INITIAL_SECONDS", 0.001
+            ),
+            mock.patch.object(
+                server_module, "NATIVE_RECONNECT_MAX_SECONDS", 0.001
+            ),
+        ):
+            state.enable_native("unused", "unused")
+            self.assertEqual(len(TerminalOnStartBridge.instances), 2)
+            first, replacement = TerminalOnStartBridge.instances
+            self.assertTrue(first.closed)
+            self.assertFalse(replacement.closed)
+            self.assertEqual(first.submit_calls, [("native.bootstrap", 0)])
+            self.assertEqual(
+                replacement.submit_calls, [("native.reconnect", 0)]
+            )
+            self.assertEqual(
+                state.snapshot()["backend"]["session_status"], "READY"
+            )
+            self.assertTrue(any(
+                event[1]["status"] == "NATIVE_RECONNECTING"
+                for event in state._events
+            ))
+            time.sleep(0.02)
+            self.assertEqual(len(TerminalOnStartBridge.instances), 2)
+        state.close()
+        self.assertTrue(replacement.closed)
 
     def test_native_truth_refresh_is_deduplicated_and_pump_is_not_projected(
         self,
@@ -1189,6 +2460,7 @@ class NativeBridgeTests(unittest.TestCase):
         )
         receiver, sender = socket.socketpair()
         bridge._frame_socket = receiver
+        bridge._lifecycle_state = "RUNNING"
         thread = threading.Thread(target=bridge._frame_loop)
         thread.start()
         for chunk in chunks:
@@ -1205,6 +2477,7 @@ class NativeBridgeTests(unittest.TestCase):
         )
         receiver, sender = socket.socketpair()
         bridge._frame_socket = receiver
+        bridge._lifecycle_state = "RUNNING"
         thread = threading.Thread(target=bridge._frame_loop)
         thread.start()
         record = _cmfb_record()

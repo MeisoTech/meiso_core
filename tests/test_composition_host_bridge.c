@@ -79,8 +79,14 @@ typedef struct {
     int media_listener;
     pthread_mutex_t mutex;
     pthread_cond_t condition;
+    bool peer_close_after_active_state;
+    bool control_ready;
     bool render_active;
     bool media_active;
+    bool writer_holding_stdin;
+    bool writer_held_stdin;
+    bool stdin_open_at_service_exit;
+    bool peer_control_closed;
     uint32_t media_accept_count;
     uint32_t stale_accept_count;
     bool service_done;
@@ -212,8 +218,31 @@ static void *media_writer_main(void *context)
     struct timespec deadline;
     bool active = false;
 
-    if (!write_all(writer->fd, render_command, sizeof(render_command) - 1U) ||
-        !make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
+    if (!make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
+        writer->error_number = errno == 0 ? EIO : errno;
+        close_fd(&writer->fd);
+        return NULL;
+    }
+    if (writer->scenario->peer_close_after_active_state) {
+        (void)pthread_mutex_lock(&writer->scenario->mutex);
+        while (!writer->scenario->control_ready &&
+               !writer->scenario->failed) {
+            if (pthread_cond_timedwait(
+                    &writer->scenario->condition, &writer->scenario->mutex,
+                    &deadline
+                ) == ETIMEDOUT) {
+                break;
+            }
+        }
+        active = writer->scenario->control_ready && !writer->scenario->failed;
+        (void)pthread_mutex_unlock(&writer->scenario->mutex);
+        if (!active) {
+            writer->error_number = ETIMEDOUT;
+            close_fd(&writer->fd);
+            return NULL;
+        }
+    }
+    if (!write_all(writer->fd, render_command, sizeof(render_command) - 1U)) {
         writer->error_number = errno == 0 ? EIO : errno;
         close_fd(&writer->fd);
         return NULL;
@@ -230,9 +259,11 @@ static void *media_writer_main(void *context)
     active = writer->scenario->render_active && !writer->scenario->failed;
     (void)pthread_mutex_unlock(&writer->scenario->mutex);
     if (!active ||
-        !write_all(
-            writer->fd, camera_command, sizeof(camera_command) - 1U
-        )) {
+        (writer->scenario->peer_close_after_active_state &&
+         !write_all(
+             writer->fd, snapshot_command, sizeof(snapshot_command) - 1U
+         )) ||
+        !write_all(writer->fd, camera_command, sizeof(camera_command) - 1U)) {
         writer->error_number = errno == 0 ? ETIMEDOUT : errno;
         close_fd(&writer->fd);
         return NULL;
@@ -248,11 +279,43 @@ static void *media_writer_main(void *context)
     }
     active = writer->scenario->media_active && !writer->scenario->failed;
     (void)pthread_mutex_unlock(&writer->scenario->mutex);
-    if (!active ||
-        !write_all(
+    if (!active) {
+        writer->error_number = errno == 0 ? ETIMEDOUT : errno;
+        close_fd(&writer->fd);
+        return NULL;
+    }
+    if (writer->scenario->peer_close_after_active_state) {
+        if (!make_deadline(&deadline, MEDIA_SCENARIO_TIMEOUT_SECONDS)) {
+            writer->error_number = EIO;
+            close_fd(&writer->fd);
+            return NULL;
+        }
+        (void)pthread_mutex_lock(&writer->scenario->mutex);
+        writer->scenario->writer_holding_stdin = true;
+        writer->scenario->writer_held_stdin = true;
+        (void)pthread_cond_broadcast(&writer->scenario->condition);
+        while (!writer->scenario->service_done && !writer->scenario->failed) {
+            if (pthread_cond_timedwait(
+                    &writer->scenario->condition, &writer->scenario->mutex,
+                    &deadline
+                ) == ETIMEDOUT) {
+                break;
+            }
+        }
+        active = writer->scenario->service_done && !writer->scenario->failed;
+        writer->scenario->writer_holding_stdin = false;
+        (void)pthread_cond_broadcast(&writer->scenario->condition);
+        (void)pthread_mutex_unlock(&writer->scenario->mutex);
+        if (!active) {
+            writer->error_number = ETIMEDOUT;
+        }
+        close_fd(&writer->fd);
+        return NULL;
+    }
+    if (!write_all(
             writer->fd, snapshot_command, sizeof(snapshot_command) - 1U
         )) {
-        writer->error_number = errno == 0 ? ETIMEDOUT : errno;
+        writer->error_number = errno == 0 ? EIO : errno;
         close_fd(&writer->fd);
         return NULL;
     }
@@ -639,6 +702,16 @@ static void scenario_signal(
     (void)pthread_mutex_unlock(&scenario->mutex);
 }
 
+static void scenario_signal_control_ready(MediaScenario *scenario)
+{
+    (void)pthread_mutex_lock(&scenario->mutex);
+    if (!scenario->control_ready) {
+        scenario->control_ready = true;
+        (void)pthread_cond_broadcast(&scenario->condition);
+    }
+    (void)pthread_mutex_unlock(&scenario->mutex);
+}
+
 static bool route_equal(
     MeisoRuntimeRouteKey lhs,
     MeisoRuntimeRouteKey rhs
@@ -946,6 +1019,14 @@ static void *edge_media_main(void *context)
             scenario->failure_stage = 201U;
             scenario->failure_status = status;
             goto done;
+        }
+        if (!meiso_composition_control_session_snapshot(peer, &peer_snapshot)) {
+            scenario->failure_stage = 230U;
+            goto done;
+        }
+        if (peer_snapshot.phase ==
+            MEISO_COMPOSITION_CONTROL_SESSION_PHASE_READY) {
+            scenario_signal_control_ready(scenario);
         }
         if (result.event_present) {
             if (result.event.type == MEISO_RUNTIME_EVENT_STATE_OFFER) {
@@ -1315,6 +1396,42 @@ static void *edge_media_main(void *context)
                 } else if (active_media_mask ==
                            MEISO_COMPOSITION_MEDIA_TRANSPORT_ROUTE_ALL_MASK) {
                     scenario_signal(scenario, true, true, false);
+                    if (scenario->peer_close_after_active_state) {
+                        struct timespec close_deadline;
+                        bool writer_holding;
+
+                        if (!make_deadline(
+                                &close_deadline,
+                                MEDIA_SCENARIO_TIMEOUT_SECONDS
+                            )) {
+                            scenario->failure_stage = 231U;
+                            goto done;
+                        }
+                        (void)pthread_mutex_lock(&scenario->mutex);
+                        while (!scenario->writer_holding_stdin &&
+                               !scenario->failed) {
+                            if (pthread_cond_timedwait(
+                                    &scenario->condition, &scenario->mutex,
+                                    &close_deadline
+                                ) == ETIMEDOUT) {
+                                break;
+                            }
+                        }
+                        writer_holding =
+                            scenario->writer_holding_stdin && !scenario->failed;
+                        (void)pthread_mutex_unlock(&scenario->mutex);
+                        if (!writer_holding ||
+                            shutdown(control_fd, SHUT_RDWR) != 0) {
+                            scenario->failure_stage = 232U;
+                            scenario->failure_status = (uint32_t)errno;
+                            goto done;
+                        }
+                        close_fd(&control_fd);
+                        (void)pthread_mutex_lock(&scenario->mutex);
+                        scenario->peer_control_closed = true;
+                        (void)pthread_cond_broadcast(&scenario->condition);
+                        (void)pthread_mutex_unlock(&scenario->mutex);
+                    }
                     ok = true;
                     break;
                 }
@@ -1592,6 +1709,9 @@ static bool run_media_service(
     close_fd(&saved_output);
     close_fd(&saved_error);
     (void)pthread_mutex_lock(&scenario->mutex);
+    scenario->stdin_open_at_service_exit =
+        scenario->peer_close_after_active_state &&
+        scenario->writer_holding_stdin;
     scenario->service_done = true;
     if (!scenario->media_active) {
         scenario->failed = true;
@@ -2228,6 +2348,113 @@ cleanup:
     return ok;
 }
 
+static bool test_ready_media_state_peer_control_terminal(void)
+{
+    static const char terminal_line[] =
+        "{\"type\":\"terminal\","
+        "\"code\":\"HOST_RUNTIME_TRANSPORT_TERMINAL\"}\n";
+    char config[CONFIG_BYTES];
+    RunResult result;
+    MediaScenario scenario;
+    uint16_t control_port;
+    uint16_t media_port;
+    bool mutex_initialized = false;
+    bool condition_initialized = false;
+    bool ok = false;
+
+    memset(&scenario, 0, sizeof(scenario));
+    scenario.control_listener = -1;
+    scenario.media_listener = -1;
+    scenario.peer_close_after_active_state = true;
+    CHECK_GOTO(make_control_socket(
+                   true, &scenario.control_listener, &control_port
+               ) && make_control_socket(
+                   true, &scenario.media_listener, &media_port
+               ) && set_nonblocking(scenario.control_listener) &&
+               set_nonblocking(scenario.media_listener) &&
+               build_config(
+                   config, sizeof(config), control_port, media_port,
+                   NULL, NULL
+               ), cleanup);
+    CHECK_GOTO(pthread_mutex_init(&scenario.mutex, NULL) == 0, cleanup);
+    mutex_initialized = true;
+    CHECK_GOTO(pthread_cond_init(&scenario.condition, NULL) == 0, cleanup);
+    condition_initialized = true;
+    CHECK_GOTO(run_media_service(config, &scenario, &result), cleanup);
+    if (result.exit_code != 0 || result.writer_error != 0 ||
+        result.error_size != 0U || scenario.failed ||
+        !scenario.control_ready || !scenario.render_active ||
+        !scenario.media_active || !scenario.writer_held_stdin ||
+        !scenario.stdin_open_at_service_exit ||
+        !scenario.peer_control_closed) {
+        (void)fprintf(
+            stderr,
+            "peer terminal result: exit=%d writer=%d failed=%u "
+            "ready=%u render=%u media=%u held=%u open_exit=%u "
+            "peer_closed=%u stage=%u status=%u stderr=%s stdout=%s\n",
+            result.exit_code, result.writer_error,
+            scenario.failed ? 1U : 0U, scenario.control_ready ? 1U : 0U,
+            scenario.render_active ? 1U : 0U,
+            scenario.media_active ? 1U : 0U,
+            scenario.writer_held_stdin ? 1U : 0U,
+            scenario.stdin_open_at_service_exit ? 1U : 0U,
+            scenario.peer_control_closed ? 1U : 0U,
+            scenario.failure_stage, scenario.failure_status,
+            result.error, result.output
+        );
+    }
+    CHECK_GOTO(result.exit_code == 0 && result.writer_error == 0 &&
+               result.error_size == 0U && !scenario.failed &&
+               scenario.control_ready && scenario.render_active &&
+               scenario.media_active && scenario.writer_held_stdin &&
+               scenario.stdin_open_at_service_exit &&
+               scenario.peer_control_closed &&
+               scenario.media_accept_count == 2U &&
+               scenario.stale_accept_count == 0U, cleanup);
+    CHECK_GOTO(strstr(result.output, "\"type\":\"service.ready\"") !=
+                   NULL &&
+               strstr(
+                   result.output,
+                   "{\"type\":\"snapshot\",\"request_id\":3,"
+               ) != NULL &&
+               strstr(result.output, "\"phase\":\"ready\"") != NULL &&
+               strstr(result.output, "\"control_ready\":true") != NULL &&
+               strstr(result.output, "\"kind\":\"set_render_media\"") !=
+                   NULL &&
+               strstr(result.output, "\"kind\":\"set_camera_media\"") !=
+                   NULL &&
+               strstr(
+                   result.output,
+                   "{\"type\":\"actual\",\"channel\":\"render_media\""
+               ) != NULL &&
+               strstr(
+                   result.output,
+                   "{\"type\":\"actual\",\"channel\":\"camera_media\""
+               ) != NULL &&
+               occurrence_count(result.output, terminal_line) == 1U &&
+               result.output_size >= sizeof(terminal_line) - 1U &&
+               memcmp(
+                   result.output + result.output_size -
+                       (sizeof(terminal_line) - 1U),
+                   terminal_line, sizeof(terminal_line) - 1U
+               ) == 0 &&
+               strstr(result.output, "\"type\":\"closing\"") == NULL &&
+               strstr(result.output, "HOST_RUNTIME_INTERNAL_TERMINAL") ==
+                   NULL && output_is_closed_ndjson(result.output), cleanup);
+    ok = true;
+
+cleanup:
+    close_fd(&scenario.control_listener);
+    close_fd(&scenario.media_listener);
+    if (condition_initialized) {
+        (void)pthread_cond_destroy(&scenario.condition);
+    }
+    if (mutex_initialized) {
+        (void)pthread_mutex_destroy(&scenario.mutex);
+    }
+    return ok;
+}
+
 int main(void)
 {
     if (!test_config_rejections() || !test_numeric_connect_failure() ||
@@ -2236,7 +2463,8 @@ int main(void)
         !test_large_hup_drain() || !test_partial_line_eof() ||
         !test_sigpipe_restore() || !test_offline_simulator_editor_flow() ||
         !test_presentation_rate_bounds() ||
-        !test_media_reconnect_barrier_no_frame()) {
+        !test_media_reconnect_barrier_no_frame() ||
+        !test_ready_media_state_peer_control_terminal()) {
         return 1;
     }
     (void)puts("composition host bridge tests passed");

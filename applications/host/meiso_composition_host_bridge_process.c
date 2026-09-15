@@ -409,6 +409,11 @@ bool meiso_composition_host_bridge_private_run_loop(MeisoCompositionHostBridgePr
             continue;
         }
         if (service->stdin_eof) {
+            /*
+             * Interactive stdin is owned by the local supervisor.  Its EOF is
+             * a graceful owner stop and must never impersonate a peer/control
+             * transport terminal, which is emitted only by pump_host().
+             */
             if (service->input_size != 0U) {
                 (void)meiso_composition_host_bridge_private_emit_error(0U, "INVALID_COMMAND");
                 return false;

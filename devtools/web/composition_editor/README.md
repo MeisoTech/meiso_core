@@ -53,20 +53,56 @@ the authority for applied state. Unknown, zero or duplicate request
 completions are correlation failures and terminate the bridge fail-closed.
 
 Remote native mode has one deliberately narrow process supervisor. A typed
-control-transport, Session, or catalog terminal closes the old child, clears
-all old native truth and cached frames, and retries a fresh child with
-exponential backoff from 100 ms to 5 s. The fresh child gets a fresh arena and
-Session; after it starts, the bridge queues a complete bootstrap derived from
-the newest browser-owned scene and intent snapshot. Local edits remain
+control-transport, Session, or catalog terminal retires the old child, clears
+all old native truth and cached frames, and retries a fresh child only after
+the old process and its workers are proven closed. Retry uses exponential
+backoff from 100 ms to 5 s. The fresh child gets a fresh arena and Session;
+after it starts, the bridge queues one complete bootstrap derived from the
+newest browser-owned scene and intent snapshot. Local edits remain
 candidate-first and are accepted as `NATIVE_RECONNECT_PENDING` while no child
 is live. Generation guards reject late events and frames from every retired
-child. Internal/local failures and simulator terminals remain sticky instead
-of entering a restart loop. Terminal codes use the closed `HOST_RUNTIME_*`
-vocabulary; `HOST_RUNTIME_INTERNAL_TERMINAL` remains sticky because it carries
-no trustworthy recovery class. This
+child. A process that cannot be reaped, or workers that cannot be joined,
+remain retained in a local `FAILED`/`NATIVE_RECONNECT_BLOCKED` state: close
+propagates the cleanup error and no replacement may start until explicit
+recovery proves that ownership closed. Internal/local failures and simulator
+terminals remain sticky instead of entering a restart loop. Terminal codes use
+the closed `HOST_RUNTIME_*` vocabulary;
+`HOST_RUNTIME_INTERNAL_TERMINAL` remains sticky because it carries no
+trustworthy recovery class. This
 is not Session resume, old-handle revival,
 generic SDK/backend reconnect, Edge process restart, discovery, or target
 network-recovery evidence.
+
+The native child's stdout reader owns terminal ordering. A typed raw Host
+terminal is projected before the bridge emits its one synthetic
+`NATIVE_HOST_TERMINAL`; after that terminal claim no later stdout event or CMFB
+frame is projected. The stdout reader discards post-terminal bytes through a
+real EOF without decoding or projecting them; a child which ignores TERM is
+killed and reaped by the single waiter-owned bounded shutdown path when that
+recovery succeeds. Failed kill/reap is sticky `FAILED`, retains the old process
+identity and never authorizes a fresh child. Only an `EOF` drain result proves
+complete discard; a bounded forced close is recorded as `FORCED_TIMEOUT` and
+never presented as natural drain. A child process exit is only a fallback
+lifecycle signal:
+the waiter first allows complete stdout/stderr and CMFB-reader drain, then emits
+`NATIVE_EXIT_OK` or `NATIVE_EXIT_FAILURE` only if no raw terminal won. A bounded
+drain failure atomically reserves the sticky terminal, closes every owned input
+channel and is never rewritten by late raw output as a successful exit.
+
+The bridge owns the sole parent write end of the child's stdin through an
+explicit pipe. Owner EOF and full Editor shutdown are therefore distinct from
+peer transport loss. Full shutdown records its owner action before closing the
+writer and suppresses late callbacks. Startup publishes the child only after
+all five workers exist; a concurrent close owns or waits for that startup's
+cleanup. An internal lifecycle snapshot records only fixed local state, the
+first proven stdin-close origin plus its local attempt/result/errno, drain
+completion and child return code. It is not part of the browser snapshot/SSE
+schema and exposes no PID,
+file descriptor, path, peer or device identity. In particular,
+`NATIVE_EXIT_OK` is not evidence for a `HOST_RUNTIME_*` transport terminal.
+Post-`Popen` startup failure follows the same ownership rule: unreaped process
+identity remains `FAILED`, `close()` raises `NATIVE_PROCESS_SHUTDOWN`, and a
+new child is forbidden until recovery has reaped the old one.
 
 Only an exact allowlist of typed native output is copied into snapshots/SSE.
 Read-only evidence can include State/plan/world generations, production epoch,
