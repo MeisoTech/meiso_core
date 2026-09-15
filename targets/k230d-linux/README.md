@@ -789,3 +789,9 @@ This does not reduce ISP capture power or enable continuous local video recordin
 Omit these options to keep RAW NV12. Cross builds need matching target libjpeg
 headers/library (`JPEG_INCLUDE_DIR`, `JPEG_LIBRARY`) in addition to libdrm.
 Capability support does not by itself establish board performance or power.
+
+## BSP 来源
+
+第一板（BPI CanMV K230D Zero）的内核、GC2093/VVCAM 适配、DTB 与 rootfs 由
+[MeisoTech/k230d-bsp](https://github.com/MeisoTech/k230d-bsp) 单一维护（`patches/sdk/0011` 即原本仓的
+vvcam 最小缓冲补丁）。本仓不再保留 BSP 补丁副本；用户态 Edge 包与 BSP 分别交付，配对版本在部署记录中注明。
