@@ -139,6 +139,14 @@ cp "$EDGE_PREFIX/share/meiso/edge.conf.example" /etc/meiso/edge.conf
 # 编辑这四项：MEISO_PREFIX、MEISO_HOST_IP、MEISO_LOCAL_PEER（Edge）、MEISO_EXPECTED_PEER（Host）。
 vi /etc/meiso/edge.conf
 chmod 600 /etc/meiso/edge.conf
+```
+
+k230d-bsp #1 起的 K230D 镜像（release `looking-glass-k230d-0.2.0` 及以后）根文件系统只读，`/etc/meiso` 位于数据分区。镜像自带
+`/etc/init.d/S90meiso-edge`，它按 `edge.conf` 的 `MEISO_PREFIX` 执行
+`$MEISO_PREFIX/share/meiso/init.d/S90meiso-edge`，不需要再复制启动脚本。
+较早的可写根镜像仍按原方式安装：
+
+```sh
 cp "$EDGE_PREFIX/share/meiso/init.d/S90meiso-edge" /etc/init.d/S90meiso-edge
 chmod 755 /etc/init.d/S90meiso-edge
 ```

@@ -104,7 +104,10 @@ Host 构建/IPC入口属于 Looking Glass 的 `sdc/integrations/meiso/presentati
 同一安装组件在 `share/meiso/` 交付 `edge.conf.example` 和 `init.d/S90meiso-edge`。
 对于使用 `/etc/init.d/rcS` / `rcK` 的 BusyBox 板，部署者先将配置复制为
 `/etc/meiso/edge.conf`（root拥有、目录700、文件600），填写可执行安装前缀、Host地址与
-配对PeerID，再将启动文件以755权限安装为 `/etc/init.d/S90meiso-edge`。
+配对PeerID。k230d-bsp #1 起的镜像（release `looking-glass-k230d-0.2.0` 及以后）根文件系统只读，已自带 `/etc/init.d/S90meiso-edge`
+转发脚本：它读取 `edge.conf` 的 `MEISO_PREFIX` 并执行前缀里的 `share/meiso/init.d/S90meiso-edge`，
+缺配置或脚本时打印 `EDGE_SERVICE_ABSENT` 并退出 0。较早的可写根镜像仍需将启动文件以755权限安装为
+`/etc/init.d/S90meiso-edge`。
 配置是root维护的shell赋值，不包含Wi-Fi凭据；720p与side-by-side是初步默认值。
 驱动需支持NV12源裁剪/步长；当前服务选择Profile v9组合视频、可选原生2D与相机，包含可选CJK16能力。
 相机配置同时指定`MEISO_CAMERA_DEVICE`和`MEISO_CAMERA_PORT`，Host配置同一相机TCP端口；
@@ -118,6 +121,7 @@ Host 构建/IPC入口属于 Looking Glass 的 `sdc/integrations/meiso/presentati
 ```
 
 安装到该init目录即参与下次启动/关闭；需要停用开机启动时，停止后将脚本移出该目录。
+只读根镜像上改为停止后移走 `/etc/meiso/edge.conf`，转发脚本随即不再启动服务。
 `start`复用单PID重连器，网络暂未就绪时后台等待；`status`只表示重连进程存活，
 真正可用仍由Host应用发现与远端Actual/呈现回执确认。脚本核对PID和脚本参数后停止，
 最多等待20秒清理，不强杀显示持有者。更换配置或安装前缀前先正常停止两端。
