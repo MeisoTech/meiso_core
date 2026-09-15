@@ -28,12 +28,13 @@ def main():
     p.add_argument('--control-port',type=port,required=True)
     p.add_argument('--camera-port',type=port)
     p.add_argument('--camera-device',help='Explicit FFmpeg AVFoundation video device (macOS) or V4L2 path (Linux); no audio')
+    p.add_argument('--camera-test-pattern',action='store_true',help='Synthetic FFmpeg test pattern instead of a physical camera')
     p.add_argument('--media-port',type=port,required=True)
     p.add_argument('--peer-media-port',type=port,required=True)
     p.add_argument('service_args',nargs=argparse.REMAINDER)
     a=p.parse_args()
-    if bool(a.camera_port)!=bool(a.camera_device) or (a.camera_port and a.role!='edge'):
-        p.error('camera-port and camera-device must be selected together on Edge')
+    if (a.camera_device and a.camera_test_pattern) or bool(a.camera_port)!=bool(a.camera_device or a.camera_test_pattern) or (a.camera_port and a.role!='edge'):
+        p.error('camera-port requires exactly one camera-device or camera-test-pattern on Edge')
     args=a.service_args[1:] if a.service_args[:1]==['--'] else a.service_args
     if len(args)%2 or any(args[i] in {'--control-fd','--media-fd','--role','--camera-input-fd','--camera-media-fd'} for i in range(0,len(args),2)):
         p.error('service options must be name/value pairs; role and descriptors belong to launcher')
@@ -56,11 +57,14 @@ def main():
             command=[a.service,'--role',a.role,'--control-fd',str(connected.fileno()),
                                '--media-fd',str(media.fileno()),*args]
             if not a.camera_port:os.execv(a.service,command)
-            if sys.platform=='darwin':
+            if a.camera_test_pattern:
+                source=['-re','-f','lavfi','-i','testsrc2=size=320x240:rate=5']
+            elif sys.platform=='darwin':
                 source=['-f','avfoundation','-framerate','30','-video_size','640x480','-i',a.camera_device+':none']
             elif sys.platform.startswith('linux'):
                 source=['-f','v4l2','-framerate','30','-video_size','640x480','-i',a.camera_device]
             else:raise RuntimeError('camera capture supports macOS AVFoundation or Linux V4L2')
+            print('CAMERA_INPUT synthetic='+str(a.camera_test_pattern).lower()+' physical_camera='+str(not a.camera_test_pattern).lower(),flush=True)
             signal.signal(signal.SIGTERM,stop_capture)
             capture=None;edge=None
             with socket.create_connection((str(a.peer),a.camera_port),timeout=10) as camera:

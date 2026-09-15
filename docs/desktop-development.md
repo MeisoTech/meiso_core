@@ -98,6 +98,10 @@ request JPEG. The Edge encodes baseline JPEG at quality 75 and drops an oversize
 frame; it does not accumulate retries or lower the source cadence by queuing old
 images. Capture still runs at the desktop provider rate; this limits transmission,
 not camera power. Omitting the option retains the existing RAW capability.
+For a reproducible synthetic source, use launcher `--camera-test-pattern` instead
+of `--camera-device`, with the same `--camera-port`. It generates an explicitly
+labelled 5 Hz FFmpeg test pattern through the same pixel pipe and media channel.
+This is transport/codec evidence, not physical camera or optical calibration evidence.
 
 The Edge launcher accepts `--camera-device DEVICE --camera-port PORT` before
 the service arguments. On macOS DEVICE is an explicitly selected FFmpeg
