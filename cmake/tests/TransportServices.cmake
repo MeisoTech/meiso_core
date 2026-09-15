@@ -52,11 +52,7 @@ if(UNIX)
     add_executable(
         meiso_composition_media_posix_tcp_test
         tests/test_composition_media_posix_tcp.c
-        adapters/posix/composition_media_posix_tcp.c
-    )
-    target_compile_definitions(
-        meiso_composition_media_posix_tcp_test
-        PRIVATE send=meiso_test_send recv=meiso_test_recv
+        tests/composition_media_posix_tcp_test_adapter.c
     )
     target_link_libraries(
         meiso_composition_media_posix_tcp_test
