@@ -40,7 +40,10 @@ static bool media_capability_valid(
         MEISO_COMPOSITION_CAMERA_MEDIA_MAX_ACCESS_UNIT_BYTES;
     return value != NULL && meiso_composition_profile_private_media_source_valid(value->source) &&
         pixel_mask_valid(value->pixel_formats) &&
-        codec_mask_valid(value->codecs) && value->min_width != 0U &&
+        codec_mask_valid(value->codecs) &&
+        (!(value->codecs & MEISO_COMPOSITION_MEDIA_CODEC_MASK_JPEG) ||
+         (value->source == MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA &&
+          (value->pixel_formats & MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888))) && value->min_width != 0U &&
         value->min_height != 0U && value->min_width <= value->max_width &&
         value->min_height <= value->max_height &&
         value->max_fps_millihz != 0U &&
@@ -54,7 +57,9 @@ static bool media_capability_valid(
 static bool media_desired_valid(const MeisoCompositionMediaDesired *value)
 {
     return value != NULL && pixel_format_valid(value->pixel_format) &&
-        value->codec == MEISO_COMPOSITION_MEDIA_CODEC_RAW &&
+        (value->codec == MEISO_COMPOSITION_MEDIA_CODEC_RAW ||
+         (value->codec == MEISO_COMPOSITION_MEDIA_CODEC_JPEG &&
+          value->pixel_format == MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888)) &&
         value->width != 0U && value->height != 0U &&
         value->fps_millihz != 0U && value->bitrate_bps == 0U &&
         value->gop_frames == 1U &&
@@ -94,8 +99,9 @@ bool meiso_composition_media_desired_supported(
     default:
         return false;
     }
+    if (desired->codec == MEISO_COMPOSITION_MEDIA_CODEC_JPEG) access_unit_bytes = 1U;
     return (capability->pixel_formats & pixel_bit) != 0U &&
-        (capability->codecs & MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW) != 0U &&
+        (capability->codecs & (UINT32_C(1) << (desired->codec - 1U))) != 0U &&
         desired->width >= capability->min_width &&
         desired->width <= capability->max_width &&
         desired->height >= capability->min_height &&

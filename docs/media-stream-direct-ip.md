@@ -75,11 +75,21 @@ unit/fragment extent 和 producer cumulative drop count。仅当全部 bytes 连
 
 当前上限：
 
-- RAW codec，4096-byte maximum fragment；
+- RAW codec，或显式协商的 CameraMedia JPEG 独立帧；4096-byte maximum fragment；
 - RenderMedia: 320×240 RGBA8888，maximum access unit 307200 bytes；
 - CameraMedia: maximum access unit 460800 bytes；
 - 每路 Edge 只有 in-flight + latest，Host 只有 reassembly + latest；
 - 两路在每次成功 fragment completion 后持久 round-robin。
+
+CameraMedia 可声明 `codec=JPEG(2)` / codec mask bit 1。仅搭配
+`pixel_format=RGBA8888`（表示解码后的像素布局），不适用于 RenderMedia；RAW 保持原固定
+像素字节数规则。JPEG 为单个完整 baseline sequential 8-bit、三分量 JPEG，尺寸须与声明一致，
+每帧 KEY、dependency=0、GOP=1；AU 非空且不超过 capability 的 `max_access_unit_bytes`。
+分片/重组层只校验声明、长度和绑定，消费端必须在发布像素前验证 JPEG 内容及尺寸；损坏图像
+丢弃并诊断，不伪造成功帧。旧端未声明 JPEG 时不能发送 JPEG。
+现有 `bitrate_bps=0` 表示无独立编码码率承诺；关键帧通过协商的帧率与 AU 上限限制最坏载荷率，
+`max_bitrate_bps` 不替代链路实测。桌面关键帧部署选择 320×240、500 millihz、30720-byte AU；
+此部署值不扩大 K230D 能力声明。所有权、实际状态、latest 有界队列与失效规则保持原契约。
 
 Latest 已占用时新帧只能整帧替换并增加 drop counter；不追加无界队列。
 `WOULD_BLOCK` 保持当前 fragment 与全部 cursor/counter 不变，不阻塞 control

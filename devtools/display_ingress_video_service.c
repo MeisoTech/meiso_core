@@ -187,7 +187,10 @@ bool service_run_edge_media(Service *s) { return service_fail(s, "application", 
 static MeisoIngressVideo *video;
 static MeisoDisplayCameraChannel *camera;
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+#include "../adapters/desktop/camera_jpeg.h"
 static uint8_t capture_pixels[320*240*4];
+static bool capture_jpeg;
+static uint8_t capture_encoded[30720];
 static size_t capture_used;
 static bool capture_started;
 static uint64_t capture_sequence;
@@ -250,10 +253,21 @@ static bool camera_tick(Service *s)
         capture_used=0; ++capture_sequence; capture_last=now;
         if(now>=capture_next) {
             const MeisoCompositionMediaDesired *d=meiso_display_camera_channel_effective(camera);
+            if(!d) return service_fail(s,"camera","capture-desired");
+            MeisoByteView payload={capture_pixels,sizeof(capture_pixels)};
+            if(d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
+                const size_t size=meiso_desktop_camera_jpeg(capture_pixels,capture_encoded,sizeof(capture_encoded));
+                if(!size) {
+                    capture_next=now+UINT64_C(1000000000000)/d->fps_millihz;
+                    fprintf(stderr,"CAMERA_DROPPED frame=%"PRIu64" reason=jpeg-invalid-or-oversize\n",capture_sequence);
+                    return true;
+                }
+                payload=(MeisoByteView){capture_encoded,size};
+            }
             if(!d || !meiso_display_camera_channel_submit(camera,capture_sequence,(MeisoTimePoint){1,now},
-                (MeisoByteView){capture_pixels,sizeof(capture_pixels)})) return service_fail(s,"camera","capture-submit");
+                payload)) return service_fail(s,"camera","capture-submit");
             capture_next=now+UINT64_C(1000000000000)/d->fps_millihz;
-            fprintf(stderr,"CAMERA_SUBMITTED frame=%"PRIu64" source_ns=%"PRIu64" bytes=%zu fixture=false exposure=unknown\n",capture_sequence,now,sizeof(capture_pixels));
+            fprintf(stderr,"CAMERA_SUBMITTED frame=%"PRIu64" source_ns=%"PRIu64" bytes=%zu codec=%u exposure=unknown\n",capture_sequence,now,payload.size,d->codec);
         }
     }
 #else
@@ -501,6 +515,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--output-height") == 0 && number(argv[i+1],4096U,&n) && n) service.output_height=(uint32_t)n;
         else if (strcmp(argv[i], "--output-directory") == 0) drm_path = argv[i+1];
         else if (strcmp(argv[i], "--camera-input-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_input_fd=(int)n;
+        else if (strcmp(argv[i], "--camera-codec") == 0 && strcmp(argv[i+1],"jpeg")==0) capture_jpeg=true;
 #endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
         else if (strcmp(argv[i], "--camera-media-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_media_fd=(int)n;
@@ -532,6 +547,7 @@ int main(int argc, char **argv)
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
     if ((service.camera_input_fd>=0)!=(service.camera_media_fd>=0)) return 2;
     service.camera_enabled=service.camera_input_fd>=0;
+    if(capture_jpeg && !service.camera_enabled) {fprintf(stderr,"JPEG mode requires camera input\n");return 2;}
     if (service.camera_enabled) {
         const int fds[]={service.control_fd,service.media_fd,service.camera_input_fd,service.camera_media_fd};
         for(unsigned i=0;i<4;++i) for(unsigned j=i+1;j<4;++j) if(fds[i]==fds[j]) return 2;
@@ -541,6 +557,12 @@ int main(int argc, char **argv)
             .pixel_formats=MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888,.codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW,
             .min_width=320,.min_height=240,.max_width=320,.max_height=240,.max_fps_millihz=5000,
             .max_access_unit_bytes=320*240*4,.max_fragment_payload_bytes=4096};
+        if(capture_jpeg) {
+            service.camera_capability.codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_JPEG;
+            service.camera_capability.max_fps_millihz=500;
+            service.camera_capability.max_access_unit_bytes=sizeof(capture_encoded);
+            service.camera_capability.max_bitrate_bps=150000;
+        }
     }
     if (strcmp(drm_path,"/dev/dri/card0")==0) {
         fprintf(stderr,"desktop Edge requires an explicit new --output-directory\n"); return 2;

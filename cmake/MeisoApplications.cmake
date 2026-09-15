@@ -345,19 +345,24 @@ if(UNIX)
     if(MEISO_BUILD_DESKTOP_EDGE)
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(MEISO_DESKTOP_AV REQUIRED IMPORTED_TARGET libavcodec libavutil libswscale)
+        find_package(JPEG REQUIRED)
         add_executable(meiso_desktop_edge ${MEISO_VIDEO_SERVICE_SOURCES}
             devtools/display_ingress_video_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
             targets/k230d-linux/display_ingress_scene_raster.c
-            adapters/desktop/display_ingress_video_backend.c)
+            adapters/desktop/display_ingress_video_backend.c adapters/desktop/camera_jpeg.c)
         target_compile_definitions(meiso_desktop_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
             MEISO_DISPLAY_INGRESS_DESKTOP_EDGE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
         target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter meiso_display_camera_channel
             meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
-            PkgConfig::MEISO_DESKTOP_AV)
+            PkgConfig::MEISO_DESKTOP_AV JPEG::JPEG)
         meiso_enable_warnings(meiso_desktop_edge)
         if(BUILD_TESTING)
+            add_executable(meiso_desktop_camera_jpeg_test tests/test_desktop_camera_jpeg.c adapters/desktop/camera_jpeg.c)
+            target_link_libraries(meiso_desktop_camera_jpeg_test PRIVATE JPEG::JPEG)
+            meiso_enable_warnings(meiso_desktop_camera_jpeg_test)
+            add_test(NAME meiso_desktop_camera_jpeg_test COMMAND meiso_desktop_camera_jpeg_test)
             add_executable(meiso_desktop_video_backend_test tests/test_desktop_video_backend.c
                 adapters/desktop/display_ingress_video_backend.c
                 targets/k230d-linux/display_ingress_overlay_raster.c

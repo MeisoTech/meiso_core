@@ -57,6 +57,13 @@ static bool access_unit_size_valid(const MeisoCompositionMediaFrame *value)
     if (value == NULL || value->width == 0U || value->height == 0U) {
         return false;
     }
+    if (value->codec == MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
+        return value->binding.source == MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA &&
+            value->pixel_format == MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888 &&
+            value->access_unit_bytes > 0U &&
+            value->access_unit_bytes <= MEISO_COMPOSITION_CAMERA_MEDIA_MAX_ACCESS_UNIT_BYTES;
+    }
+    if (value->codec != MEISO_COMPOSITION_MEDIA_CODEC_RAW) return false;
     pixels = (uint64_t)value->width * value->height;
     switch (value->pixel_format) {
     case MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888:
@@ -109,7 +116,6 @@ static bool frame_valid(const MeisoCompositionMediaFrame *value)
         value->frame_sequence == 0U ||
         !meiso_time_point_valid(value->source_time) ||
         !frame_scene_binding_valid(value) ||
-        value->codec != MEISO_COMPOSITION_MEDIA_CODEC_RAW ||
         !access_unit_size_valid(value) || value->fragment.data == NULL ||
         value->fragment.size == 0U ||
         value->fragment.size >

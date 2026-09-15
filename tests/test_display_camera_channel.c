@@ -50,15 +50,17 @@ static void tick(void)
 int main(int argc,char **argv)
 {
     const bool nv12=argc>=2 && strcmp(argv[1],"--nv12")==0;
+    const bool jpeg=argc>=2 && strcmp(argv[1],"--jpeg")==0;
     application=argc==3 && strcmp(argv[2],"--application")==0;
-    CHECK(argc==1 || (argc==2 && nv12) || (application && (nv12 || strcmp(argv[1],"--rgba")==0)));
-    const size_t pixel_bytes=nv12?115200U:307200U;
+    CHECK(argc==1 || (argc==2 && (nv12 || jpeg)) || (application && (nv12 || jpeg || strcmp(argv[1],"--rgba")==0)));
+    const size_t pixel_bytes=jpeg?10013U:nv12?115200U:307200U;
     init(&h,true);init(&e,false);transfer(&h,&e);transfer(&e,&h);transfer(&h,&e);transfer(&e,&h);
     runtime(&h);runtime(&e);
     MeisoDisplayIngressCatalogConfig v={1,{1280,720,30000,131072,1024,1,MEISO_STREAM_DEADLINE_UNSUPPORTED,MEISO_DISPLAY_INGRESS_FRAME_H264_IDR}};
     MeisoCompositionMediaCapability c={.source=MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,.pixel_formats=nv12?MEISO_COMPOSITION_MEDIA_PIXEL_MASK_NV12:MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888,.codecs=1,
         .min_width=320,.min_height=240,.max_width=320,.max_height=240,.max_fps_millihz=2000,
-        .max_access_unit_bytes=(uint32_t)pixel_bytes,.max_fragment_payload_bytes=4096};
+        .max_access_unit_bytes=jpeg?30720U:(uint32_t)pixel_bytes,.max_fragment_payload_bytes=4096};
+    if(jpeg) {c.codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_JPEG;c.max_fps_millihz=500;}
     uint8_t caps[148];MeisoRuntimeEndpointDescriptor ep[3];MeisoRuntimeV4RouteDescriptor rt[10];
     if(application){
         const MeisoDisplayApplicationCatalogConfig all={.video=v,.output_width=1920,.output_height=1080,.video_layout=1,
@@ -75,6 +77,16 @@ int main(int argc,char **argv)
     int host_fd=accept(listener,NULL,NULL);CHECK(host_fd>=0);close(listener);
     CHECK(fcntl(edge_fd,F_SETFL,O_NONBLOCK)==0 && fcntl(host_fd,F_SETFL,O_NONBLOCK)==0);
     MeisoDisplayCameraChannelConfig hc={.session=h.s,.runtime=h.r,.media_fd=host_fd,.desired={nv12?MEISO_COMPOSITION_MEDIA_PIXEL_NV12:MEISO_COMPOSITION_MEDIA_PIXEL_RGBA8888,1,320,240,2000,0,1,0}};
+    if(jpeg) {
+        hc.desired.codec=MEISO_COMPOSITION_MEDIA_CODEC_JPEG;hc.desired.fps_millihz=500;
+        CHECK(meiso_composition_media_desired_supported(&c,&hc.desired));
+        MeisoCompositionMediaCapability old=c;old.codecs=MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW;
+        CHECK(!meiso_composition_media_desired_supported(&old,&hc.desired));
+        MeisoCompositionMediaDesired invalid=hc.desired;invalid.pixel_format=MEISO_COMPOSITION_MEDIA_PIXEL_NV12;
+        CHECK(!meiso_composition_media_desired_supported(&c,&invalid));
+        invalid=hc.desired;invalid.fps_millihz=501;
+        CHECK(!meiso_composition_media_desired_supported(&c,&invalid));
+    }
     MeisoDisplayCameraChannelConfig ec={.session=e.s,.runtime=e.r,.media_fd=edge_fd,.edge_nonce={91,92}};
     h.c=meiso_display_camera_channel_open(&hc);e.c=meiso_display_camera_channel_open(&ec);CHECK(h.c && e.c);
     CHECK(!meiso_display_camera_channel_ready(h.c) && !meiso_display_camera_channel_ready(e.c));
@@ -82,19 +94,28 @@ int main(int argc,char **argv)
     CHECK(meiso_display_camera_channel_ready(h.c) && meiso_display_camera_channel_ready(e.c));
     CHECK(!meiso_display_camera_channel_peer_eof(h.c));
     uint8_t pixels[307200];for(unsigned i=0;i<pixel_bytes;++i)pixels[i]=(uint8_t)i;
+    if(jpeg) {
+        /* Framing transports opaque JPEG bytes; the consumer validates the image. */
+        CHECK(!meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,30721}));
+        CHECK(!meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,0}));
+    }
     CHECK(meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,pixel_bytes}));
     CHECK(!meiso_display_camera_channel_submit(e.c,1,(MeisoTimePoint){9,100},(MeisoByteView){pixels,pixel_bytes}));
     MeisoCompositionMediaLatestView frame;bool found=false;
     for(unsigned i=0;i<2000 && !found;++i) {tick();found=meiso_display_camera_channel_latest(h.c,&frame);}
     CHECK(found && frame.unit.frame_sequence==1 && frame.unit.source_time.clock_epoch==9 && frame.unit.source_time.monotonic_ns==100);
     CHECK(frame.unit.pixel_format==hc.desired.pixel_format);
+    CHECK(frame.unit.codec==hc.desired.codec);
     CHECK(frame.unit.access_unit.size==pixel_bytes && !memcmp(frame.unit.access_unit.data,pixels,pixel_bytes));
     MeisoCompositionMediaFrameRef wrong=frame.ref;wrong.frame_sequence=2;
     CHECK(!meiso_display_camera_channel_release(h.c,&wrong));CHECK(meiso_display_camera_channel_release(h.c,&frame.ref));
     CHECK(!meiso_display_camera_channel_latest(h.c,&frame));
-    CHECK(meiso_display_camera_channel_submit(e.c,3,(MeisoTimePoint){9,300},(MeisoByteView){pixels,pixel_bytes}));
+    const size_t second_bytes=jpeg?30720U:pixel_bytes;
+    if(jpeg) memset(pixels,37,second_bytes);
+    CHECK(meiso_display_camera_channel_submit(e.c,3,(MeisoTimePoint){9,300},(MeisoByteView){pixels,second_bytes}));
     found=false;for(unsigned i=0;i<2000 && !found;++i) {tick();found=meiso_display_camera_channel_latest(h.c,&frame);}
     CHECK(found && frame.unit.frame_sequence==3 && frame.unit.producer_dropped_frames==1);
+    CHECK(frame.unit.access_unit.size==second_bytes && !memcmp(frame.unit.access_unit.data,pixels,second_bytes));
     meiso_display_camera_channel_close(e.c);close(edge_fd);
     bool lost=false;for(unsigned i=0;i<100 && !lost;++i) {lost=!meiso_display_camera_channel_poll(h.c);(void)poll(NULL,0,1);}
     CHECK(lost && !meiso_display_camera_channel_ready(h.c) && !meiso_display_camera_channel_latest(h.c,&frame));

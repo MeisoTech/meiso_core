@@ -192,9 +192,9 @@ receive_frame(MeisoCompositionMediaTransport *transport, MeisoByteView packet)
         frame.codec != route->config.effective.codec ||
         frame.width != route->config.effective.width ||
         frame.height != route->config.effective.height ||
-        frame.access_unit_bytes !=
+        (frame.codec != MEISO_COMPOSITION_MEDIA_CODEC_JPEG && frame.access_unit_bytes !=
             meiso_composition_media_transport_private_access_unit_bytes(
-                &route->config.effective) ||
+                &route->config.effective)) ||
         frame.access_unit_bytes > route->primary.capacity ||
         frame.fragment.size >
             route->config.capability.max_fragment_payload_bytes) {

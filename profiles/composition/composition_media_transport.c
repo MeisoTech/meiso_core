@@ -105,6 +105,7 @@ static bool route_config_valid(const MeisoCompositionMediaOpen *scope,
         wire_size != sizeof(binding_wire)) {
         return false;
     }
+    if (route->effective.codec == MEISO_COMPOSITION_MEDIA_CODEC_JPEG) return true;
     return meiso_composition_media_transport_private_access_unit_bytes(
                &route->effective) != 0U &&
            meiso_composition_media_transport_private_access_unit_bytes(

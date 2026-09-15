@@ -92,6 +92,13 @@ does not supply measured optical calibration. On the K230D init deployment,
 
 ## Optional local camera uplink
 
+Pass `--camera-codec jpeg` in the Edge service arguments (after `--`) to select
+320×240 JPEG keyframes at no more than 0.5 Hz / 30 KiB each. The matched Host must
+request JPEG. The Edge encodes baseline JPEG at quality 75 and drops an oversize
+frame; it does not accumulate retries or lower the source cadence by queuing old
+images. Capture still runs at the desktop provider rate; this limits transmission,
+not camera power. Omitting the option retains the existing RAW capability.
+
 The Edge launcher accepts `--camera-device DEVICE --camera-port PORT` before
 the service arguments. On macOS DEVICE is an explicitly selected FFmpeg
 AVFoundation video device (enumerate with `ffmpeg -f avfoundation -list_devices

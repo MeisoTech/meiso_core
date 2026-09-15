@@ -70,7 +70,8 @@ enum {
 
 typedef uint16_t MeisoCompositionMediaCodec;
 enum {
-    MEISO_COMPOSITION_MEDIA_CODEC_RAW = 1
+    MEISO_COMPOSITION_MEDIA_CODEC_RAW = 1,
+    MEISO_COMPOSITION_MEDIA_CODEC_JPEG = 2
 };
 
 typedef uint32_t MeisoCompositionMediaPixelFormatMask;
@@ -85,8 +86,9 @@ enum {
 typedef uint32_t MeisoCompositionMediaCodecMask;
 enum {
     MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW = UINT32_C(1) << 0U,
+    MEISO_COMPOSITION_MEDIA_CODEC_MASK_JPEG = UINT32_C(1) << 1U,
     MEISO_COMPOSITION_MEDIA_CODEC_MASK_ALL =
-        MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW
+        MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW | MEISO_COMPOSITION_MEDIA_CODEC_MASK_JPEG
 };
 
 typedef struct {

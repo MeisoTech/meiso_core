@@ -166,6 +166,8 @@ if(TARGET meiso_display_camera_channel)
     meiso_add_c_test(meiso_display_camera_channel_test tests/test_display_camera_channel.c
         adapter meiso_display_camera_channel)
     add_test(NAME meiso_display_camera_channel_nv12_test COMMAND meiso_display_camera_channel_test --nv12)
+    add_test(NAME meiso_display_camera_channel_jpeg_test COMMAND meiso_display_camera_channel_test --jpeg)
+    add_test(NAME meiso_display_camera_application_jpeg_test COMMAND meiso_display_camera_channel_test --jpeg --application)
     add_test(NAME meiso_display_camera_application_rgba_test COMMAND meiso_display_camera_channel_test --rgba --application)
     add_test(NAME meiso_display_camera_application_nv12_test COMMAND meiso_display_camera_channel_test --nv12 --application)
 endif()

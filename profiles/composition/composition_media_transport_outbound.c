@@ -389,9 +389,10 @@ MeisoCompositionMediaTransportStatus meiso_composition_media_transport_submit(
         (unit->flags & (MeisoCompositionMediaFrameFlags) ~(
                            MEISO_COMPOSITION_MEDIA_FRAME_KEY |
                            MEISO_COMPOSITION_MEDIA_FRAME_RECOVERY)) != 0U ||
-        unit->access_unit.size !=
+        unit->access_unit.size == 0U ||
+        (unit->codec != MEISO_COMPOSITION_MEDIA_CODEC_JPEG && unit->access_unit.size !=
             meiso_composition_media_transport_private_access_unit_bytes(
-                &route->config.effective) ||
+                &route->config.effective)) ||
         unit->access_unit.size > route->primary.capacity) {
         return MEISO_COMPOSITION_MEDIA_TRANSPORT_MALFORMED;
     }
