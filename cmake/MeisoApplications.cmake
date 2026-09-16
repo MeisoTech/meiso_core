@@ -6,33 +6,6 @@ option(
     "Expose the K230D Linux cross-application target set"
     OFF
 )
-option(
-    MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER
-    "Build the explicit K230D read-only libdrm topology admission runner"
-    OFF
-)
-option(
-    MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER
-    "Build the explicit K230D libdrm single-plane TEST_ONLY-only runner"
-    OFF
-)
-option(
-    MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR
-    "Build the explicit K230D supervised single-plane TEST_ONLY-only runner"
-    OFF
-)
-
-set(
-    MEISO_K230D_LIBDRM_INCLUDE_DIR
-    ""
-    CACHE PATH "Explicit target libdrm source/include root for K230D DRM runners"
-)
-set(
-    MEISO_K230D_LIBDRM_LIBRARY
-    ""
-    CACHE FILEPATH "Explicit target libdrm shared library for K230D DRM runners"
-)
-
 if(MEISO_BUILD_K230D_LINUX_APPS)
     if(NOT MEISO_K230_LINUX_TARGET)
         message(
@@ -56,189 +29,6 @@ if(MEISO_BUILD_K230D_LINUX_APPS)
     meiso_set_target_folder(
         meiso_k230d_linux_target_contract
         "Meiso/Targets/K230D Linux"
-    )
-endif()
-
-if(MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER OR
-   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER OR
-   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
-    if(NOT MEISO_BUILD_K230D_LINUX_APPS OR
-       NOT MEISO_K230_LINUX_TARGET OR
-       NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
-       NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "riscv64")
-        message(
-            FATAL_ERROR
-            "K230D DRM native runners require the K230D Linux/riscv64 application contract"
-        )
-    endif()
-    if(NOT IS_ABSOLUTE "${MEISO_K230D_LIBDRM_INCLUDE_DIR}" OR
-       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/xf86drm.h" OR
-       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/xf86drmMode.h" OR
-       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm/drm.h" OR
-       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm/drm_mode.h" OR
-       NOT EXISTS "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm/drm_fourcc.h")
-        message(
-            FATAL_ERROR
-            "MEISO_K230D_LIBDRM_INCLUDE_DIR must be an absolute libdrm source/include root"
-        )
-    endif()
-    if(NOT IS_ABSOLUTE "${MEISO_K230D_LIBDRM_LIBRARY}" OR
-       NOT EXISTS "${MEISO_K230D_LIBDRM_LIBRARY}" OR
-       IS_SYMLINK "${MEISO_K230D_LIBDRM_LIBRARY}" OR
-       IS_DIRECTORY "${MEISO_K230D_LIBDRM_LIBRARY}")
-        message(
-            FATAL_ERROR
-            "MEISO_K230D_LIBDRM_LIBRARY must be an absolute regular target library"
-        )
-    endif()
-
-    add_library(meiso_k230d_target_libdrm SHARED IMPORTED)
-    set_target_properties(
-        meiso_k230d_target_libdrm
-        PROPERTIES IMPORTED_LOCATION "${MEISO_K230D_LIBDRM_LIBRARY}"
-    )
-    target_include_directories(
-        meiso_k230d_target_libdrm
-        SYSTEM INTERFACE
-            "${MEISO_K230D_LIBDRM_INCLUDE_DIR}"
-            "${MEISO_K230D_LIBDRM_INCLUDE_DIR}/include/drm"
-    )
-
-    add_library(
-        meiso_k230d_drm_libdrm_topology STATIC
-        targets/k230d-linux/adapters/drm_scanout_libdrm_topology.c
-    )
-    target_include_directories(
-        meiso_k230d_drm_libdrm_topology
-        PRIVATE targets/k230d-linux/adapters
-    )
-    target_link_libraries(
-        meiso_k230d_drm_libdrm_topology
-        PRIVATE
-            meiso_k230d_drm_scanout
-            meiso_k230d_linux_target_contract
-            meiso_k230d_target_libdrm
-    )
-    meiso_enable_warnings(meiso_k230d_drm_libdrm_topology)
-    meiso_set_target_folder(
-        meiso_k230d_drm_libdrm_topology
-        "Meiso/Adapters/Linux/Native"
-    )
-
-endif()
-
-if(MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER)
-
-    add_executable(
-        meiso_k230d_drm_topology_admission_once
-        targets/k230d-linux/drm_topology_admission_once.c
-    )
-    target_include_directories(
-        meiso_k230d_drm_topology_admission_once
-        PRIVATE targets/k230d-linux/adapters
-    )
-    target_link_libraries(
-        meiso_k230d_drm_topology_admission_once
-        PRIVATE
-            meiso_k230d_drm_libdrm_topology
-            meiso_k230d_drm_scanout
-            meiso_k230d_linux_target_contract
-    )
-    set_target_properties(
-        meiso_k230d_drm_topology_admission_once
-        PROPERTIES SKIP_BUILD_RPATH TRUE
-    )
-    meiso_enable_warnings(meiso_k230d_drm_topology_admission_once)
-    meiso_set_target_folder(
-        meiso_k230d_drm_topology_admission_once
-        "Meiso/Applications/Edge/Evidence"
-    )
-endif()
-
-if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER OR
-   MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
-    add_library(
-        meiso_k230d_drm_libdrm_single_plane_test_only STATIC
-        targets/k230d-linux/adapters/drm_scanout_libdrm_single_plane_test_only.c
-    )
-    target_include_directories(
-        meiso_k230d_drm_libdrm_single_plane_test_only
-        PRIVATE targets/k230d-linux/adapters
-    )
-    target_link_libraries(
-        meiso_k230d_drm_libdrm_single_plane_test_only
-        PRIVATE
-            meiso_k230d_drm_libdrm_topology
-            meiso_k230d_drm_scanout
-            meiso_k230d_linux_target_contract
-            meiso_k230d_target_libdrm
-    )
-    meiso_enable_warnings(meiso_k230d_drm_libdrm_single_plane_test_only)
-    meiso_set_target_folder(
-        meiso_k230d_drm_libdrm_single_plane_test_only
-        "Meiso/Adapters/Linux/Native"
-    )
-endif()
-
-if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER)
-    add_executable(
-        meiso_k230d_drm_single_plane_test_only_once
-        targets/k230d-linux/drm_single_plane_test_only_once.c
-    )
-    target_include_directories(
-        meiso_k230d_drm_single_plane_test_only_once
-        PRIVATE targets/k230d-linux/adapters
-    )
-    target_link_libraries(
-        meiso_k230d_drm_single_plane_test_only_once
-        PRIVATE
-            meiso_k230d_drm_libdrm_single_plane_test_only
-            meiso_k230d_drm_scanout
-            meiso_k230d_linux_target_contract
-    )
-    set_target_properties(
-        meiso_k230d_drm_single_plane_test_only_once
-        PROPERTIES SKIP_BUILD_RPATH TRUE
-    )
-    meiso_enable_warnings(meiso_k230d_drm_single_plane_test_only_once)
-    meiso_set_target_folder(
-        meiso_k230d_drm_single_plane_test_only_once
-        "Meiso/Applications/Edge/Evidence"
-    )
-endif()
-
-if(MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
-    add_executable(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-        targets/k230d-linux/drm_single_plane_test_only_once.c
-        targets/k230d-linux/drm_single_plane_test_only_supervisor.c
-        targets/k230d-linux/drm_single_plane_test_only_supervisor_linux.c
-    )
-    target_compile_definitions(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-        PRIVATE MEISO_K230D_DRM_SINGLE_PLANE_TEST_ONLY_ONCE_NO_MAIN=1
-    )
-    target_include_directories(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-        PRIVATE targets/k230d-linux/adapters
-    )
-    target_link_libraries(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-        PRIVATE
-            meiso_k230d_drm_libdrm_single_plane_test_only
-            meiso_k230d_drm_scanout
-            meiso_k230d_linux_target_contract
-    )
-    set_target_properties(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-        PROPERTIES SKIP_BUILD_RPATH TRUE
-    )
-    meiso_enable_warnings(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-    )
-    meiso_set_target_folder(
-        meiso_k230d_drm_single_plane_test_only_supervised_once
-        "Meiso/Applications/Edge/Evidence"
     )
 endif()
 
@@ -339,7 +129,7 @@ if(UNIX)
     add_executable(meiso_display_ingress_video_host ${MEISO_VIDEO_SERVICE_SOURCES})
     target_compile_definitions(meiso_display_ingress_video_host PRIVATE MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1)
     target_link_libraries(meiso_display_ingress_video_host PRIVATE meiso_posix_tcp_adapter
-        meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input)
+        meiso_display_ingress_media_posix_udp_adapter)
     meiso_enable_warnings(meiso_display_ingress_video_host)
     option(MEISO_BUILD_DESKTOP_EDGE "Build portable software-decoded Display Ingress Edge" OFF)
     if(MEISO_BUILD_DESKTOP_EDGE)
@@ -355,7 +145,7 @@ if(UNIX)
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
             MEISO_DISPLAY_INGRESS_DESKTOP_EDGE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
         target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter meiso_display_camera_channel
-            meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
+            meiso_display_ingress_media_posix_udp_adapter
             PkgConfig::MEISO_DESKTOP_AV JPEG::JPEG)
         meiso_enable_warnings(meiso_desktop_edge)
         if(BUILD_TESTING)
@@ -377,7 +167,7 @@ if(UNIX)
         target_compile_definitions(meiso_desktop_host PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
         target_link_libraries(meiso_desktop_host PRIVATE meiso_posix_tcp_adapter
-            meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input)
+            meiso_display_ingress_media_posix_udp_adapter)
         meiso_enable_warnings(meiso_desktop_host)
         install(PROGRAMS devtools/desktop/launch.py DESTINATION "${CMAKE_INSTALL_BINDIR}"
             RENAME meiso-desktop-launch COMPONENT DesktopRuntime)
@@ -406,7 +196,7 @@ if(UNIX)
             "${MEISO_DISPLAY_DRM_INCLUDE_DIR}" "${MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR}")
         target_link_libraries(meiso_display_ingress_video_edge PRIVATE meiso_posix_tcp_adapter
             meiso_display_camera_channel meiso_camera_v4l2_adapter
-            meiso_display_ingress_media_posix_udp_adapter meiso_display_ingress_host_fixture_input
+            meiso_display_ingress_media_posix_udp_adapter
             "${MEISO_DISPLAY_DRM_LIBRARY}" JPEG::JPEG)
         set_target_properties(meiso_display_ingress_video_edge PROPERTIES SKIP_BUILD_RPATH TRUE)
         meiso_enable_warnings(meiso_display_ingress_video_edge)

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "display_ingress_simulated_service_private.h"
+#include "../profiles/display_ingress/display_ingress_profile_private.h"
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
 #include <meiso/integrations/display_camera_channel.h>
 #ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
@@ -53,7 +54,7 @@ static bool add_unit(size_t begin, size_t end)
     u->offset = begin; u->size = end - begin;
     MeisoByteView bytes = {source + begin, u->size};
     if (!meiso_display_ingress_h264_idr_access_unit_valid(bytes) ||
-        !meiso_display_ingress_host_fixture_input_sha256(bytes, u->digest)) return false;
+        !meiso_display_ingress_private_payload_sha256(bytes, u->digest)) return false;
     ++unit_count;
     return true;
 }
@@ -271,7 +272,7 @@ static bool camera_tick(Service *s)
             fprintf(stderr,"CAMERA_SUBMITTED frame=%"PRIu64" source_ns=%"PRIu64" bytes=%zu codec=%u exposure=unknown\n",capture_sequence,now,payload.size,d->codec);
             if(d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
                 uint8_t digest[32];char hex[65];
-                if(!meiso_display_ingress_host_fixture_input_sha256(payload,digest)) return service_fail(s,"camera","digest");
+                if(!meiso_display_ingress_private_payload_sha256(payload,digest)) return service_fail(s,"camera","digest");
                 for(unsigned i=0;i<32;++i)(void)snprintf(hex+2*i,3,"%02x",digest[i]);
                 fprintf(stderr,"CAMERA_JPEG frame=%"PRIu64" sha256=%s\n",capture_sequence,hex);
             }
@@ -304,7 +305,7 @@ static bool camera_tick(Service *s)
                         frame.ref.driver_sequence,frame.source_time.monotonic_ns,payload.size,d->codec,service_now_ns()-encode_started,frame.timestamp_provenance,frame.sequence_provenance);
                     if(d->codec==MEISO_COMPOSITION_MEDIA_CODEC_JPEG) {
                         uint8_t digest[32];char hex[65];
-                        ok=meiso_display_ingress_host_fixture_input_sha256(payload,digest);
+                        ok=meiso_display_ingress_private_payload_sha256(payload,digest);
                         if(ok) {
                             for(unsigned i=0;i<32;++i)(void)snprintf(hex+2*i,3,"%02x",digest[i]);
                             fprintf(stderr,"CAMERA_JPEG frame=%u sha256=%s\n",frame.ref.driver_sequence,hex);
@@ -368,7 +369,7 @@ static bool decode_latest(Service *s)
     ledger[slot].sequence = latest.frame.frame_sequence;
     ledger[slot].projection_present=projection_present;
     ledger[slot].projection=projection;
-    if (!meiso_display_ingress_host_fixture_input_sha256(latest.frame.access_unit, ledger[slot].digest))
+    if (!meiso_display_ingress_private_payload_sha256(latest.frame.access_unit, ledger[slot].digest))
         return service_fail(s, "application", "video-digest");
     ++ledger_count; ++submitted;
     return meiso_display_ingress_media_transport_release_latest(s->media, &latest.ref) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK ||

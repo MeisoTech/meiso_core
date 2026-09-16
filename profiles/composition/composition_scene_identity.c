@@ -1,5 +1,5 @@
 #include <meiso/profiles/composition/scene.h>
-#include "composition_sha256_private.h"
+#include "../../src/core/meiso_sha256_private.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -34,7 +34,7 @@ bool meiso_composition_scene_plan_digest(
 )
 {
     MeisoCompositionScenePresentationPlan canonical;
-    MeisoCompositionSha256 sha;
+    MeisoSha256 sha;
     uint8_t wire[MEISO_COMPOSITION_SCENE_PRESENTATION_PLAN_WIRE_SIZE];
     size_t wire_size = 0U;
 
@@ -59,9 +59,9 @@ bool meiso_composition_scene_plan_digest(
     memset(wire + 24U, 0, MEISO_SHA256_DIGEST_SIZE);
     wire[75U] = 0U;
     memset(wire + 96U, 0, MEISO_SHA256_DIGEST_SIZE);
-    meiso_composition_sha256_init(&sha);
-    meiso_composition_sha256_update(&sha, wire, sizeof(wire));
-    meiso_composition_sha256_final(&sha, out_digest);
+    meiso_sha256_init(&sha);
+    meiso_sha256_update(&sha, wire, sizeof(wire));
+    meiso_sha256_final(&sha, out_digest);
     return true;
 }
 
@@ -72,7 +72,7 @@ bool meiso_composition_scene_mesh_content_id(
 {
     MeisoCompositionSceneMeshView mesh;
     MeisoContentId content_id;
-    MeisoCompositionSha256 sha;
+    MeisoSha256 sha;
 
     if (out_content_id == NULL || content.data == NULL ||
         ranges_overlap(content.data, content.size,
@@ -85,9 +85,9 @@ bool meiso_composition_scene_mesh_content_id(
     memset(&content_id, 0, sizeof(content_id));
     content_id.algorithm = MEISO_CONTENT_ALGORITHM_SHA256;
     content_id.digest_size = MEISO_SHA256_DIGEST_SIZE;
-    meiso_composition_sha256_init(&sha);
-    meiso_composition_sha256_update(&sha, content.data, content.size);
-    meiso_composition_sha256_final(&sha, content_id.digest);
+    meiso_sha256_init(&sha);
+    meiso_sha256_update(&sha, content.data, content.size);
+    meiso_sha256_final(&sha, content_id.digest);
     *out_content_id = content_id;
     return true;
 }

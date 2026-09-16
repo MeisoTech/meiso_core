@@ -1,5 +1,7 @@
 # Portable Core, Session, and Runtime contract lanes.
 
+meiso_add_c_test(meiso_sha256_test tests/test_sha256.c core meiso_core_resources)
+
 meiso_add_c_test(
     meiso_resource_test tests/test_resource.c core meiso_core_resources
 )

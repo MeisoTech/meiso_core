@@ -34,7 +34,7 @@ static void build_result(MeisoCompositionCpuRasterRenderer *renderer,
                          uint64_t render_end_monotonic_ns)
 {
     MeisoCompositionSceneRenderResult *result = &renderer->result_scratch;
-    MeisoCompositionCpuRasterSha256 sha;
+    MeisoSha256 sha;
     uint32_t y;
 
     memset(result, 0, sizeof(*result));
@@ -64,11 +64,11 @@ static void build_result(MeisoCompositionCpuRasterRenderer *renderer,
         MEISO_COMPOSITION_SCENE_THUMBNAIL_WIDTH * 2U;
     result->thumbnail_byte_size = MEISO_COMPOSITION_SCENE_THUMBNAIL_BYTE_SIZE;
 
-    meiso_composition_cpu_raster_renderer_private_sha256_init(&sha);
-    meiso_composition_cpu_raster_renderer_private_sha256_update(
+    meiso_sha256_init(&sha);
+    meiso_sha256_update(
         &sha, renderer->colors[target_slot],
         MEISO_COMPOSITION_CPU_RASTER_COLOR_TARGET_BYTE_SIZE);
-    meiso_composition_cpu_raster_renderer_private_sha256_final(
+    meiso_sha256_final(
         &sha, result->full_target_sha256);
     for (y = 0U; y < MEISO_COMPOSITION_SCENE_THUMBNAIL_HEIGHT; ++y) {
         uint32_t x;

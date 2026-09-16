@@ -13,5 +13,5 @@ if [ -z "${MEISO_K230_LINUX_CC:-}" ] ||
 fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-"$script_dir/_build_cmake_target.sh" \
-    meiso_k230d_drm_topology_admission_once "$1"
+"$script_dir/../../targets/k230d-linux/_build_cmake_target.sh" \
+    meiso_k230d_drm_single_plane_test_only_once "$1"

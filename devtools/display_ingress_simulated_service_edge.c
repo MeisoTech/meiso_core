@@ -1,4 +1,5 @@
 #include "display_ingress_simulated_service_private.h"
+#include "../profiles/display_ingress/display_ingress_profile_private.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -268,7 +269,7 @@ static bool consume_latest(Service *service)
         !meiso_time_point_valid(latest.frame.source_time) ||
         latest.frame.sender_deadline.present ||
         latest.frame.rgba_frame.size != SERVICE_FRAME_BYTES ||
-        !meiso_display_ingress_host_fixture_input_sha256(
+        !meiso_display_ingress_private_payload_sha256(
             latest.frame.rgba_frame, digest
         )) {
         return service_fail(service, "media", "transfer");

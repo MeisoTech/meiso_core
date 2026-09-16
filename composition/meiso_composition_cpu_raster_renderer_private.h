@@ -8,6 +8,7 @@
  */
 
 #include <meiso/composition/cpu_raster_renderer.h>
+#include "../src/core/meiso_sha256_private.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -62,13 +63,6 @@ struct MeisoCompositionCpuRasterRenderer {
     MeisoCompositionSceneRenderResult latest_result;
     MeisoCompositionCpuRasterStats stats;
 };
-
-typedef struct {
-    uint32_t state[8];
-    uint64_t total_bytes;
-    uint8_t block[64];
-    size_t block_size;
-} MeisoCompositionCpuRasterSha256;
 
 typedef struct {
     double position[3];
@@ -136,13 +130,6 @@ uint32_t
 meiso_composition_cpu_raster_renderer_private_read_be_u32(const uint8_t *input);
 void meiso_composition_cpu_raster_renderer_private_write_be_u32(uint8_t *output,
                                                                 uint32_t value);
-void meiso_composition_cpu_raster_renderer_private_sha256_init(
-    MeisoCompositionCpuRasterSha256 *sha);
-void meiso_composition_cpu_raster_renderer_private_sha256_update(
-    MeisoCompositionCpuRasterSha256 *sha, const uint8_t *data, size_t size);
-void meiso_composition_cpu_raster_renderer_private_sha256_final(
-    MeisoCompositionCpuRasterSha256 *sha,
-    uint8_t digest[MEISO_SHA256_DIGEST_SIZE]);
 
 bool meiso_composition_cpu_raster_renderer_private_prepare_camera(
     const MeisoCompositionSceneCamera *source,

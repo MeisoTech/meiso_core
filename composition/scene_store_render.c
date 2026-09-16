@@ -1,6 +1,6 @@
 #include "meiso_composition_scene_store_private.h"
 
-#include "composition_sha256_private.h"
+#include "../src/core/meiso_sha256_private.h"
 
 /* Fake rendering owns deterministic pixels and published-result bookkeeping. */
 
@@ -80,7 +80,7 @@ MeisoCompositionSceneRenderStatus meiso_composition_scene_store_fake_render(
     MeisoCompositionSceneRenderResult *out_result)
 {
     const MeisoCompositionSceneStoreWorld *world;
-    MeisoCompositionSha256 sha;
+    MeisoSha256 sha;
     uint64_t seed;
     uint32_t y;
 
@@ -139,16 +139,16 @@ MeisoCompositionSceneRenderStatus meiso_composition_scene_store_fake_render(
     out_result->thumbnail_byte_size =
         MEISO_COMPOSITION_SCENE_THUMBNAIL_BYTE_SIZE;
 
-    meiso_composition_sha256_init(&sha);
+    meiso_sha256_init(&sha);
     for (y = 0U; y < MEISO_COMPOSITION_SCENE_TARGET_HEIGHT; ++y) {
         uint32_t x;
         for (x = 0U; x < MEISO_COMPOSITION_SCENE_TARGET_WIDTH; ++x) {
             uint8_t rgba[4];
             fake_pixel(seed, x, y, rgba);
-            meiso_composition_sha256_update(&sha, rgba, sizeof(rgba));
+            meiso_sha256_update(&sha, rgba, sizeof(rgba));
         }
     }
-    meiso_composition_sha256_final(&sha, out_result->full_target_sha256);
+    meiso_sha256_final(&sha, out_result->full_target_sha256);
 
     for (y = 0U; y < MEISO_COMPOSITION_SCENE_THUMBNAIL_HEIGHT; ++y) {
         uint32_t x;

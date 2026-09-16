@@ -57,3 +57,16 @@ include(cmake/MeisoInstall.cmake)
 if(BUILD_TESTING)
     include(cmake/MeisoTests.cmake)
 endif()
+
+option(MEISO_BUILD_DRM_SCANOUT_RESEARCH
+    "Build historical K230D DRM policy research and injected-op tests" OFF)
+if(MEISO_BUILD_DRM_SCANOUT_RESEARCH)
+    if(NOT UNIX)
+        message(FATAL_ERROR "DRM scanout research requires a POSIX build")
+    endif()
+    add_subdirectory(research/k230d-drm)
+elseif(MEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER OR
+       MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER OR
+       MEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_SUPERVISOR)
+    message(FATAL_ERROR "DRM probe runners require MEISO_BUILD_DRM_SCANOUT_RESEARCH=ON")
+endif()

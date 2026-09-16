@@ -1,4 +1,5 @@
 #include "display_ingress_simulated_service_private.h"
+#include "../profiles/display_ingress/display_ingress_profile_private.h"
 #include "../applications/display_ingress/video_backend.h"
 #include "../targets/k230d-linux/display_ingress_overlay_raster.h"
 #include <inttypes.h>
@@ -74,7 +75,7 @@ bool service_overlay_consume(Service *s, const MeisoRuntimeEvent *event)
     const uint64_t version=offer->state.version;
     /* Runtime byte views expire at commit_state_receive. Preserve the identity
      * while the borrowed Desired suffix is still valid. */
-    if(!meiso_display_ingress_host_fixture_input_sha256(desired.profile,digest))
+    if(!meiso_display_ingress_private_payload_sha256(desired.profile,digest))
         return service_fail(s,"hud","plan-digest");
     const MeisoStateReceiveStatus received=meiso_state_replica_receive(hud.replica,offer->state.owner,
         offer->state.version,offer->state.payload);

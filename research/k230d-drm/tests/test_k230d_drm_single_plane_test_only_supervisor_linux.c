@@ -48,7 +48,7 @@ meiso_test_native_derived_provider(
     meiso_test_derived_once
 #define meiso_k230d_drm_libdrm_run_single_plane_test_only_derive_unique_plane \
     meiso_test_native_derived_provider
-#include "../targets/k230d-linux/drm_single_plane_test_only_supervisor_linux.c"
+#include "../drm_single_plane_test_only_supervisor_linux.c"
 #undef meiso_k230d_drm_libdrm_run_single_plane_test_only_derive_unique_plane
 #undef meiso_k230d_drm_single_plane_test_only_once_derive_unique_plane_run
 #undef fork

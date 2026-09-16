@@ -95,6 +95,7 @@ if [ "$target" = meiso_k230d_drm_topology_admission_once ] ||
         -DMEISO_BUILD_APPLICATIONS=ON \
         -DMEISO_BUILD_LEGACY_COMPOSITION="$legacy_option" \
         -DMEISO_BUILD_K230D_LINUX_APPS=ON \
+        -DMEISO_BUILD_DRM_SCANOUT_RESEARCH=ON \
         -DMEISO_BUILD_K230D_DRM_TOPOLOGY_ADMISSION_RUNNER="$drm_topology_option" \
         -DMEISO_BUILD_K230D_DRM_SINGLE_PLANE_TEST_ONLY_RUNNER="$drm_test_only_option" \
         -DMEISO_K230D_LIBDRM_INCLUDE_DIR="$MEISO_K230D_LIBDRM_INCLUDE_DIR" \

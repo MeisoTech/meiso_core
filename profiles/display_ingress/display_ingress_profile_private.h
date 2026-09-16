@@ -52,4 +52,10 @@ meiso_display_ingress_private_evidence_valid(
     const MeisoDisplayIngressPresentationEvidence *value
 );
 
+/* Build-private shared digest; not part of the installed Profile API. */
+bool meiso_display_ingress_private_payload_sha256(
+    MeisoByteView payload,
+    uint8_t out_digest[MEISO_SHA256_DIGEST_SIZE]
+);
+
 #endif

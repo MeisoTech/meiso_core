@@ -3,6 +3,7 @@
 
 add_library(meiso_core_resources
     src/core/meiso_resource.c
+    src/core/meiso_sha256.c
     src/core/meiso_state.c
     src/core/meiso_stream.c
     src/core/meiso_blob.c

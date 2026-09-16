@@ -1,4 +1,4 @@
-#include "composition_sha256_private.h"
+#include "meiso_sha256_private.h"
 
 #include <string.h>
 
@@ -24,7 +24,7 @@ static void write_be_u32(uint8_t *destination, uint32_t value)
 }
 
 static void sha256_transform(
-    MeisoCompositionSha256 *sha,
+    MeisoSha256 *sha,
     const uint8_t block[64]
 )
 {
@@ -46,7 +46,7 @@ static void sha256_transform(
         0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
         0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
     };
-    uint32_t words[64];
+    uint32_t *words = sha->words;
     uint32_t a;
     uint32_t b;
     uint32_t c;
@@ -107,7 +107,7 @@ static void sha256_transform(
     sha->state[7] += h;
 }
 
-void meiso_composition_sha256_init(MeisoCompositionSha256 *sha)
+void meiso_sha256_init(MeisoSha256 *sha)
 {
     static const uint32_t initial[8] = {
         0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
@@ -118,8 +118,8 @@ void meiso_composition_sha256_init(MeisoCompositionSha256 *sha)
     memcpy(sha->state, initial, sizeof(initial));
 }
 
-void meiso_composition_sha256_update(
-    MeisoCompositionSha256 *sha,
+void meiso_sha256_update(
+    MeisoSha256 *sha,
     const uint8_t *data,
     size_t size
 )
@@ -140,8 +140,8 @@ void meiso_composition_sha256_update(
     }
 }
 
-void meiso_composition_sha256_final(
-    MeisoCompositionSha256 *sha,
+void meiso_sha256_final(
+    MeisoSha256 *sha,
     uint8_t digest[MEISO_SHA256_DIGEST_SIZE]
 )
 {

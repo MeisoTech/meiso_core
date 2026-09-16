@@ -104,27 +104,4 @@ if(UNIX)
     meiso_enable_warnings(meiso_camera_v4l2_adapter)
     meiso_set_target_folder(meiso_camera_v4l2_adapter "Meiso/Adapters/Linux")
 
-    # Portable policy/state-machine core only. A native libdrm translator and
-    # one-shot target runner remain a separate, explicitly staged K230D unit.
-    add_library(
-        meiso_k230d_drm_scanout
-        targets/k230d-linux/adapters/drm_scanout_adapter.c
-        targets/k230d-linux/adapters/drm_scanout_admission.c
-        targets/k230d-linux/adapters/drm_scanout_cleanup.c
-        targets/k230d-linux/adapters/drm_scanout_convert.c
-        targets/k230d-linux/adapters/drm_scanout_lifecycle.c
-        targets/k230d-linux/adapters/drm_scanout_ops.c
-        targets/k230d-linux/adapters/drm_scanout_sha256.c
-        targets/k230d-linux/adapters/drm_scanout_single_plane_test_only.c
-    )
-    meiso_configure_public_target(
-        meiso_k230d_drm_scanout K230dDrmScanout
-    )
-    meiso_enable_warnings(meiso_k230d_drm_scanout)
-    meiso_set_target_folder(
-        meiso_k230d_drm_scanout "Meiso/Adapters/Linux"
-    )
-    add_library(
-        Meiso::K230dDrmScanout ALIAS meiso_k230d_drm_scanout
-    )
 endif()

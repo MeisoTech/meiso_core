@@ -35,7 +35,6 @@ add_library(
     profiles/composition/meiso_composition_scene_private.c
     profiles/composition/meiso_composition_scene_result.c
     profiles/composition/composition_scene_identity.c
-    profiles/composition/composition_sha256_private.c
 )
 meiso_configure_public_target(
     meiso_composition_scene_schema
@@ -122,6 +121,7 @@ add_library(
 add_library(
     meiso_display_ingress_profile
     profiles/display_ingress/display_ingress_profile.c
+    profiles/display_ingress/display_ingress_digest.c
     profiles/display_ingress/display_ingress_overlay.c
     profiles/display_ingress/display_ingress_scene.c
     profiles/display_ingress/display_ingress_camera.c
