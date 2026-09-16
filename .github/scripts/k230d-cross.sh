@@ -104,7 +104,10 @@ if grep -Eq '/devtools/|host_fixture_input|k230d-drm' "$work/edge-commands.txt";
     echo 'Product Edge unexpectedly depends on a reference/research source or Host fixture' >&2
     exit 1
 fi
-if grep -q 'k230d-drm' "$work/edge-build/build.ninja"; then
+# CMake tracks every source for package provenance, including unbuilt research.
+# Query actual targets instead of mistaking those configure inputs for a target.
+ninja -C "$work/edge-build" -t targets all > "$work/edge-targets.txt"
+if grep -Eq '^(meiso_k230d_drm_|libmeiso_k230d_drm_)' "$work/edge-targets.txt"; then
     echo 'DRM research unexpectedly entered the default build graph' >&2
     exit 1
 fi
