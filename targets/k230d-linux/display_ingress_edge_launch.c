@@ -1,3 +1,4 @@
+/* PRODUCT: K230D Display Ingress platform implementation. */
 /* Deployment socket setup only. The exec'd Meiso service owns every protocol byte. */
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>

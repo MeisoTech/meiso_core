@@ -1,6 +1,7 @@
+/* PRODUCT: Display Ingress runtime; reference runners reuse the common service. */
 #define _POSIX_C_SOURCE 200809L
-#include "display_ingress_simulated_service_private.h"
-#include "../profiles/display_ingress/display_ingress_profile_private.h"
+#include "service_private.h"
+#include "../../profiles/display_ingress/display_ingress_profile_private.h"
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
 #include <meiso/integrations/display_camera_channel.h>
 #ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
@@ -8,7 +9,7 @@
 #endif
 #endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
-#include "../targets/k230d-linux/display_ingress_overlay_raster.h"
+#include "../../targets/k230d-linux/display_ingress_overlay_raster.h"
 #endif
 #include <meiso/profiles/display_ingress/projection.h>
 #include <errno.h>
@@ -23,7 +24,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
-#include "../applications/display_ingress/video_backend.h"
+#include "video_backend.h"
 bool service_overlay_initialize(Service *, MeisoIngressVideo *);
 bool service_overlay_consume(Service *, const MeisoRuntimeEvent *);
 bool service_overlay_poll(Service *);
@@ -187,7 +188,7 @@ bool service_run_edge_media(Service *s) { return service_fail(s, "application", 
 #else
 static MeisoIngressVideo *video;
 static MeisoDisplayCameraChannel *camera;
-#include "../adapters/media/camera_jpeg.h"
+#include "../../adapters/media/camera_jpeg.h"
 static bool capture_jpeg;
 static uint8_t capture_encoded[30720];
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE

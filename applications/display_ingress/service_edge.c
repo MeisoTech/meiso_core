@@ -1,5 +1,6 @@
-#include "display_ingress_simulated_service_private.h"
-#include "../profiles/display_ingress/display_ingress_profile_private.h"
+/* PRODUCT: Display Ingress runtime; reference runners reuse the common service. */
+#include "service_private.h"
+#include "../../profiles/display_ingress/display_ingress_profile_private.h"
 
 #include <errno.h>
 #include <poll.h>

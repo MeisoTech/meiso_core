@@ -1,3 +1,4 @@
+/* PRODUCT: K230D Display Ingress platform implementation. */
 #include "display_ingress_scene_raster.h"
 #include "display_ingress_overlay_raster.h"
 #include <string.h>

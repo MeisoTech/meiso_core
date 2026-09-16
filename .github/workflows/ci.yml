@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       legacy:
-        description: Run historical Composition and dashboard checks
+        description: Run historical Composition checks
         type: boolean
         default: false
 
@@ -81,38 +81,49 @@ jobs:
           --no-tests=error
           --timeout 180
 
-  dashboards:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy }}
-    name: Historical dashboards
+  k230d:
+    name: K230D product cross-build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
-      PYTHONWARNINGS: error
+      # Same compiler identity as the BSP lock; official vendor mirror.
+      XUANTIE_URL: https://kendryte-download.canaan-creative.com/k230/downloads/dl/gcc/Xuantie-900-gcc-linux-6.6.0-glibc-x86_64-V3.0.2-20250410.tar.gz
+      XUANTIE_SHA256: 2215e1ffe1b9b9277b1f5af2f61102e83973163404f29b04da7097fdafa9e1b7
+      # Minimal sysroot extension built from upstream source (Buildroot 2025.02.1 hashes).
+      LIBDRM_URL: https://dri.freedesktop.org/libdrm/libdrm-2.4.124.tar.xz
+      LIBDRM_SHA256: ac36293f61ca4aafaf4b16a2a7afff312aa4f5c37c9fbd797de9e3c0863ca379
+      JPEG_URL: https://www.ijg.org/files/jpegsrc.v9f.tar.gz
+      JPEG_SHA256: 04705c110cb2469caa79fb71fba3d7bf834914706e9641a4589485c1f832565b
     steps:
-      - name: Check out source
+      - name: Check out exact product revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # Match the revision built manually; do not embed a synthetic merge SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22"
-
-      - name: Test four-kind dashboard
-        working-directory: devtools/web/four_kind_dashboard
-        run: python -m unittest discover -v
-
-      - name: Test Wi-Fi Runtime dashboard
-        working-directory: devtools/web/wifi_runtime_dashboard
-        run: python -m unittest discover -v
-
-      - name: Check dashboard JavaScript syntax
+      - name: Install build tools
         run: |
-          node --check devtools/web/four_kind_dashboard/static/app.js
-          node --check devtools/web/wifi_runtime_dashboard/static/app.js
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+          python3 -m venv build/ci-tools
+          build/ci-tools/bin/pip install meson==1.7.2
+          echo "$PWD/build/ci-tools/bin" >> "$GITHUB_PATH"
+
+      - name: Cross-build and check K230dVideoRuntime installation
+        run: .github/scripts/k230d-cross.sh
+
+      - name: Show build logs on failure
+        if: failure()
+        run: tail -n 80 build/k230d-ci/*.log
+
+      - name: Retain product binaries and reproducibility manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: K230dVideoRuntime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/k230d-ci/K230dVideoRuntime.tar.gz
+            build/k230d-ci/SHA256SUMS
+            build/k230d-ci/build-info.txt
+          if-no-files-found: error
+          retention-days: 14

@@ -41,6 +41,10 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
 ## 连续视频与原生2D：构建、安装和启动
 
 `MEISO_BUILD_K230D_VIDEO_SERVICE=ON` 构建已有 MVX/DRM 视频服务。
+产品入口、会话与控制共用实现位于 [`applications/display_ingress/`](../../applications/display_ingress/)，
+平台解码/显示与 launcher 位于本目录；源码和 CMake 标注为 `PRODUCT`。
+`devtools/display_ingress_*` 仅保留标注为 `REFERENCE` 的模拟/单帧诊断入口，
+它们复用产品服务逻辑，产品 Edge 不编译任何 `devtools/` 源文件。
 `K230dVideoRuntime` 安装组件交付该服务、连接启动器、BusyBox 重连脚本及可选init模板；
 库仍由 SDK 的既有组件拥有。固件不包含在这个组件中，板端需预装匹配的
 MVX/DRM 驱动、libdrm 和 Linux loader。内核/DTB 配对由板级发行配置负责。
@@ -59,6 +63,26 @@ cmake --build build/k230d-video --target \
   meiso_display_ingress_video_edge meiso_display_ingress_edge_launch -j4
 cmake --install build/k230d-video --component K230dVideoRuntime --prefix "$EDGE_STAGE"
 ```
+
+GitHub Actions 的 `K230D product cross-build` 在每个 PR 上构建并检查这个安装组件，
+不接触板卡。输入 URL/SHA-256 只在 [CI workflow](../../.github/workflows/ci.yml) 的
+`jobs.k230d.env` 中维护：Xuantie 3.0.2 自带 libc sysroot，加上从源码构建的
+libdrm 2.4.124 / IJG JPEG 9f；不依赖本地供应商 rootfs 或私有下载凭据。
+这三个 archive 在解包前校验。工具链来源见[官方 SDK 文档](https://www.kendryte.com/k230_linux/en/main/app_develop_guide/ai_develop/aidemo_doc.html)，
+库摘要沿用 Buildroot 2025.02.1 的 [libdrm](https://github.com/buildroot/buildroot/blob/2025.02.1/package/libdrm/libdrm.hash)
+和 [libjpeg](https://github.com/buildroot/buildroot/blob/2025.02.1/package/libjpeg/libjpeg.hash)记录。
+
+在 Linux x86_64 上可以运行相同脚本；需 curl、tar、xz、make、CMake、Ninja、pkg-config
+与 Meson 1.7.2。把 workflow 上述六个环境变量导出后运行：
+
+```sh
+.github/scripts/k230d-cross.sh
+cat build/k230d-ci/SHA256SUMS
+```
+
+`K230D_CI_WORK` 可指定独立构建目录，下载缓存仍会逐次验 hash。
+CI artifact 包含 `K230dVideoRuntime.tar.gz`、`SHA256SUMS` 和源码/输入身份；
+精确同一提交/输入可与本地 SHA 对照。此门只证明交叉编译与安装，不证明板端运行或屏幕可见。
 
 将 `EDGE_STAGE` 中的文件部署到 Edge 的隔离前缀。下例在 Edge 执行，`EDGE_PREFIX`
 为实际安装位置，`HOST_IP` 是可路由到的 Host 地址。先启动 Host 的对应监听服务，

@@ -1,4 +1,5 @@
-#include "display_ingress_simulated_service_private.h"
+/* PRODUCT: Display Ingress runtime; reference runners reuse the common service. */
+#include "service_private.h"
 
 #include <string.h>
 

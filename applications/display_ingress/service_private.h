@@ -1,5 +1,6 @@
-#ifndef MEISO_DISPLAY_INGRESS_SIMULATED_SERVICE_PRIVATE_H
-#define MEISO_DISPLAY_INGRESS_SIMULATED_SERVICE_PRIVATE_H
+/* PRODUCT: Display Ingress runtime; reference runners reuse the common service. */
+#ifndef MEISO_DISPLAY_INGRESS_SERVICE_PRIVATE_H
+#define MEISO_DISPLAY_INGRESS_SERVICE_PRIVATE_H
 
 #include <meiso/adapters/posix/display_ingress_media_udp.h>
 #include <meiso/adapters/posix/tcp.h>

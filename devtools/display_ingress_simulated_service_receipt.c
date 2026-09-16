@@ -1,4 +1,5 @@
-#include "display_ingress_simulated_service_private.h"
+/* REFERENCE: diagnostic/fixture entry, not the installed Edge runtime. */
+#include "../applications/display_ingress/service_private.h"
 
 #include <inttypes.h>
 #include <stdio.h>

@@ -1,7 +1,8 @@
-#include "display_ingress_simulated_service_private.h"
-#include "../profiles/display_ingress/display_ingress_profile_private.h"
-#include "../applications/display_ingress/video_backend.h"
-#include "../targets/k230d-linux/display_ingress_overlay_raster.h"
+/* PRODUCT: Display Ingress runtime; reference runners reuse the common service. */
+#include "service_private.h"
+#include "../../profiles/display_ingress/display_ingress_profile_private.h"
+#include "video_backend.h"
+#include "../../targets/k230d-linux/display_ingress_overlay_raster.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>

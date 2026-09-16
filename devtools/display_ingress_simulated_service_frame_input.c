@@ -1,6 +1,7 @@
+/* REFERENCE: diagnostic/fixture entry, not the installed Edge runtime. */
 #define _POSIX_C_SOURCE 200809L
 
-#include "display_ingress_simulated_service_private.h"
+#include "../applications/display_ingress/service_private.h"
 
 #include <errno.h>
 #include <fcntl.h>

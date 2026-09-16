@@ -91,41 +91,34 @@ if(MEISO_BUILD_K230D_LINUX_APPS AND
 endif()
 
 if(UNIX)
-    set(MEISO_DISPLAY_INGRESS_SERVICE_SOURCES
-        devtools/display_ingress_simulated_service.c
-        devtools/display_ingress_simulated_service_bootstrap.c
-        devtools/display_ingress_simulated_service_control.c
-        devtools/display_ingress_simulated_service_edge.c
-        devtools/display_ingress_simulated_service_frame_input.c
-        devtools/display_ingress_simulated_service_host.c
-        devtools/display_ingress_simulated_service_loop.c
-        devtools/display_ingress_simulated_service_receipt.c
-    )
-    add_executable(
-        meiso_display_ingress_simulated_service
-        ${MEISO_DISPLAY_INGRESS_SERVICE_SOURCES}
-        devtools/display_ingress_simulated_pair_runner.c
-    )
-    target_link_libraries(
-        meiso_display_ingress_simulated_service
-        PRIVATE
-            meiso_posix_tcp_adapter
-            meiso_display_ingress_media_posix_udp_adapter
-            meiso_display_ingress_host_fixture_input
-    )
-    meiso_enable_warnings(meiso_display_ingress_simulated_service)
-    meiso_set_target_folder(
-        meiso_display_ingress_simulated_service
-        "Meiso/Applications/Lab"
-    )
+    # PRODUCT shared control/session implementation. REFERENCE runners reuse it;
+    # no product target compiles source from devtools/.
+    set(MEISO_DISPLAY_SERVICE_COMMON_SOURCES
+        applications/display_ingress/service_bootstrap.c
+        applications/display_ingress/service_control.c
+        applications/display_ingress/service_edge.c
+        applications/display_ingress/service_host.c
+        applications/display_ingress/service_loop.c)
 
+    # REFERENCE single-frame simulation / controlled DRM diagnostic runners.
+    set(MEISO_DISPLAY_INGRESS_SERVICE_SOURCES
+        ${MEISO_DISPLAY_SERVICE_COMMON_SOURCES}
+        devtools/display_ingress_simulated_service.c
+        devtools/display_ingress_simulated_service_frame_input.c
+        devtools/display_ingress_simulated_service_receipt.c)
+    add_executable(meiso_display_ingress_simulated_service
+        ${MEISO_DISPLAY_INGRESS_SERVICE_SOURCES}
+        devtools/display_ingress_simulated_pair_runner.c)
+    target_link_libraries(meiso_display_ingress_simulated_service PRIVATE
+        meiso_posix_tcp_adapter meiso_display_ingress_media_posix_udp_adapter
+        meiso_display_ingress_host_fixture_input)
+    meiso_enable_warnings(meiso_display_ingress_simulated_service)
+    meiso_set_target_folder(meiso_display_ingress_simulated_service "Meiso/Applications/Lab")
+
+    # PRODUCT video/native-scene runtime, shared by hardware and desktop roles.
     set(MEISO_VIDEO_SERVICE_SOURCES
-        devtools/display_ingress_video_service.c
-        devtools/display_ingress_simulated_service_bootstrap.c
-        devtools/display_ingress_simulated_service_control.c
-        devtools/display_ingress_simulated_service_edge.c
-        devtools/display_ingress_simulated_service_host.c
-        devtools/display_ingress_simulated_service_loop.c)
+        ${MEISO_DISPLAY_SERVICE_COMMON_SOURCES}
+        applications/display_ingress/service.c)
     add_executable(meiso_display_ingress_video_host ${MEISO_VIDEO_SERVICE_SOURCES})
     target_compile_definitions(meiso_display_ingress_video_host PRIVATE MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1)
     target_link_libraries(meiso_display_ingress_video_host PRIVATE meiso_posix_tcp_adapter
@@ -137,7 +130,7 @@ if(UNIX)
         pkg_check_modules(MEISO_DESKTOP_AV REQUIRED IMPORTED_TARGET libavcodec libavutil libswscale)
         find_package(JPEG REQUIRED)
         add_executable(meiso_desktop_edge ${MEISO_VIDEO_SERVICE_SOURCES}
-            devtools/display_ingress_video_overlay.c
+            applications/display_ingress/service_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
             targets/k230d-linux/display_ingress_scene_raster.c
             adapters/desktop/display_ingress_video_backend.c adapters/media/camera_jpeg.c)
@@ -186,7 +179,7 @@ if(UNIX)
         find_path(MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR drm.h PATH_SUFFIXES libdrm REQUIRED)
         find_library(MEISO_DISPLAY_DRM_LIBRARY drm REQUIRED)
         add_executable(meiso_display_ingress_video_edge ${MEISO_VIDEO_SERVICE_SOURCES}
-            devtools/display_ingress_video_overlay.c
+            applications/display_ingress/service_overlay.c
             targets/k230d-linux/display_ingress_overlay_raster.c
             targets/k230d-linux/display_ingress_scene_raster.c
             targets/k230d-linux/display_ingress_video_backend.c adapters/media/camera_jpeg.c)

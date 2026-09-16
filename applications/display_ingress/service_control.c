@@ -1,6 +1,7 @@
+/* PRODUCT: Display Ingress runtime; reference runners reuse the common service. */
 #define _POSIX_C_SOURCE 200809L
 
-#include "display_ingress_simulated_service_private.h"
+#include "service_private.h"
 
 #include <errno.h>
 #include <poll.h>

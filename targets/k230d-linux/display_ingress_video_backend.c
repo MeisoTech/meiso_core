@@ -1,3 +1,4 @@
+/* PRODUCT: K230D Display Ingress platform implementation. */
 #define _POSIX_C_SOURCE 200809L
 #include "../../applications/display_ingress/video_backend.h"
 #include "display_ingress_scene_raster.h"
