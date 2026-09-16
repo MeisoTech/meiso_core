@@ -63,12 +63,20 @@ jobs:
         if: matrix.name == 'gcc-debug'
         run: python3 devtools/check_markdown_links.py
 
+      - name: Install desktop decoder dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libavcodec-dev libavutil-dev libswscale-dev libjpeg-dev
+
       - name: Configure
         run: |
           cmake -S . -B "build/${{ matrix.name }}" \
             -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
             -DCMAKE_C_FLAGS="${{ matrix.c_flags }}" \
             -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.linker_flags }}" \
+            -DMEISO_BUILD_DESKTOP_EDGE=${{ runner.os == 'Linux' && 'ON' || 'OFF' }} \
             -DMEISO_BUILD_LEGACY_COMPOSITION=${{ inputs.legacy && 'ON' || 'OFF' }}
 
       - name: Build

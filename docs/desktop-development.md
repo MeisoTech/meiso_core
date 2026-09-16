@@ -37,6 +37,11 @@ owned decoded RGBA raster and output canvas, and returns **SIMULATED** evidence 
 sequence/digest. `first.ppm`, `latest.ppm`, `last.ppm` allow inspection; the
 received elementary stream is recorded up to 64 MiB, then recording stops while
 decoding continues. This is a finite debugging capture, not platform history.
+Decoded visible dimensions must exactly match the negotiated input before any
+conversion, capture or presentation. FFmpeg's `max_pixels` guard is separately
+derived with its H.264 alignment API: it includes internal row/macroblock padding
+and is never unlimited. That decoder guard does not enlarge the negotiated image
+or the owned RGBA raster; it is not a bound on the entire process's memory usage.
 When the backend closes, `last.ppm` preserves its final presented image for
 diagnosis and `latest.ppm` becomes black, including after a control disconnect.
 That cleanup does not create a frame or application presentation receipt.

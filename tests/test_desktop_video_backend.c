@@ -14,6 +14,45 @@ static int pixels(const char *dir,unsigned char out[64*32*3])
     unsigned w=0,h=0,m=0;int ok=fscanf(f,"P6\n%u %u\n%u",&w,&h,&m)==3 && fgetc(f)=='\n' && w==64 && h==32 && m==255;
     ok=ok && fread(out,1,64*32*3,f)==64*32*3;fclose(f);return ok;
 }
+static int dimensions(const char *root)
+{
+    char dir[256],path[512];
+    snprintf(dir,sizeof(dir),"%s/cropped",root);
+    MeisoIngressVideo *v=meiso_ingress_video_open(NULL,dir,30,18);CHECK(v);
+    CHECK(!meiso_ingress_video_set_output_size(v,64,32));
+    CHECK(meiso_ingress_video_submit(v,1,cropped_h264,sizeof(cropped_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    MeisoIngressVideoPresentation p;
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
+    unsigned char got[64*32*3];CHECK(pixels(dir,got));
+    CHECK(got[(17*64+29)*3]>240 && got[(17*64+29)*3+2]<10);
+    CHECK(got[(17*64+30)*3]==0 && got[(18*64)*3]==0);
+    /* Reject both a larger and a smaller visible frame after successful decode.
+     * A rejected frame must not advance sequence or produce a receipt. */
+    CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_NONE);
+    CHECK(meiso_ingress_video_submit(v,2,cropped_h264,sizeof(cropped_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==2);
+    CHECK(!meiso_ingress_video_close(v));
+    const char *files[]={"latest.ppm","first.ppm","last.ppm","received.h264"};
+    for(unsigned i=0;i<4;++i){snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
+    CHECK(!rmdir(dir));
+
+    /* Wider-than-negotiated, same-area/different-aspect and smaller frames all
+     * fail exact visible-size admission even when within the padding budget. */
+    const unsigned widths[]={16,16,64},heights[]={16,32,32};
+    for(unsigned i=0;i<3;++i) {
+        snprintf(dir,sizeof(dir),"%s/reject-%u",root,i);
+        v=meiso_ingress_video_open(NULL,dir,widths[i],heights[i]);CHECK(v);
+        CHECK(meiso_ingress_video_submit(v,1,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+        CHECK(meiso_ingress_video_submit(v,1,large_h264,sizeof(large_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+        CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_NONE);
+        CHECK(!meiso_ingress_video_close(v));
+        snprintf(path,sizeof(path),"%s/received.h264",dir);
+        FILE *f=fopen(path,"rb");CHECK(f);CHECK(fgetc(f)==EOF);CHECK(!fclose(f));
+        CHECK(!unlink(path));CHECK(!rmdir(dir)); /* No displayed-frame artifacts. */
+    }
+    return 0;
+}
 int main(void)
 {
     char root[]="/tmp/meiso-desktop-XXXXXX",dir[256];CHECK(mkdtemp(root));
@@ -76,5 +115,6 @@ int main(void)
     CHECK(pixels(dir,got));
     for(unsigned i=0;i<sizeof(got);++i)CHECK(got[i]==0);
     for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
-    CHECK(!rmdir(dir) && !rmdir(root));puts("desktop stereo, native HUD move/hide and completion identities passed");return 0;
+    CHECK(!rmdir(dir));CHECK(!dimensions(root));CHECK(!rmdir(root));
+    puts("desktop dimensions, stereo, native HUD move/hide and completion identities passed");return 0;
 }

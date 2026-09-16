@@ -78,8 +78,18 @@ MeisoIngressVideo *meiso_ingress_video_open(const char *video_path, const char *
     v->canvas=calloc((size_t)width*height,4);
     if (!v->decoder || !v->frame || !v->rgba || !v->canvas || !v->directory) goto fail;
     v->decoder->thread_count=1;
-    v->decoder->max_pixels=(int64_t)width*height;
     if (avcodec_open2(v->decoder,codec,NULL)<0) goto fail;
+    /* FFmpeg also applies max_pixels to internally aligned dimensions (e.g.
+     * ff_get_buffer in 6.1 checks 64x16 for a visible 32x16 frame). Derive a
+     * finite allocation guard using its public H.264 alignment API; do not
+     * confuse that guard with the exact visible-size check in submit.
+     * YUV420P includes H.264 macroblock/chroma padding, including 1080->1088.
+     * Restore NONE so this budget calculation does not select a pixel format. */
+    int padded_width=(int)width, padded_height=(int)height;
+    v->decoder->pix_fmt=AV_PIX_FMT_YUV420P;
+    avcodec_align_dimensions(v->decoder,&padded_width,&padded_height);
+    v->decoder->pix_fmt=AV_PIX_FMT_NONE;
+    v->decoder->max_pixels=(int64_t)padded_width*padded_height;
     v->capture=output_file(v,"received.h264","wb");
     if (!v->capture) goto fail;
     fprintf(stderr,"DESKTOP_BACKEND input=%ux%u decoded_rgba_bytes=%zu evidence=SIMULATED\n",
@@ -100,8 +110,10 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, u
     memcpy(packet->data,au,size);
     int result=avcodec_send_packet(v->decoder,packet);av_packet_free(&packet);
     if (result<0 || avcodec_receive_frame(v->decoder,v->frame)<0 ||
-        v->frame->width!=(int)v->width || v->frame->height!=(int)v->height)
+        v->frame->width!=(int)v->width || v->frame->height!=(int)v->height) {
+        av_frame_unref(v->frame);
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    }
     v->scaler=sws_getCachedContext(v->scaler,v->frame->width,v->frame->height,
         (enum AVPixelFormat)v->frame->format,(int)v->width,(int)v->height,
         AV_PIX_FMT_RGBA,SWS_BILINEAR,NULL,NULL,NULL);
