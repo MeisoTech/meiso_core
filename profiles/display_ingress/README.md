@@ -568,6 +568,9 @@ their generation/digest identify the entire scene and the observed DRM/software
 completion of that exact Desired version. Delivery generation remains 9; it
 is independent of the Profile version. Source/optical validity remains Host
 policy and must clear/invalidate the scene through the same owned control path.
+Scene State persists until replacement or Session cleanup; Host owns content
+deduplication and local observation-deadline renewal, which creates no new Edge
+presentation evidence or wire generation when the displayed content is unchanged.
 
 Session selection is explicit on both peers. The `*_for_version` helpers
 accept only 9 and 10; legacy helpers still mean v9. Catalog validation uses
