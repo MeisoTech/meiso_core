@@ -53,6 +53,7 @@ struct MeisoIngressVideo {
     struct { int requested, pending, seen, completed, failed; uint64_t ns; } clear;
     MeisoDisplaySceneCapability scene_capability;
     int scene_prepared;
+    uint32_t scene_crtc_active_property;
     struct {
         uint32_t plane, props[NPROPS], fb[2], width[2], height[2];
         uint64_t before[NPROPS], sequence, last_sequence, ns;
@@ -124,7 +125,8 @@ static int read_properties_at(int fd, uint32_t plane, uint32_t *ids, uint64_t *v
 }
 
 static int atomic_plane_commit(int fd, uint32_t plane, const uint32_t *ids,
-                               const uint64_t *values, uint32_t flags, void *cookie)
+                               const uint64_t *values, uint32_t flags, void *cookie,
+                               uint32_t crtc, uint32_t active_property)
 {
     drmModeAtomicReq *req = drmModeAtomicAlloc();
     if (!req) return -1;
@@ -132,6 +134,12 @@ static int atomic_plane_commit(int fd, uint32_t plane, const uint32_t *ids,
         if (drmModeAtomicAddProperty(req, plane, ids[i], values[i]) < 0) {
             drmModeAtomicFree(req); return -1;
         }
+    /* An already-detached plane contributes no CRTC to the atomic transaction.
+     * Include its existing ACTIVE=1 state so even the first/repeated empty scene
+     * has a real completion event. This does not change the mode or video planes. */
+    if (active_property && drmModeAtomicAddProperty(req, crtc, active_property, 1) < 0) {
+        drmModeAtomicFree(req); return -1;
+    }
     int rc = drmModeAtomicCommit(fd, req, flags, cookie);
     drmModeAtomicFree(req); return rc;
 }
@@ -651,11 +659,14 @@ static MeisoIngressVideoSubmitResult submit_overlay(
     if ((!disable && ((!pixels && !scene) || !width || !height || needed > limit || bytes != needed ||
             width > v->output_w || height > v->output_h ||
             x > v->output_w - width || y > v->output_h - height)) ||
-        (disable && (v->overlay.front < 0 || x || y))) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+        (disable && ((!scene && v->overlay.front < 0) || x || y))) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if (setup_overlay(v)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     uint64_t values[NPROPS];
     int target = -1;
-    if (disable) memcpy(values, v->overlay.before, sizeof(values));
+    if (disable) {
+        if (scene) memset(values, 0, sizeof(values));
+        else memcpy(values, v->overlay.before, sizeof(values));
+    }
     else {
         target = v->overlay.front == 0 ? 1 : 0;
         for (int i = 0; i < 2; ++i)
@@ -689,10 +700,13 @@ static MeisoIngressVideoSubmitResult submit_overlay(
             (uint64_t)width << 16, (uint64_t)height << 16, x, y, width, height};
         memcpy(values, candidate, sizeof(values));
     }
-    if (atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props, values,
-                            DRM_MODE_ATOMIC_TEST_ONLY, NULL) ||
+    const uint32_t active_property = disable && scene ? v->scene_crtc_active_property : 0;
+    if ((disable && scene && !active_property) ||
         atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props, values,
-                            DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, v))
+                            DRM_MODE_ATOMIC_TEST_ONLY, NULL, v->crtc, active_property) ||
+        atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props, values,
+                            DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, v,
+                            v->crtc, active_property))
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     v->overlay.target = target; v->overlay.sequence = sequence; v->overlay.last_sequence = sequence;
     v->overlay.pending = 1; v->overlay.seen = 0;
@@ -708,6 +722,16 @@ int meiso_ingress_video_scene_prepare(MeisoIngressVideo *v,uint32_t fonts,MeisoD
         canvas<SCENE_PIXELS?canvas:SCENE_PIXELS,48,10,16,16,8,1,16,fonts};
     v->scene_prepared=1;
     if(setup_overlay(v)) return -1;
+    drmModeObjectProperties *props=drmModeObjectGetProperties(v->drm_fd,v->crtc,DRM_MODE_OBJECT_CRTC);
+    if(!props) return -1;
+    for(uint32_t i=0;i<props->count_props;++i) {
+        drmModePropertyRes *p=drmModeGetProperty(v->drm_fd,props->props[i]);
+        if(p && !strcmp(p->name,"ACTIVE") && props->prop_values[i]==1)
+            v->scene_crtc_active_property=p->prop_id;
+        if(p)drmModeFreeProperty(p);
+    }
+    drmModeFreeObjectProperties(props);
+    if(!v->scene_crtc_active_property) return errno=ENODEV,-1;
     for(int i=0;i<2;++i)
         if(make_surface(v->drm_fd,(size_t)v->scene_capability.max_pixels*2,1,&v->overlay.surfaces[i])) return -1;
     const size_t bytes=v->overlay.surfaces[0].bytes+v->overlay.surfaces[1].bytes;
@@ -727,7 +751,6 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_scene_submit(MeisoIngressVideo
     MeisoDisplaySceneRegion r;
     if(!v || !v->scene_prepared || !plan ||
         !meiso_display_scene_supported(&v->scene_capability,plan,plan->video_desired_version,&r)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
-    if(!r.width) {r.width=v->scene_capability.min_width;r.height=v->scene_capability.min_height;}
     return submit_overlay(v,sequence,r.x,r.y,r.width,r.height,NULL,(size_t)r.width*r.height*2,plan);
 }
 
@@ -747,6 +770,12 @@ MeisoIngressVideoPollResult meiso_ingress_video_overlay_poll(
         }
     }
     if (!v->overlay.seen) return MEISO_INGRESS_VIDEO_NONE;
+    if (!v->overlay.ns) goto fail;
+    if (v->overlay.target < 0) {
+        uint32_t ids[NPROPS]; uint64_t values[NPROPS];
+        if (read_properties_at(v->drm_fd,v->overlay.plane,ids,values) || values[0] || values[1])
+            goto fail;
+    }
     *out = (MeisoIngressVideoPresentation){v->overlay.sequence, v->overlay.ns,
         v->output_w, v->output_h, v->connector};
     v->overlay.front = v->overlay.target; v->overlay.pending = 0; v->overlay.seen = 0;
@@ -778,7 +807,7 @@ int meiso_ingress_video_close(MeisoIngressVideo *v)
     /* No decoder queue retains the DMA-BUFs before replacing the scanout plane. */
     if (v->drm_fd >= 0 && v->overlay.plane &&
         atomic_plane_commit(v->drm_fd, v->overlay.plane, v->overlay.props,
-                            v->overlay.before, 0, NULL)) rc = -1;
+                            v->overlay.before, 0, NULL, 0, 0)) rc = -1;
     if (v->drm_fd >= 0 && v->plane && atomic_commit(v, v->before, v->right.before, 0, NULL)) rc = -1;
     if (v->drm_fd >= 0) {
         if (release_fb(v, v->shown_fb, v->shown_handles)) rc = -1;
