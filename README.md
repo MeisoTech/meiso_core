@@ -18,10 +18,10 @@ Edge 硬件解码并叠加本地绘制的框和中文短消息。纯消息可以
 | 能力 | 当前范围 |
 |---|---|
 | Host 视频 → Edge 显示 | 1280×720 H.264 左右眼画面；1920×1080 物理输出，每眼原生像素居中。输入和输出尺寸分别配置。 |
-| Edge 本地 2D | 一个矩形/短文字区域，可双眼重复；支持更新、隐藏、纯消息和视频叠加。 |
+| Edge 本地 2D | v9 单区域 HUD；显式 v10 scene 最多 16 个独立矩形及有限文字，受平台像素预算约束。支持更新、清空及与视频叠加。 |
 | 应用接入 | 可安装的 C++20 Host 客户端 SDK、本地 IPC 服务、OpenXR 逐眼视频入口；当前一次接入一个应用。 |
 | 状态与恢复 | 实际呈现反馈、应用退出清理、连接失效后建立新 Session；当前配对部署已验证 Host/Edge 各自重启恢复。 |
-| 相机与其他数据 | 已有独立 Composition 相机/遥测实现；相机适配器为 320×240 NV12。持续感知、AI 推理和录像应用尚未整合。 |
+| 相机上行 | 同一会话复用 CameraMedia；K230D 采集 320×240 NV12，可选 ≤0.5 Hz JPEG 关键帧。Host 数据服务与 AI 应用由 Looking Glass / Locate / Echo 负责。 |
 
 这是开发基线。30 Hz 输入不代表已达到 30fps 显示；6DoF、Edge 姿态微调、完整 XR 设备接口、
 复杂排版和安全传输仍未交付；出图通过不等于双眼光学校准验收。具体环境和证据边界见快速开始。
@@ -35,7 +35,7 @@ Edge 硬件解码并叠加本地绘制的框和中文短消息。纯消息可以
 | `targets/k230d-linux` | K230D 的摄像头、解码、DRM 显示和 Linux 服务适配。 |
 | `applications`、`simulation`、`tests` | 使用入口、模拟后端与契约检查。 |
 
-[Looking Glass](https://github.com/shisuiki/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
+[Looking Glass](https://github.com/MeisoTech/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
 它通过 CMake `find_package(MeisoGlass)` 链接本仓安装的库，再交付 Host 服务和客户端 SDK；
 本仓另外交叉编译 Edge 包。两仓按固定源码组合发布，不需要整仓复制或相同的提交节奏。
 
@@ -61,4 +61,4 @@ ctest --test-dir build --output-on-failure
 遵循 [贡献约定](AGENTS.md)，从一条具体应用闭环开始；协议变更同步其所属规范，
 平台变化补相应实机结果。提交时保留别人的工作中内容，原始日志、凭据和固件镜像不进产品仓。
 
-源代码以 [Apache License 2.0](LICENSE) 发布。依赖、字体和模型各有自己的授权，需单独审阅。
+本仓原始代码以 [Apache License 2.0](LICENSE) 发布。字体、历史 BSP 修改及外部依赖的范围见 [NOTICE](NOTICE)，各自保留上游许可。

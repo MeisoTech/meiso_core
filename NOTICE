@@ -1,0 +1,53 @@
+Meiso Glass — licensing and attribution
+
+Project source
+--------------
+The original Meiso Glass source is licensed under Apache-2.0; see LICENSE.
+Separately identified third-party material retains its own terms. This file
+records scopes and provenance; it does not replace or change those licenses.
+The SPDX identifiers below identify existing terms, not a new license grant.
+
+Optional CJK16 font data — OFL-1.1
+--------------------------------
+The optional glyph bank is a format conversion of GNU Unifont 17.0.05.
+The existing distribution selects SIL Open Font License 1.1 for that data.
+Keep targets/k230d-linux/overlay-font-NOTICE.txt (copyright, upstream and
+conversion attribution) and overlay-font-OFL.txt with the font. They are
+installed with the optional bank by K230dVideoRuntime. The converter's Meiso
+code and the font data have distinct license scopes.
+Upstream: https://unifoundry.com/unifont/
+
+Historical VVCAM / Linux BSP patches — upstream terms retained
+------------------------------------------------------------
+The former targets/k230d-linux/patches/0001-k230d-zero-gc2093-vvcam-min-buffers.patch
+was introduced in 927dea870dc4d4f674b6e9336364f97eb78d2639 and removed from this
+repository in 1b574d2 when BSP patches moved to MeisoTech/k230d-bsp.
+Its maintained successor is patches/sdk/0011-k230d-zero-select-GC2093-and-declare-two-buffer-vb2-.patch
+in https://github.com/MeisoTech/k230d-bsp . Do not restore a second patch copy here.
+
+The modified upstream file, package/vvcam/v4l2/video/vvcam_video_register.c,
+contains a dual-license notice: MIT OR GPL-2.0-or-later, with copyright (c) 2023
+VeriSilicon Holdings Co., Ltd. This identifies that file's existing alternatives;
+it does not select a license for the entire BSP or treat the kernel as Apache.
+Retain the applicable upstream notices and source obligations when distributing
+a patched driver/kernel. The board defconfig and other SDK/kernel files keep
+their own upstream terms. This repository's Apache-2.0 license does not relicense
+them, including copies reachable in Git history.
+
+External SDKs, libraries and assets
+----------------------------------
+The external K230 SDK/BSP, Linux, toolchains and linked libraries are separate
+inputs, not relicensed by this project. targets/k230d/sdk-overlay/apps.mk.patch
+is an integration hunk for an external SDK Makefile; it does not grant a license
+to that SDK. Its surrounding source retains the external SDK's notices.
+Dependencies and application/model/media assets in other repositories retain
+their own license metadata. This file is not a bill of materials for every
+possible deployment. Preserve the notices for the actual inputs you distribute.
+
+Packaging
+---------
+Keep LICENSE and this NOTICE with redistributed Meiso source and applicable
+release materials. Component installation currently installs the optional font
+notices with its bank; it does not automatically collect this root NOTICE or
+all external dependency licenses. Release packaging must carry the applicable
+files separately. This documentation update does not change installation output.

@@ -28,7 +28,7 @@ IP、port、TCP、NDJSON 与 CMFB 都是 bootstrap/adapter 边界，不是 peer 
 | `include/meiso/core/` | Resource 与 Session 公开头 |
 | `src/core/` | portable Core 实现 |
 | `include/meiso/runtime/`, `src/runtime/` | Runtime 与 Scheduler |
-| `include/meiso/profiles/`, `profiles/{wifi,device,composition}/` | schema、codec、Profile contract |
+| `include/meiso/profiles/`, `profiles/{wifi,device,composition,display_ingress}/` | schema、codec、Profile contract |
 | `profiles/internal/` | 不安装的历史协议与垂直 fixture；不得成为产品依赖 |
 | `include/meiso/composition/`, `composition/` | Store、Coordinator 与 renderer API/实现 |
 | `integrations/composition/` | portable Edge facade 与 Control Session |
@@ -36,7 +36,8 @@ IP、port、TCP、NDJSON 与 CMFB 都是 bootstrap/adapter 边界，不是 peer 
 | `simulation/` | deterministic simulator 与 trace |
 | `adapters/posix/` | POSIX Session/media transport |
 | `targets/k230d-linux/` | K230D Runtime、Linux adapter、service 与 CMake wrapper |
-| `applications/`, `devtools/` | 薄进程入口与明确的开发工具 |
+| `applications/display_ingress/` | 当前产品进程与共享会话/媒体接线；不编译 `devtools/` 源文件 |
+| `applications/host/`, `devtools/` | 历史 Composition 入口与明确的开发/诊断工具；不等于当前 Host SDK |
 
 `*_private.h` 只属于同一 target 内部：不安装、不提供跨 target ABI、不得被应用 include。
 
@@ -133,7 +134,7 @@ Package gate 会把 prefix 移动到新路径，然后从仓外 fresh configure/
 #include <meiso/profiles/display_ingress/profile.h>
 ```
 
-当前 API 尚未对外发布，本轮因此选择零 legacy 硬迁移：
+早期公开头迁移已完成，以下记录该次迁移边界；当前跨版本兼容范围见[配对与发布](releases.md)：
 
 - 不保留旧 root header、typedef、macro、C symbol 或 CMake alias；
 - 正式组件名不含 `debug`、`App` 或 Profile/wire 历史版本；
@@ -174,7 +175,7 @@ ctest --test-dir build --output-on-failure
 target-policy/web/conformance/compiler-variant lane 组织。`cmake/MeisoTests.cmake` 只负责按序加载
 `cmake/tests/` 模块；添加测试时保持稳定 test name 和所属 lane。
 
-一个改动至少需要：
+代码改动按涉及的边界选择检查；仅文档/许可元数据修改做文字、链接与差异检查，不重跑无关构建。相关代码门包括：
 
 1. 对应 target 的 warnings-as-errors Debug/Release build；
 2. 相关 semantic/golden/failure tests；
@@ -192,7 +193,13 @@ Linux source graph authority。RT-Smart overlay 因外部 SDK 约束保留 Makef
 - 无 Session resume、通用 discovery、安全 transport、协商 heartbeat 或 backend plugin ABI；
 - CPU offscreen/render-media evidence 不等于 DRM/KMS/DSI physical presentation；
 - simulator/hosted/cross-build 不等于 K230D camera/media/cleanup E2E；
-- 仓库尚无 `LICENSE`/`COPYING`/`NOTICE`，因而 install package 技术上可迁移，但尚不能声称具备对外分发授权。
 
-当前实现/证据摘要见[system report](system-report.md)；K230D 分层证据见
-[current E2E gate](k230d-composition-e2e.md)；历史记录只在[archive](archive/README.md)中追溯。
+当前代码见[实现地图](system-runtime-map.md)，使用入口见[Host/Edge 快速开始](host-edge-quickstart.md)。
+旧 Composition 的[E2E 门](k230d-composition-e2e.md)只适用于该栈；历史记录从[archive](archive/README.md)追溯。
+
+## 9. 许可与分发材料
+
+本仓原始代码使用 [Apache-2.0](../LICENSE)，组件例外与来源见根 [NOTICE](../NOTICE)。
+可选 CJK16 字体数据沿用已选择的 OFL-1.1；已迁出的 VVCAM/BSP 修改保留上游许可，
+不因根 Apache 许可而重新授权。安装组件不会自动收集根 NOTICE 与所有外部依赖许可证；
+交付时按实际包含内容保留 LICENSE、NOTICE、字体及依赖声明。许可范围与技术预览的功能成熟度是两个独立问题。
