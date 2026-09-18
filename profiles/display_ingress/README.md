@@ -626,3 +626,32 @@ different per-eye geometry, overlap transparency, clear, stale video reference,
 area including padding/gaps, malformed canonical bytes and bounded writes.
 Physical qualification, source binding, invalidation and application receipts
 remain separate requirements; codec/raster tests alone do not establish them.
+
+
+### v9/v10 视频单路停止与陈旧画面清除
+
+Host 隔离视频准入后，可在同一 Desired route/owner/delivery generation 发较新版本的
+`enabled=false`，保留最后 enabled Desired 的尺寸/帧率 suffix。停止不是另一张视频帧。
+Edge 接受后立即停止视频准入，串行撤下两个视频平面；已提交翻页仍以原身份观察，不能把
+`unobserved` 改为“确定未呈现”。native HUD/scene 与 CameraMedia、控制会话继续。
+HUD/scene 的 `video_desired_version` 保留最后 **enabled** Desired 版本，几何与输出范围
+保持不变直到会话重建；disabled Desired 的新版本不是新的 scene 几何版本。
+
+只有输出适配器确认视频已清除，Edge 才发布较新 Actual：observed/applied 均指向 disabled
+Desired，`APPLIED / PRESENT / effective_enabled=false / STOPPED / DISABLED`，production epoch
+为 0，profile suffix 为空。K230D 的确认须包含清除提交完成及两视频 plane 的 FB_ID/CRTC_ID
+读回为 0；桌面为软件输出清除，不是物理证据。重复 Desired 不重新启动清除或刷新期限。
+清除失败/证据缺失不得发布这个成功结果：`FAILED / APPLY_FAILED`，observed 指向停止请求，
+applied 保留最后 enabled Desired；该结果不证明原驻留画面已消失，也不释放未知 reservation。
+Host 接受停止/失败 Actual 后保留 scene/control，禁止新的本路视频准入；本轮恢复仍须显式
+重建会话。单路重新激活由 #18 后续定义。
+
+产品验收目标是在控制链路正常的测试条件下，从 Host 隔离到双眼撤下不超过 1 s。
+实现给 Edge 清除观察保留 750 ms（接收 stop 时起算，不因重复请求延长），超时报告失败，
+不伪造 STOPPED。该本地观察预算不是协商 lease。收到停止请求之前，本版本没有自动驻留
+到期；帧 deadline 仅约束准入。控制链路失联沿已有会话丢失清理路径处理（部署 TCP user
+timeout 为 15 s），不能承诺失联后一秒清屏。失联自清的协商 lease 留给 #9/#18。
+
+回归向量：首帧呈现→后续 unobserved→disabled Desired→双眼清除确认→STOPPED；清除期间
+scene 在途回执不丢失，停止后 scene 新版本/退出清屏仍成功；重复 stop 不重新激活；旧 enabled
+Desired、清除失败/缺失证据都不能制造 STOPPED 或恢复视频；显式会话重建后可重新呈现。

@@ -92,7 +92,9 @@ bool service_consume_optional_accept(
     if (!route_equal(event->route, expected_route) ||
         event->state_accept_generation.value != expected_generation ||
         !meiso_owner_scope_equal(event->state_accept_owner, expected_owner) ||
-        event->state_accept_version != expected_version) {
+        (event->state_accept_version != expected_version &&
+         !(service->role == MEISO_SESSION_ROLE_EDGE && event->state_accept_version > 0 &&
+           event->state_accept_version < expected_version))) {
         return service_fail(service, "control", "state");
     }
     return true;
