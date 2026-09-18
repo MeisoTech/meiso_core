@@ -107,14 +107,50 @@ int main(void)
     CHECK(pixels(dir,got) && !memcmp(got,original,sizeof(got)));
     CHECK(meiso_ingress_video_scene_submit(v,3,&scene)==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
     CHECK(meiso_ingress_video_overlay_submit(v,4,8,8,16,16,green,sizeof(green))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
-    // Closing an active scene (e.g. abrupt control loss) also clears current output.
+    // Stop during in-flight video and scene: observe them with their true
+    // identities, then clear both eyes while preserving native scene pixels.
     scene.item_count=2;scene.generation=4;
     CHECK(meiso_ingress_video_scene_submit(v,4,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
-    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
+    CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING);
+    CHECK(meiso_ingress_video_submit(v,3,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    CHECK(meiso_ingress_video_scene_submit(v,5,&scene)==MEISO_INGRESS_VIDEO_WOULD_BLOCK);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==2);
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==4);
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEARED);
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEARED); // idempotent
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_NONE);
+    CHECK(meiso_ingress_video_submit(v,3,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    CHECK(pixels(dir,got));
+    CHECK(got[(8*64+8)*3+1]==255 && got[(13*64+43)*3]==255 && got[(13*64+43)*3+1]==255);
+    for(unsigned c=0;c<3;++c) CHECK(got[(12*64+12)*3+c]==0 && got[(12*64+44)*3+c]==0);
+    scene.generation=5;scene.items[0].x=20;
+    CHECK(meiso_ingress_video_scene_submit(v,5,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==5);
+    CHECK(pixels(dir,got) && got[(8*64+8)*3+1]==0 && got[(8*64+20)*3+1]==255);
+    // Closing an active scene still clears all remaining current output.
     CHECK(!meiso_ingress_video_close(v));
     CHECK(pixels(dir,got));
     for(unsigned i=0;i<sizeof(got);++i)CHECK(got[i]==0);
     for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
-    CHECK(!rmdir(dir));CHECK(!dimensions(root));CHECK(!rmdir(root));
+    CHECK(!rmdir(dir));CHECK(!dimensions(root));
+    // Output failure is not a clear acknowledgement, even after the path is
+    // repaired. The adapter remains video-stopped; native scene stays usable.
+    snprintf(dir,sizeof(dir),"%s/failed-clear",root);
+    v=meiso_ingress_video_open(NULL,dir,32,16);CHECK(v);
+    CHECK(!meiso_ingress_video_set_output_size(v,64,32));
+    CHECK(meiso_ingress_video_submit(v,1,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
+    char moved[256];snprintf(moved,sizeof(moved),"%s/moved",root);CHECK(!rename(dir,moved));
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_ERROR);
+    CHECK(!rename(moved,dir));
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_ERROR);
+    CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
+    CHECK(meiso_ingress_video_overlay_submit(v,1,8,8,16,16,green,sizeof(green))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
+    CHECK(!meiso_ingress_video_close(v));
+    for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
+    CHECK(!rmdir(dir));CHECK(!rmdir(root));
     puts("desktop dimensions, stereo, native HUD move/hide and completion identities passed");return 0;
 }

@@ -50,6 +50,7 @@ struct MeisoIngressVideo {
     int input_busy[INPUT_BUFFERS], capture_count, held_capture;
     uint32_t shown_fb, shown_handles[2];
     struct flip flip;
+    struct { int requested, pending, seen, completed, failed; uint64_t ns; } clear;
     MeisoDisplaySceneCapability scene_capability;
     int scene_prepared;
     struct {
@@ -157,6 +158,11 @@ static void page_flip(int fd, unsigned sequence, unsigned sec, unsigned usec,
 {
     struct MeisoIngressVideo *v = cookie;
     (void)sequence;
+    if (v && fd == v->drm_fd && crtc == v->crtc && v->clear.pending && !v->clear.seen) {
+        v->clear.seen = 1;
+        v->clear.ns = (uint64_t)sec * UINT64_C(1000000000) + (uint64_t)usec * 1000;
+        return;
+    }
     if (v && fd == v->drm_fd && crtc == v->crtc && v->overlay.pending && !v->overlay.seen) {
         v->overlay.seen = 1;
         v->overlay.ns = (uint64_t)sec * UINT64_C(1000000000) + (uint64_t)usec * 1000;
@@ -487,7 +493,7 @@ int meiso_ingress_video_set_stereo(MeisoIngressVideo *v)
 MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, uint64_t sequence,
                                                           const uint8_t *au, size_t au_size)
 {
-    if (!v || !au || !au_size || au_size > AU_LIMIT || v->state == FAILED) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
+    if (!v || v->clear.requested || !au || !au_size || au_size > AU_LIMIT || v->state == FAILED) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if (v->state == DECODER_IDLE && start_decoder(v)) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if (reap_output(v)) { v->state = FAILED; return MEISO_INGRESS_VIDEO_SUBMIT_ERROR; }
     int index = -1; for (int i = 0; i < INPUT_BUFFERS; ++i) if (!v->input_busy[i]) { index = i; break; }
@@ -510,7 +516,7 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v, Meiso
 {
     if (!v || !out || v->state == FAILED) return MEISO_INGRESS_VIDEO_POLL_ERROR;
     if (v->state == DECODER_IDLE) return MEISO_INGRESS_VIDEO_NONE;
-    if (reap_output(v) || service_source_change(v)) goto fail;
+    if (!v->clear.requested && (reap_output(v) || service_source_change(v))) goto fail;
     if (v->flip.pending || v->overlay.pending) {
         if (v->overlay.pending && v->overlay.seen) return MEISO_INGRESS_VIDEO_NONE;
         struct pollfd p = { .fd = v->drm_fd, .events = POLLIN };
@@ -525,7 +531,7 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v, Meiso
         int done = finish_flip(v, out); if (done < 0) goto fail;
         return done ? MEISO_INGRESS_VIDEO_PRESENTED : MEISO_INGRESS_VIDEO_NONE;
     }
-    if (v->state != READY) return MEISO_INGRESS_VIDEO_NONE;
+    if (v->clear.requested || v->state != READY) return MEISO_INGRESS_VIDEO_NONE;
     struct v4l2_plane p[2] = {0};
     struct v4l2_buffer b = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, .memory = V4L2_MEMORY_DMABUF, .length = 2 };
     b.m.planes = p;
@@ -539,6 +545,52 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v, Meiso
     return meiso_ingress_video_poll(v, out);
 fail:
     v->state = FAILED; return MEISO_INGRESS_VIDEO_POLL_ERROR;
+}
+
+MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
+{
+    if (!v || v->clear.failed) return MEISO_INGRESS_VIDEO_CLEAR_ERROR;
+    v->clear.requested = 1;
+    if (v->clear.completed) return MEISO_INGRESS_VIDEO_CLEARED;
+    /* The regular polls retain the identity of a last in-flight video/scene.
+     * Do not submit a second atomic update on their shared CRTC. */
+    if (v->flip.pending || v->overlay.pending) return MEISO_INGRESS_VIDEO_CLEAR_PENDING;
+    if (!v->clear.pending) {
+        if (!v->shown_fb) {
+            v->clear.completed = 1; /* No owned video has reached scanout. */
+            return MEISO_INGRESS_VIDEO_CLEARED;
+        }
+        const uint64_t disabled[NPROPS] = {0};
+        if (atomic_commit(v, disabled, disabled, DRM_MODE_ATOMIC_TEST_ONLY, NULL) ||
+            atomic_commit(v, disabled, disabled,
+                DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, v)) goto fail;
+        v->clear.pending = 1;
+        return MEISO_INGRESS_VIDEO_CLEAR_PENDING;
+    }
+    if (!v->clear.seen) {
+        struct pollfd p = { .fd = v->drm_fd, .events = POLLIN };
+        const int n = poll(&p, 1, 0);
+        if ((n < 0 && errno != EINTR) || (n > 0 && (p.revents & (POLLERR | POLLHUP | POLLNVAL))))
+            goto fail;
+        if (n > 0 && (p.revents & POLLIN)) {
+            drmEventContext e = { .version = 3, .page_flip_handler2 = page_flip };
+            if (drmHandleEvent(v->drm_fd, &e)) goto fail;
+        }
+    }
+    if (!v->clear.seen) return MEISO_INGRESS_VIDEO_CLEAR_PENDING;
+    if (!v->clear.ns) goto fail;
+    uint32_t ids[NPROPS]; uint64_t values[NPROPS];
+    if (read_properties_at(v->drm_fd,v->plane,ids,values) || values[0] || values[1] ||
+        (v->right.plane && (read_properties_at(v->drm_fd,v->right.plane,ids,values) || values[0] || values[1])))
+        goto fail;
+    /* Both video planes are now disabled. Keep decoder buffers and imported
+     * handles until close: output removal must not imply a resource release. */
+    v->clear.pending = 0;
+    v->clear.completed = 1;
+    return MEISO_INGRESS_VIDEO_CLEARED;
+fail:
+    v->clear.failed = 1;
+    return MEISO_INGRESS_VIDEO_CLEAR_ERROR;
 }
 
 int meiso_ingress_video_output_size(const MeisoIngressVideo *v, uint32_t *width, uint32_t *height)
@@ -584,7 +636,9 @@ static MeisoIngressVideoSubmitResult submit_overlay(
 {
     if (!v || v->state == FAILED || !sequence || sequence <= v->overlay.last_sequence)
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
-    if (v->flip.pending || v->overlay.pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
+    if (v->flip.pending || v->overlay.pending || v->clear.pending ||
+        (v->clear.requested && !v->clear.completed && !v->clear.failed))
+        return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
     const int disable = width == 0 && height == 0 && pixels == NULL && bytes == 0;
     const unsigned bpp=scene?2:4;
     const uint64_t needed = (uint64_t)width * height * bpp;

@@ -67,6 +67,21 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *vide
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *video,
                                                       MeisoIngressVideoPresentation *presentation);
 
+/* Stop video admission for the rest of this adapter lifetime and remove only
+ * its video scanout. Call until terminal, while continuing video/overlay polls
+ * to retire already submitted flips truthfully. No synthetic frame receipt is
+ * produced and native scene remains usable. Restoration needs a new adapter.
+ * One call does bounded work; PENDING is not proof of removal. ERROR preserves
+ * unknown scanout ownership until close. Decoder buffers remain owned until
+ * close; CLEARED proves output removal, not release of all video resources.
+ * This private primitive does not select a wire contract or stale deadline. */
+typedef enum MeisoIngressVideoClearResult {
+    MEISO_INGRESS_VIDEO_CLEAR_PENDING = 0,
+    MEISO_INGRESS_VIDEO_CLEARED = 1,
+    MEISO_INGRESS_VIDEO_CLEAR_ERROR = 2
+} MeisoIngressVideoClearResult;
+MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *video);
+
 int meiso_ingress_video_output_size(const MeisoIngressVideo *video, uint32_t *width, uint32_t *height);
 
 /* Private Edge-rendered screen region, packed native 0xAARRGGBB. This does not

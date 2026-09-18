@@ -26,7 +26,7 @@ struct MeisoIngressVideo {
     bool stereo, overlay_pending, overlay_visible;
     uint32_t width, height;
     uint64_t sequence, completed, capture_bytes;
-    bool pending;
+    bool pending, stopping, cleared, clear_failed;
     char *directory;
     FILE *capture;
 };
@@ -102,7 +102,7 @@ fail:
 MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *v, uint64_t sequence,
                                                        const uint8_t *au, size_t size)
 {
-    if (!v || !sequence || sequence<=v->sequence || !au || !size || size>131072)
+    if (!v || v->stopping || !sequence || sequence<=v->sequence || !au || !size || size>131072)
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     if (v->pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
     AVPacket *packet=av_packet_alloc();
@@ -183,6 +183,22 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v,
     return MEISO_INGRESS_VIDEO_PRESENTED;
 }
 
+MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
+{
+    if (!v || v->clear_failed) return MEISO_INGRESS_VIDEO_CLEAR_ERROR;
+    v->stopping=true;
+    if (v->cleared) return MEISO_INGRESS_VIDEO_CLEARED;
+    if (v->pending || v->overlay_pending) return MEISO_INGRESS_VIDEO_CLEAR_PENDING;
+    memset(v->rgba,0,(size_t)v->width*v->height*4);
+    compose(v);
+    if (save_frame(v,"latest.ppm")) {
+        v->clear_failed=true;
+        return MEISO_INGRESS_VIDEO_CLEAR_ERROR;
+    }
+    v->cleared=true;
+    return MEISO_INGRESS_VIDEO_CLEARED;
+}
+
 int meiso_ingress_video_output_size(const MeisoIngressVideo *v,uint32_t *w,uint32_t *h)
 {if(!v || !w || !h)return -1;*w=v->output_width;*h=v->output_height;return 0;}
 int meiso_ingress_video_set_output_size(MeisoIngressVideo *v,uint32_t w,uint32_t h)
@@ -200,7 +216,8 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(MeisoIngressVid
     uint32_t x,uint32_t y,uint32_t w,uint32_t h,const uint32_t *pixels,size_t bytes)
 {
     if(!v || v->scene_pixels || !seq || seq<=v->overlay_sequence) return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
-    if(v->overlay_pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
+    if(v->overlay_pending || (v->stopping && !v->cleared && !v->clear_failed))
+        return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
     const bool visible=w!=0 || h!=0;
     if(visible) {
         if(!pixels || w<16 || h<16 || w%2 || w>v->output_width || h>v->output_height ||
@@ -232,7 +249,8 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_scene_submit(MeisoIngressVideo
     if(!v || !v->scene_pixels || !seq || seq<=v->overlay_sequence || !plan ||
         !meiso_display_scene_supported(&v->scene_capability,plan,plan->video_desired_version,&r))
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
-    if(v->overlay_pending) return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
+    if(v->overlay_pending || (v->stopping && !v->cleared && !v->clear_failed))
+        return MEISO_INGRESS_VIDEO_WOULD_BLOCK;
     if(!meiso_k230d_scene_raster(&v->scene_capability,plan,v->scene_pixels,v->scene_capability.max_pixels,&r))
         return MEISO_INGRESS_VIDEO_SUBMIT_ERROR;
     v->overlay_x=r.x;v->overlay_y=r.y;v->overlay_w=r.width;v->overlay_h=r.height;
