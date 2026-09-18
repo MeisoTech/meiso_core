@@ -153,6 +153,7 @@ typedef struct {
     uint8_t evidence_sha256[32U];
     uint64_t catalog_generation;
     uint64_t applied_desired_version;
+    uint64_t video_geometry_desired_version;
     uint64_t actual_version;
     uint64_t production_epoch;
     uint64_t media_stream_epoch;

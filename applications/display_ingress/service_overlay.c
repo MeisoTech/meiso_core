@@ -66,9 +66,9 @@ bool service_overlay_consume(Service *s, const MeisoRuntimeEvent *event)
         !meiso_runtime_desired_state_decode(offer->state.payload,&desired) || !desired.enabled ||
         (s->scene_enabled ?
             !meiso_display_scene_plan_decode(desired.profile,&scene) ||
-            !meiso_display_scene_supported(&s->scene_capability,&scene,s->applied_desired_version,&region) :
+            !meiso_display_scene_supported(&s->scene_capability,&scene,s->video_geometry_desired_version,&region) :
             !meiso_display_overlay_plan_decode(desired.profile,&plan) ||
-            !meiso_display_overlay_plan_supported(&s->overlay_capability,&plan,s->applied_desired_version))) {
+            !meiso_display_overlay_plan_supported(&s->overlay_capability,&plan,s->video_geometry_desired_version))) {
         (void)meiso_runtime_commit_state_receive(s->runtime,event->route,offer,MEISO_STATE_RECEIVE_INVALID);
         return service_fail(s,"hud","invalid-plan");
     }

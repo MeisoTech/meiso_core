@@ -147,6 +147,7 @@ static bool receive_desired(Service *service)
         sizeof(service->applied_desired_profile)
     };
     service->applied_desired_version = event.state_offer.state.version;
+    service->video_geometry_desired_version = service->applied_desired_version;
     return true;
 }
 

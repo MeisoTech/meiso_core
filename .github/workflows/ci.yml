@@ -68,7 +68,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libavcodec-dev libavutil-dev libswscale-dev libjpeg-dev
+            pkg-config libavcodec-dev libavutil-dev libswscale-dev libjpeg-dev libdrm-dev
 
       - name: Configure
         run: |

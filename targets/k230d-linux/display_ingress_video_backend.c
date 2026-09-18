@@ -547,6 +547,13 @@ fail:
     v->state = FAILED; return MEISO_INGRESS_VIDEO_POLL_ERROR;
 }
 
+static int video_planes_inactive(struct MeisoIngressVideo *v)
+{
+    uint32_t ids[NPROPS]; uint64_t values[NPROPS];
+    return !read_properties_at(v->drm_fd,v->plane,ids,values) && !values[0] && !values[1] &&
+        (!v->right.plane || (!read_properties_at(v->drm_fd,v->right.plane,ids,values) && !values[0] && !values[1]));
+}
+
 MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
 {
     if (!v || v->clear.failed) return MEISO_INGRESS_VIDEO_CLEAR_ERROR;
@@ -557,6 +564,7 @@ MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
     if (v->flip.pending || v->overlay.pending) return MEISO_INGRESS_VIDEO_CLEAR_PENDING;
     if (!v->clear.pending) {
         if (!v->shown_fb) {
+            if (!video_planes_inactive(v)) goto fail;
             v->clear.completed = 1; /* No owned video has reached scanout. */
             return MEISO_INGRESS_VIDEO_CLEARED;
         }
@@ -579,10 +587,7 @@ MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
     }
     if (!v->clear.seen) return MEISO_INGRESS_VIDEO_CLEAR_PENDING;
     if (!v->clear.ns) goto fail;
-    uint32_t ids[NPROPS]; uint64_t values[NPROPS];
-    if (read_properties_at(v->drm_fd,v->plane,ids,values) || values[0] || values[1] ||
-        (v->right.plane && (read_properties_at(v->drm_fd,v->right.plane,ids,values) || values[0] || values[1])))
-        goto fail;
+    if (!video_planes_inactive(v)) goto fail;
     /* Both video planes are now disabled. Keep decoder buffers and imported
      * handles until close: output removal must not imply a resource release. */
     v->clear.pending = 0;
