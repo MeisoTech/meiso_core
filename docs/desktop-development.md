@@ -7,7 +7,9 @@ adapters. Only the output backend is replaced. No K230D or camera is required.
 ## Build and run a local pair
 
 Install CMake, pkg-config and FFmpeg development libraries (`libavcodec`,
-`libavutil`, `libswscale`), then build:
+`libavutil`, `libswscale`) and JPEG headers. Linux builds with tests also need
+libdrm headers for injected K230D scanout checks (`libdrm-dev` on Debian/Ubuntu);
+these checks do not open a DRM device. Then build:
 
 ```sh
 cmake -S . -B build-desktop -DMEISO_BUILD_DESKTOP_EDGE=ON
