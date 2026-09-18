@@ -1,5 +1,8 @@
 /* Exercise the product adapter's clear path with injected DRM syscalls. No
  * second scanout implementation, target device or public test hook. */
+#define _POSIX_C_SOURCE 200809L
+#include <poll.h>
+int test_poll(struct pollfd *,nfds_t,int);
 #define drmModeAtomicAddProperty test_add_property
 #define drmModeAtomicCommit test_commit
 #define drmModeObjectGetProperties test_get_properties
