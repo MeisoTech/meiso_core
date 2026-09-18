@@ -7,11 +7,12 @@ Meiso Glass 与 Looking Glass 是独立仓库。**需要匹配的是经过验证
 ## 使用一个配套版本
 
 初次技术预发布标识为 `v0.1.0-alpha.1`，两仓使用同名 annotated tag 标记这一套交付。
-它不表示正式产品完成，也没有新授予源代码许可证。
+它标识首次技术预览，不表示正式产品完成。当前源码许可见 [LICENSE](../LICENSE) 与
+[NOTICE](../NOTICE)；使用某个历史 tag 时核对该 tag 内的许可材料，版本标识本身不授予或撤销许可。
 
 ```sh
 git clone --branch v0.1.0-alpha.1 https://github.com/MeisoTech/meiso_glass.git meiso
-git clone --branch v0.1.0-alpha.1 https://github.com/shisuiki/looking_glass.git looking_glass
+git clone --branch v0.1.0-alpha.1 https://github.com/MeisoTech/looking_glass.git looking_glass
 ```
 
 仓库保持 Private，需要已有读取权限。然后按[快速开始](host-edge-quickstart.md)先安装 Meiso SDK，

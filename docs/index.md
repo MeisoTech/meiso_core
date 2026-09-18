@@ -19,7 +19,10 @@
 - [Resource](resource.md)：State / Stream / Action / Blob 的所有权和生命周期。
 - [Runtime](runtime.md)：能力、endpoint、desired/actual、路由和资源可见性。
 - [Link](link.md)：身份、Session、时间、交付与失效。
-- [Composition](composition.md)：场景、图层、激活与最终呈现责任。
+- [Composition](composition.md)：图层、激活与最终呈现责任；当前 Display Ingress 选择其中的 direct-latest 语义。
+
+这里的 Composition 通用规范不等于默认关闭的旧 Composition 应用栈；
+旧栈的构建和当前 CameraMedia 依赖见[SDK 组件边界](sdk-guide.md#3-cmake-package-与组件)。
 
 Profile/wire 只能具体化规范留开的参数。实现指南、测试和实验报告不能创建另一套产品契约。
 

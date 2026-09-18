@@ -1,6 +1,11 @@
 # Jetson → K230D：视频、消息与应用 SDK
 
-这是当前实现的构建与使用入口，不另立产品契约。跨端行为由
+> 本页主要保留 `v0.1.0-alpha.1` / 2026-09-08 视频与单区域 HUD 的配对命令和实测范围。
+> 当前 scene、多区域与相机入口见[实现地图](system-runtime-map.md)、[K230D 产品说明](../targets/k230d-linux/README.md)及
+> [Looking Glass Host SDK](https://github.com/MeisoTech/looking_glass/blob/main/sdc/integrations/meiso/presentation_sink/README.md)；
+> 使用当前 main 时跟随其源码锁与对应 README，不把本页旧范围当成今天的全部能力。
+
+这是注明版本的构建与使用入口，不另立产品契约。跨端行为由
 [Display Ingress Profile](../profiles/display_ingress/README.md)拥有；Host 应用集成由独立
 Looking Glass 仓库的 `sdc/integrations/meiso/presentation_sink` 拥有。
 
