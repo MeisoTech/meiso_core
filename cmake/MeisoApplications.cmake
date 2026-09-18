@@ -157,6 +157,7 @@ if(UNIX)
             if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 pkg_check_modules(MEISO_TEST_DRM REQUIRED IMPORTED_TARGET libdrm)
                 add_executable(meiso_k230d_video_clear_test tests/test_k230d_video_clear.c
+                    targets/k230d-linux/display_ingress_overlay_raster.c
                     targets/k230d-linux/display_ingress_scene_raster.c)
                 target_link_libraries(meiso_k230d_video_clear_test PRIVATE PkgConfig::MEISO_TEST_DRM meiso_display_ingress_profile)
                 meiso_enable_warnings(meiso_k230d_video_clear_test)
