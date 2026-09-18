@@ -98,8 +98,10 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_overlay_submit(
 /* Select/reserve a native scene before any input/overlay submission. Publishes
  * the adapter's actual bounded output capability on success. Mutually exclusive
  * with the legacy pixel-submit API. Scene pixels are generated directly in the
- * idle platform buffer; caller's plan is not retained. Empty updates perform a
- * transparent minimum-size flip, including when the scene was already empty. */
+ * idle platform buffer; caller's plan is not retained. Empty updates remove the
+ * scene, including when already empty. K230D detaches its plane and requires a
+ * CRTC completion event plus inactive-plane readback; desktop reports software
+ * completion only. Reserved buffers remain available for subsequent updates. */
 int meiso_ingress_video_scene_prepare(MeisoIngressVideo *,uint32_t available_fonts,MeisoDisplaySceneCapability *);
 MeisoIngressVideoSubmitResult meiso_ingress_video_scene_submit(
     MeisoIngressVideo *,uint64_t sequence,const MeisoDisplayScenePlan *);

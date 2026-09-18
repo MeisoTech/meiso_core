@@ -587,8 +587,12 @@ decoder allocation is rejected before allocating its image buffers. Camera,
 input decoder buffers, State storage and OS memory remain additional costs.
 It rasterizes directly into the idle DMA buffer with no full-frame staging.
 The portable desktop adapter uses the same scene contract and reports software
-completion only. Zero-item updates submit a transparent minimum-sized region
-so even an initially empty scene can produce an actual completion event.
+completion only. On K230D, zero-item updates detach the overlay plane. The
+atomic update includes the already-active CRTC, including when the plane was
+already empty; completion requires its page-flip event and FB_ID/CRTC_ID readback
+of zero. Submission alone is not physical evidence. The reserved scene buffers
+remain available for the next nonempty update; removal does not assert DMA
+memory or decoder release. Video planes are unchanged.
 
 ### Native scene payload (application v10; not selected by v9)
 
