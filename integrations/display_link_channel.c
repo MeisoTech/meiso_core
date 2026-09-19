@@ -71,14 +71,14 @@ int meiso_display_link_channel_consume(MeisoDisplayLinkChannel *c, const MeisoRu
     const uint64_t version=event->state_offer.state.version;
     MeisoDisplayLinkDesired value;
     if (c->is_host) {
-        MeisoRuntimeActualState a; uint8_t expected[32];
+        MeisoRuntimeActualState a; uint8_t expected[MEISO_DISPLAY_LINK_DESIRED_BYTES];
         if (!version || version>c->sent_version || !meiso_runtime_actual_state_decode(event->state_offer.state.payload,&a) ||
             a.production_status!=MEISO_RUNTIME_PRODUCTION_RUNNING || !a.effective_enabled || a.production_epoch!=version ||
             a.availability!=MEISO_RUNTIME_AVAILABILITY_PRESENT || a.apply_result!=MEISO_RUNTIME_APPLY_APPLIED ||
             a.reason!=MEISO_RUNTIME_PRODUCTION_REASON_NONE || !a.observed_desired.present ||
             a.observed_desired.version!=version || !meiso_owner_scope_equal(a.observed_desired.owner,c->host) ||
             !meiso_display_link_desired_decode(a.profile,&value) ||
-            !meiso_display_link_desired_encode(&c->desired,(MeisoMutableBuffer){expected,32}) || memcmp(expected,a.profile.data,32)) goto error;
+            !meiso_display_link_desired_encode(&c->desired,(MeisoMutableBuffer){expected,MEISO_DISPLAY_LINK_DESIRED_BYTES}) || memcmp(expected,a.profile.data,MEISO_DISPLAY_LINK_DESIRED_BYTES)) goto error;
         /* Runtime APPLIED validates applied==observed. */
     } else {
         MeisoRuntimeDesiredState d;
@@ -107,17 +107,17 @@ bool meiso_display_link_channel_poll(MeisoDisplayLinkChannel *c, uint64_t now)
     if (c->is_host?!meiso_display_link_heartbeat_due(&c->heartbeat,now):c->sent_version==c->effective_version) return true;
     if (c->is_host && c->sent_version==UINT64_MAX) return fail(c);
     const uint64_t version=c->is_host?c->sent_version+1:c->effective_version;
-    uint8_t profile[32],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+32];MeisoByteView bytes;
-    if (!meiso_display_link_desired_encode(&c->desired,(MeisoMutableBuffer){profile,32})) return fail(c);
+    uint8_t profile[MEISO_DISPLAY_LINK_DESIRED_BYTES],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+MEISO_DISPLAY_LINK_DESIRED_BYTES];MeisoByteView bytes;
+    if (!meiso_display_link_desired_encode(&c->desired,(MeisoMutableBuffer){profile,MEISO_DISPLAY_LINK_DESIRED_BYTES})) return fail(c);
     if (c->is_host) {
-        const MeisoRuntimeDesiredState d={true,{profile,32}};
+        const MeisoRuntimeDesiredState d={true,{profile,MEISO_DISPLAY_LINK_DESIRED_BYTES}};
         if (!meiso_runtime_desired_state_encode(&d,(MeisoMutableBuffer){wire,sizeof(wire)},&bytes)) return fail(c);
     } else {
         MeisoRuntimeActualState a={0};
         a.observed_desired=(MeisoRuntimeDesiredReference){true,c->host,version};a.applied_desired=a.observed_desired;
         a.apply_result=MEISO_RUNTIME_APPLY_APPLIED;a.availability=MEISO_RUNTIME_AVAILABILITY_PRESENT;
         a.effective_enabled=true;a.production_status=MEISO_RUNTIME_PRODUCTION_RUNNING;a.production_epoch=version;
-        a.profile=(MeisoByteView){profile,32};
+        a.profile=(MeisoByteView){profile,MEISO_DISPLAY_LINK_DESIRED_BYTES};
         if (!meiso_runtime_actual_state_encode(&a,(MeisoMutableBuffer){wire,sizeof(wire)},&bytes)) return fail(c);
     }
     const MeisoStateOffer offer={{c->is_host?13U:14U},{c->is_host?c->host:c->edge,version,bytes}};

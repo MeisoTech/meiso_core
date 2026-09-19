@@ -612,6 +612,11 @@ int meiso_ingress_video_output_size(const MeisoIngressVideo *v, uint32_t *width,
     *width=v->output_w; *height=v->output_h; return 0;
 }
 
+int meiso_ingress_video_retry_clear(MeisoIngressVideo *v)
+{
+    if(!v || !v->clear.requested) return -1;
+    v->clear.failed=0; return 0;
+}
 int meiso_ingress_video_reactivate(MeisoIngressVideo *v)
 {
     if(!v || !v->clear.completed || v->clear.failed || v->flip.pending || v->clear.pending ||

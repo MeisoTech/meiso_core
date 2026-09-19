@@ -19,7 +19,7 @@ MeisoDisplayIngressProfileStatus meiso_display_application_validate_video_actual
         return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_ARGUMENT;
     uint32_t reason;
     if(!meiso_display_link_terminal_decode(state->profile,&reason) || (reason==MEISO_DISPLAY_LINK_LEASE_EXPIRED &&
-        (state->production_status!=MEISO_RUNTIME_PRODUCTION_STOPPED || !state->applied_desired.present ||
+        ((state->production_status!=MEISO_RUNTIME_PRODUCTION_STOPPED && state->production_status!=MEISO_RUNTIME_PRODUCTION_FAILED) || !state->applied_desired.present ||
          !desired || !desired->enabled))) return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_VALUE;
     MeisoRuntimeActualState legacy=*state;legacy.profile=(MeisoByteView){NULL,0};
     return meiso_display_ingress_validate_actual_state(capability,desired,&legacy,out);

@@ -102,7 +102,7 @@ bool service_overlay_consume(Service *s, const MeisoRuntimeEvent *event)
         (void)meiso_display_residence_accept(&s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE],version,service_now_ns()/UINT64_C(1000000));
         return true;
     }
-    hud.plan=plan;hud.scene=scene; hud.desired_version=version; hud.last_generation=generation;
+    hud.deferred_version=0;hud.plan=plan;hud.scene=scene; hud.desired_version=version; hud.last_generation=generation;
     hud.evidence=(MeisoDisplayOverlayEvidence){.plan_generation=generation,.desired_version=version};
     memcpy(hud.evidence.plan_sha256,digest,sizeof(digest));
     hud.pending=true; hud.drawn=false; hud.submitted=false; hud.status_queued=false; hud.flip_ns=0; ++hud.accepted;
@@ -140,7 +140,7 @@ static bool poll_expiry(Service *s)
     if((!hud.expiry_confirmed && !hud.expiry_failed) || !service_session_tx_idle(s)) return true;
     uint8_t profile[16],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+16];MeisoByteView bytes;
     put64(profile,hud.expiry_failed?hud.applied_generation:0);
-    if(!meiso_display_link_terminal_encode(hud.expiry_failed?0:MEISO_DISPLAY_LINK_LEASE_EXPIRED,(MeisoMutableBuffer){profile+8,8}))
+    if(!meiso_display_link_terminal_encode(MEISO_DISPLAY_LINK_LEASE_EXPIRED,(MeisoMutableBuffer){profile+8,8}))
         return service_fail(s,"hud","expiry-reason");
     MeisoRuntimeActualState actual={0};
     actual.observed_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,
@@ -173,7 +173,7 @@ bool service_overlay_poll(Service *s)
     if(!s->overlay_enabled) return true;
     if(s->link_enabled && !hud.expiring && meiso_display_residence_expired(&s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE],service_now_ns()/UINT64_C(1000000))) {
         s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE].active=false;
-        hud.expiring=true;hud.expiry_deadline=service_now_ns()+UINT64_C(750000000);
+        hud.expiring=true;hud.expiry_deadline=service_now_ns()+(uint64_t)s->clear_grace_ms*UINT64_C(1000000);
     }
     if(hud.expiring) return poll_expiry(s);
     if(!hud.pending) return true;

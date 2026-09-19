@@ -19,11 +19,11 @@ static bool cap_valid(const MeisoDisplayLinkCapability *v)
 static bool desired_valid(const MeisoDisplayLinkDesired *v)
 {
     if (!v || v->tier>2 || !v->downlink_kbit_s || !v->uplink_kbit_s ||
-        !v->keepalive_interval_ms || !v->keepalive_miss_limit) return false;
-    const uint64_t lower=UINT64_C(2)*v->keepalive_interval_ms;
+        !v->keepalive_interval_ms || !v->keepalive_miss_limit || !v->clear_grace_ms) return false;
+    const uint64_t lower=v->keepalive_interval_ms;
     const uint64_t upper=(uint64_t)v->keepalive_interval_ms*v->keepalive_miss_limit;
     for (unsigned i=0; i<3; ++i)
-        if (v->lease_ms[i] && (v->lease_ms[i]<lower || v->lease_ms[i]>upper)) return false;
+        if (v->lease_ms[i] && (v->lease_ms[i]<=lower || (uint64_t)v->lease_ms[i]+v->clear_grace_ms>upper)) return false;
     return true;
 }
 bool meiso_display_link_capability_encode(const MeisoDisplayLinkCapability *v, MeisoMutableBuffer out)
@@ -50,19 +50,20 @@ bool meiso_display_link_capability_decode(MeisoByteView in, MeisoDisplayLinkCapa
 }
 bool meiso_display_link_desired_encode(const MeisoDisplayLinkDesired *v, MeisoMutableBuffer out)
 {
-    if (!desired_valid(v) || !out.data || out.capacity<32 || overlap(v,sizeof(*v),out.data,32)) return false;
+    if (!desired_valid(v) || !out.data || out.capacity<36 || overlap(v,sizeof(*v),out.data,36)) return false;
     put32(out.data,v->tier); put32(out.data+4,v->downlink_kbit_s); put32(out.data+8,v->uplink_kbit_s);
     put32(out.data+12,v->keepalive_interval_ms); put32(out.data+16,v->keepalive_miss_limit);
     for (unsigned i=0; i<3; ++i) put32(out.data+20+4*i,v->lease_ms[i]);
-    return true;
+    put32(out.data+32,v->clear_grace_ms); return true;
 }
 bool meiso_display_link_desired_decode(MeisoByteView in, MeisoDisplayLinkDesired *out)
 {
-    if (!in.data || in.size!=32 || !out || overlap(in.data,32,out,sizeof(*out))) return false;
+    if (!in.data || in.size!=36 || !out || overlap(in.data,36,out,sizeof(*out))) return false;
     MeisoDisplayLinkDesired v={0};
     v.tier=get32(in.data); v.downlink_kbit_s=get32(in.data+4); v.uplink_kbit_s=get32(in.data+8);
     v.keepalive_interval_ms=get32(in.data+12); v.keepalive_miss_limit=get32(in.data+16);
     for (unsigned i=0; i<3; ++i) v.lease_ms[i]=get32(in.data+20+4*i);
+    v.clear_grace_ms=get32(in.data+32);
     if (!desired_valid(&v)) return false;
     *out=v; return true;
 }
@@ -99,7 +100,7 @@ MeisoRuntimeV4RouteDescriptor meiso_display_link_route(unsigned i, uint64_t inca
     r.route.resource.schema=(MeisoSchemaRef){{UINT64_C(0x444953505f534348),id},1};
     r.route.resource.kind=MEISO_RESOURCE_KIND_STATE;
     r.route.resource.owner=i?MEISO_OWNER_ROLE_EDGE:MEISO_OWNER_ROLE_HOST;
-    r.route.resource.max_payload_size=(i?MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE:MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE)+32;
+    r.route.resource.max_payload_size=(i?MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE:MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE)+MEISO_DISPLAY_LINK_DESIRED_BYTES;
     r.route.facet=i?MEISO_RUNTIME_FACET_ACTUAL:MEISO_RUNTIME_FACET_DESIRED;
     r.delivery=MEISO_RUNTIME_DELIVERY_INLINE; return r;
 }

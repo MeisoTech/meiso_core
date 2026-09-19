@@ -7,7 +7,7 @@ extern "C" {
 /* Application v11 only. No Core wire or carrier assumptions. */
 enum {
     MEISO_DISPLAY_LINK_CAPABILITY_BYTES = 40,
-    MEISO_DISPLAY_LINK_DESIRED_BYTES = 32,
+    MEISO_DISPLAY_LINK_DESIRED_BYTES = 36,
     MEISO_DISPLAY_LINK_TERMINAL_BYTES = 8,
     MEISO_DISPLAY_LINK_SCENE_STATUS_BYTES = 16,
     MEISO_DISPLAY_LINK_LEASE_VIDEO = 0,
@@ -26,6 +26,7 @@ typedef struct {
     uint32_t tier, downlink_kbit_s, uplink_kbit_s;
     uint32_t keepalive_interval_ms, keepalive_miss_limit;
     uint32_t lease_ms[MEISO_DISPLAY_LINK_LEASE_COUNT];
+    uint32_t clear_grace_ms;
 } MeisoDisplayLinkDesired;
 bool meiso_display_link_capability_encode(const MeisoDisplayLinkCapability *, MeisoMutableBuffer);
 bool meiso_display_link_capability_decode(MeisoByteView, MeisoDisplayLinkCapability *);

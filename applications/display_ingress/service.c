@@ -352,9 +352,10 @@ static struct { uint64_t version, deadline, restart_version; uint32_t reason;
 
 static bool request_video_stop(Service *s, uint64_t version, uint32_t reason)
 {
-    if(!video_stop.requested) {
-        video_stop.requested=true;video_stop.deadline=service_now_ns()+UINT64_C(750000000);
-        if(!service_terminate_media(s,MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_LOCAL_CLOSE)) return false;
+    if(!video_stop.requested || (s->link_enabled && video_stop.published && video_stop.failed && reason==0)) {
+        if(video_stop.requested && meiso_ingress_video_retry_clear(video)) return service_fail(s,"video","retry-clear");
+        video_stop.requested=true;video_stop.deadline=service_now_ns()+(uint64_t)(s->clear_grace_ms?s->clear_grace_ms:750)*UINT64_C(1000000);
+        if(!s->media_terminated && !service_terminate_media(s,MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_LOCAL_CLOSE)) return false;
         const MeisoIngressVideoClearResult result=meiso_ingress_video_clear(video);
         video_stop.finished=result!=MEISO_INGRESS_VIDEO_CLEAR_PENDING;
         video_stop.failed=result==MEISO_INGRESS_VIDEO_CLEAR_ERROR;
@@ -388,7 +389,7 @@ static int consume_video_stop(Service *s, const MeisoRuntimeEvent *event)
     MeisoStateView previous;
     const bool repeated=meiso_state_replica_current(s->state_replica,&previous) && version<=previous.version;
     if(!repeated && (version<=s->video_geometry_desired_version ||
-        (desired.enabled && (!s->link_enabled || !video_stop.published || !video_stop.finished)))) {
+        (desired.enabled && (!s->link_enabled || !video_stop.published || !video_stop.finished || video_stop.failed)))) {
         (void)meiso_runtime_commit_state_receive(s->runtime,event->route,offer,MEISO_STATE_RECEIVE_INVALID);
         return -1;
     }
@@ -428,7 +429,7 @@ static bool poll_video_stop(Service *s)
         video_stop.reason==MEISO_DISPLAY_LINK_LEASE_EXPIRED?MEISO_RUNTIME_PRODUCTION_REASON_NONE:MEISO_RUNTIME_PRODUCTION_REASON_DISABLED;
     uint8_t profile[8],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+8];MeisoByteView bytes;
     if(s->link_enabled) {
-        if(!meiso_display_link_terminal_encode(video_stop.failed?0:video_stop.reason,(MeisoMutableBuffer){profile,8}))
+        if(!meiso_display_link_terminal_encode(video_stop.reason,(MeisoMutableBuffer){profile,8}))
             return service_fail(s,"application","video-stop-reason");
         actual.profile=(MeisoByteView){profile,8};
     }
@@ -643,7 +644,7 @@ bool service_run_edge_media(Service *s)
             if(version && version!=s->link_version) {
                 for(unsigned i=0;i<MEISO_DISPLAY_LINK_LEASE_COUNT;++i)
                     meiso_display_residence_renew(&s->leases[i],settings.lease_ms[i],service_now_ns()/UINT64_C(1000000));
-                s->link_version=version;
+                s->link_version=version;s->clear_grace_ms=settings.clear_grace_ms;
             }
             if(!meiso_display_link_channel_poll(s->link,service_now_ns()/UINT64_C(1000000))) return service_fail(s,"link","heartbeat");
         }

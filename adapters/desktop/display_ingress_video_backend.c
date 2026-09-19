@@ -26,7 +26,7 @@ struct MeisoIngressVideo {
     bool stereo, overlay_pending, overlay_visible;
     uint32_t width, height;
     uint64_t sequence, completed, capture_bytes;
-    bool pending, stopping, cleared, clear_failed;
+    bool pending, stopping, cleared, clear_failed, export_next;
     char *directory;
     FILE *capture;
 };
@@ -173,11 +173,11 @@ MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *v,
     /* Software completion occurs after decoding into the owned output raster.
      * Export first/every 30th/last frame; this is not a physical page flip. */
     if ((!v->completed && save_frame(v,"first.ppm")) ||
-        (v->completed%30==0 && save_frame(v,"latest.ppm"))) return MEISO_INGRESS_VIDEO_POLL_ERROR;
+        ((v->export_next || v->completed%30==0) && save_frame(v,"latest.ppm"))) return MEISO_INGRESS_VIDEO_POLL_ERROR;
     uint64_t now=monotonic_ns();
     if (!now) return MEISO_INGRESS_VIDEO_POLL_ERROR;
     *p=(MeisoIngressVideoPresentation){v->sequence,now,v->output_width,v->output_height,MEISO_INGRESS_VIDEO_CONNECTOR_UNKNOWN};
-    ++v->completed;v->pending=false;
+    ++v->completed;v->pending=false;v->export_next=false;
     if (v->completed==1 || v->completed%30==0)
         fprintf(stderr,"SOFTWARE_PRESENTED frame=%"PRIu64" decoded=%"PRIu64" physical=false\n",v->sequence,v->completed);
     return MEISO_INGRESS_VIDEO_PRESENTED;
@@ -201,11 +201,16 @@ MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
 
 int meiso_ingress_video_output_size(const MeisoIngressVideo *v,uint32_t *w,uint32_t *h)
 {if(!v || !w || !h)return -1;*w=v->output_width;*h=v->output_height;return 0;}
+int meiso_ingress_video_retry_clear(MeisoIngressVideo *v)
+{
+    if(!v || !v->stopping) return -1;
+    v->clear_failed=false; return 0;
+}
 int meiso_ingress_video_reactivate(MeisoIngressVideo *v)
 {
     if(!v || !v->cleared || v->clear_failed || v->pending) return -1;
     avcodec_flush_buffers(v->decoder);av_frame_unref(v->frame);
-    v->sequence=0;v->stopping=false;v->cleared=false;
+    v->sequence=0;v->stopping=false;v->cleared=false;v->export_next=true;
     return 0;
 }
 int meiso_ingress_video_set_output_size(MeisoIngressVideo *v,uint32_t w,uint32_t h)

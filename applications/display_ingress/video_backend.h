@@ -87,6 +87,9 @@ MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *video)
  * admitting fresh IDRs; keep the independent scene/CRTC and its reserved buffers.
  * Never called automatically on a timeout. Failure leaves video admission shut. */
 int meiso_ingress_video_reactivate(MeisoIngressVideo *video);
+/* Explicit newer disabled Desired retries a failed observation/clear. Preserve
+ * pending CRTC transaction identity; this is not a deactivation proof. */
+int meiso_ingress_video_retry_clear(MeisoIngressVideo *video);
 
 int meiso_ingress_video_output_size(const MeisoIngressVideo *video, uint32_t *width, uint32_t *height);
 

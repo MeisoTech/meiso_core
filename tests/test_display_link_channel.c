@@ -59,7 +59,7 @@ int main(void)
     uint8_t caps[188];MeisoRuntimeEndpointDescriptor ep[4];MeisoRuntimeV4RouteDescriptor rt[12];
     CHECK(meiso_display_application_build_catalog_for_version(&config,11,(MeisoMutableBuffer){caps,188},ep,4,rt,12));
     CHECK(meiso_runtime_v4_offer_catalog(e.r,1,ep,2,rt,6)==MEISO_RUNTIME_OK);transfer(&e,&h);transfer(&h,&e);
-    const MeisoDisplayLinkDesired desired={0,1000,1000,1000,5,{3000,3000,4000}};
+    const MeisoDisplayLinkDesired desired={0,1000,1000,1000,5,{3000,3000,4000},750};
     e.c=meiso_display_link_channel_open(e.s,e.r,NULL);h.c=meiso_display_link_channel_open(h.s,h.r,&desired);
     CHECK(h.c && e.c);
     MeisoDisplayLinkDesired effective;

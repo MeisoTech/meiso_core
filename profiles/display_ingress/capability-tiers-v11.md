@@ -79,12 +79,15 @@ v11 用 Runtime State 路由实现：
 | 相机 | `camera_lease_ms` | 同上 | 停止生产，释放 in-flight/latest | CameraMedia Actual `STOPPED`，`terminal_reason=LEASE_EXPIRED` |
 
 - `0` 表示不启用 lease，行为等于 v10（只在收到停止请求或 Session 清理时清除）。
-- 约束：`lease_ms ≥ 2 × keepalive_interval_ms`；T0 建议视频/scene 6000 ms、相机 6000 ms；T1/T2 建议 3000 ms。数值待 #18 与 Lab #4 实测后冻结。
+- `clear_grace_ms` 是到期后清除确认窗口，可配置，默认 750 ms；重复到期或重复 Desired 不延长。
+- 约束：非零 `lease_ms > keepalive_interval_ms`，且 `lease_ms + clear_grace_ms ≤ keepalive_interval_ms × keepalive_miss_limit`；T0 建议视频/scene 6000 ms、相机 6000 ms；T1/T2 建议 3000 ms。数值待 #18 与 Lab #4 实测后冻结。
 - 到期计时从 Edge 接受最后一次续期起算；重复的相同 Desired 不延长（与 #24 一致）。
+- 到期立即关闭该路准入并开始清除，不提前撤下合法驻留内容。窗口内取得物理完成证据才发 `STOPPED`；超窗发 `FAILED / APPLY_FAILED`，`observed` 为最后接受的 Desired，`applied` 保留最后 enabled，suffix 仍带 `LEASE_EXPIRED`。
+- `FAILED` 保持隔离，不释放 reservation。Host 可显式发布新 disabled Desired 再清除一次；确认 `STOPPED` 后才允许重新激活，两次都失败则重建 Session。
 - 到期不是"确定未呈现"：已提交但未观察的翻页仍按原身份报告 `unobserved`。
-- 到期 Actual 在链路恢复后按 State 规则重发；Host 收到即视为该路的**实际去激活证明**，Interlock 据此解除
+- 到期 Actual 在链路恢复后按 State 规则重发；Host 收到确认成功的 `STOPPED` 才视为该路的**实际去激活证明**，Interlock 据此解除
   reservation 与 quarantine，不需要 Session 重建。链路不恢复则走 Session 清理。
-- 与心跳的关系：心跳缺失 → lease 到期 → 清屏；三者时序为 `keepalive_interval < lease ≤ Host 端 transport_lost 判定`，
+- 与心跳的关系：心跳缺失 → lease 到期 → 清屏；三者时序为 `keepalive_interval < lease，lease + clear_grace ≤ Host 端 transport_lost 判定`，
   保证 Edge 先清屏、Host 后判死，不出现 Host 已重建而 Edge 仍驻留旧画面。
 
 ## 6. 单路重新激活（#18 第①项）
@@ -134,12 +137,13 @@ endpoint 时不启用心跳/lease。ID 的 high word 为 `DISPLAY_`，endpoint l
 | suffix | 长度 | 字段（依次，均 u32） |
 |---|---:|---|
 | LINK_CAP | 40 B | tier_mask；T0/T1/T2 各 downlink、uplink kbit/s；decode_max_pixels；render_max_pixels；reserved=0 |
-| LINK_DES | 32 B | tier（0/1/2）；downlink、uplink kbit/s；keepalive_interval_ms；keepalive_miss_limit；video/scene/camera_lease_ms |
-| LINK_ACT | 32 B | 已接受 LINK_DES 的原 suffix；observed/applied 引用该版本，RUNNING，epoch=该版本（只有控制，无数据 route；遵守 Runtime 新 applied 必须新 epoch 的规则） |
+| LINK_DES | 36 B | tier（0/1/2）；downlink、uplink kbit/s；keepalive_interval_ms；keepalive_miss_limit；video/scene/camera_lease_ms；clear_grace_ms |
+| LINK_ACT | 36 B | 已接受 LINK_DES 的原 suffix；observed/applied 引用该版本，RUNNING，epoch=该版本（只有控制，无数据 route；遵守 Runtime 新 applied 必须新 epoch 的规则） |
 
 未公布档位的两个预算必须为 0，公布档位的预算必须非零；解码/渲染像素上限非零。
 Desired 的 tier 必须公布、两预算不得超过对应公布值。内容的合计预算校验留给 #31。
-interval 与 miss_limit 非零；非零 lease 在 `[2×interval, interval×miss_limit]` 内，乘法用 u64。
+interval、miss_limit、clear_grace_ms 非零；非零 lease 满足 `interval < lease` 且
+`lease + clear_grace_ms ≤ interval × miss_limit`，求和及乘法用 u64。
 Host 以首次发送该 outstanding 版本的时刻计算连续 miss；迟到的旧 LINK_ACT 不清除新版本的
 outstanding，ACK State accept 不代替 LINK_ACT。没有新 outstanding 时不累计 miss。
 

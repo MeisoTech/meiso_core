@@ -160,6 +160,11 @@ int main(void)
     CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
     CHECK(meiso_ingress_video_overlay_submit(v,1,8,8,16,16,green,sizeof(green))==MEISO_INGRESS_VIDEO_ACCEPTED);
     CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
+    CHECK(!meiso_ingress_video_retry_clear(v)); // explicit newer disabled Desired
+    CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEARED);
+    CHECK(!meiso_ingress_video_reactivate(v));
+    CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==2);
     CHECK(!meiso_ingress_video_close(v));
     for(unsigned i=0;i<4;++i){char path[512];snprintf(path,sizeof(path),"%s/%s",dir,files[i]);CHECK(!unlink(path));}
     CHECK(!rmdir(dir));CHECK(!rmdir(root));

@@ -5,29 +5,29 @@
 int main(void)
 {
     const MeisoDisplayLinkCapability cap={1,{1000,0,0},{800,0,0},1280*720,1920*1080};
-    const MeisoDisplayLinkDesired desired={0,1000,800,1000,5,{3000,4000,0}};
+    const MeisoDisplayLinkDesired desired={0,1000,800,1000,5,{3000,4000,0},750};
     /* Literal network-order vectors, independent of encoder. */
     const uint8_t expected_cap[40]={0,0,0,1,0,0,3,0xe8,0,0,3,0x20,
         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x0e,0x10,0,0,0x1f,0xa4,0,0,0,0,0};
-    const uint8_t expected_des[32]={0,0,0,0,0,0,3,0xe8,0,0,3,0x20,0,0,3,0xe8,
-        0,0,0,5,0,0,0x0b,0xb8,0,0,0x0f,0xa0,0,0,0,0};
+    const uint8_t expected_des[36]={0,0,0,0,0,0,3,0xe8,0,0,3,0x20,0,0,3,0xe8,
+        0,0,0,5,0,0,0x0b,0xb8,0,0,0x0f,0xa0,0,0,0,0,0,0,2,0xee};
     uint8_t wire[40]; MeisoDisplayLinkCapability got_cap; MeisoDisplayLinkDesired got;
     CHECK(meiso_display_link_capability_encode(&cap,(MeisoMutableBuffer){wire,40}));
     CHECK(!memcmp(wire,expected_cap,40));
     CHECK(meiso_display_link_capability_decode((MeisoByteView){expected_cap,40},&got_cap));
     CHECK(meiso_display_link_desired_encode(&desired,(MeisoMutableBuffer){wire,40}));
-    CHECK(!memcmp(wire,expected_des,32));
-    CHECK(meiso_display_link_desired_decode((MeisoByteView){expected_des,32},&got));
+    CHECK(!memcmp(wire,expected_des,36));
+    CHECK(meiso_display_link_desired_decode((MeisoByteView){expected_des,36},&got));
     CHECK(meiso_display_link_desired_supported(&got_cap,&got));
     got.tier=1; CHECK(!meiso_display_link_desired_supported(&cap,&got));
     got=desired;got.downlink_kbit_s=1001;CHECK(!meiso_display_link_desired_supported(&cap,&got));
-    got=desired;got.lease_ms[0]=1999;CHECK(!meiso_display_link_desired_encode(&got,(MeisoMutableBuffer){wire,40}));
-    got.lease_ms[0]=5001;CHECK(!meiso_display_link_desired_encode(&got,(MeisoMutableBuffer){wire,40}));
+    got=desired;got.lease_ms[0]=1000;CHECK(!meiso_display_link_desired_encode(&got,(MeisoMutableBuffer){wire,40}));
+    got.lease_ms[0]=4251;CHECK(!meiso_display_link_desired_encode(&got,(MeisoMutableBuffer){wire,40}));
     got=desired;got.keepalive_interval_ms=UINT32_MAX;got.keepalive_miss_limit=UINT32_MAX;
     CHECK(!meiso_display_link_desired_encode(&got,(MeisoMutableBuffer){wire,40})); /* no u32 wrap */
     CHECK(!meiso_display_link_desired_decode((MeisoByteView){expected_des,31},&got));
-    got=desired;memcpy(wire,expected_des,32);wire[0]=3;
-    CHECK(!meiso_display_link_desired_decode((MeisoByteView){wire,32},&got) && got.tier==0);
+    got=desired;memcpy(wire,expected_des,36);wire[0]=3;
+    CHECK(!meiso_display_link_desired_decode((MeisoByteView){wire,36},&got) && got.tier==0);
     memcpy(wire,expected_cap,40);wire[39]=1;
     CHECK(!meiso_display_link_capability_decode((MeisoByteView){wire,40},&got_cap));
     uint32_t reason=99;
@@ -107,7 +107,7 @@ int main(void)
     CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)==MEISO_DISPLAY_INGRESS_PROFILE_OK && !view.data_active);
     CHECK(meiso_display_application_validate_video_actual(10,&c.video.capability,&enabled,&actual,&view)!=MEISO_DISPLAY_INGRESS_PROFILE_OK);
     actual.production_status=MEISO_RUNTIME_PRODUCTION_FAILED;actual.apply_result=MEISO_RUNTIME_APPLY_FAILED;
-    CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)!=MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)==MEISO_DISPLAY_INGRESS_PROFILE_OK);
     CHECK(meiso_display_link_terminal_encode(0,(MeisoMutableBuffer){terminal,8}));
     CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)==MEISO_DISPLAY_INGRESS_PROFILE_OK);
     puts("v11 link wire, bounded heartbeat, independent leases, truthful terminal and catalog vectors passed");

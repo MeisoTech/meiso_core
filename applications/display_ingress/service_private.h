@@ -138,6 +138,7 @@ typedef struct {
     MeisoDisplayLinkChannel *link;
     MeisoDisplayResidenceLease leases[MEISO_DISPLAY_LINK_LEASE_COUNT];
     uint64_t link_version;
+    uint32_t clear_grace_ms;
     int camera_media_fd, camera_input_fd;
     MeisoCompositionMediaCapability camera_capability;
     uint32_t selected_input_width, selected_input_height;
