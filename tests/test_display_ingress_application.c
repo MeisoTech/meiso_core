@@ -52,6 +52,6 @@ int main(void)
         CHECK(meiso_display_application_build_catalog(&c,(MeisoMutableBuffer){bytes,148},ep,3,rt,10));
         CHECK(!meiso_display_application_validate_catalog_for_version(ep,ec,rt,rc,10,&decoded));
     }
-    CHECK(!meiso_display_application_build_catalog_for_version(&c,11,(MeisoMutableBuffer){bytes,148},ep,3,rt,10));
+    CHECK(!meiso_display_application_build_catalog_for_version(&c,12,(MeisoMutableBuffer){bytes,148},ep,3,rt,10));
     puts("application combinations, geometry and evidence isolation passed");return 0;
 }

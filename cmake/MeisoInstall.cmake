@@ -128,6 +128,7 @@ install(
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/scene.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/camera.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/application.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/link.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/projection.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/media_transport.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/profiles/display_ingress"

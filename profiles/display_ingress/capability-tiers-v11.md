@@ -122,3 +122,34 @@ v11 用 Runtime State 路由实现：
 - 三档预算的边界数字与 T0 的 480×640 表单速率（S-022 给的 1–3 张/s 是目标，未实测）。
 - 相机默认档（D-3：FPGA 功耗）；FPGA 连续流是否在 T0 默认开启。
 - BLE 上心跳与连接间隔的关系：间隔越长越省电，lease 相应变长，清屏延迟上限由 Kamico 定。
+
+## 10. #18 wire 候选与失败向量（尚未冻结）
+
+以下沿用 Profile 的大端定长 suffix；Runtime Desired/Actual prefix 不变。仅显式选择 application v11
+时使用。v11 在原 v10 图后可附加一个 link endpoint（两个 State route，无媒体）；不选该
+endpoint 时不启用心跳/lease。ID 的 high word 为 `DISPLAY_`，endpoint low word 为
+`LINK_END`，两 route 为 `LINK_DES`、`LINK_ACT`；capability schema low word 为 `LINK_CAP`，
+三者 schema high word 为 `DISP_SCH`、version=1。
+
+| suffix | 长度 | 字段（依次，均 u32） |
+|---|---:|---|
+| LINK_CAP | 40 B | tier_mask；T0/T1/T2 各 downlink、uplink kbit/s；decode_max_pixels；render_max_pixels；reserved=0 |
+| LINK_DES | 32 B | tier（0/1/2）；downlink、uplink kbit/s；keepalive_interval_ms；keepalive_miss_limit；video/scene/camera_lease_ms |
+| LINK_ACT | 32 B | 已接受 LINK_DES 的原 suffix；observed/applied 引用该版本，RUNNING，epoch=1（只有控制，无数据生产） |
+
+未公布档位的两个预算必须为 0，公布档位的预算必须非零；解码/渲染像素上限非零。
+Desired 的 tier 必须公布、两预算不得超过对应公布值。内容的合计预算校验留给 #31。
+interval 与 miss_limit 非零；非零 lease 在 `[2×interval, interval×miss_limit]` 内，乘法用 u64。
+Host 以首次发送该 outstanding 版本的时刻计算连续 miss；迟到的旧 LINK_ACT 不清除新版本的
+outstanding，ACK State accept 不代替 LINK_ACT。没有新 outstanding 时不累计 miss。
+
+v11 视频及相机的非 RUNNING Actual suffix 为 8 B：`terminal_reason:u32, reserved:u32=0`。
+terminal_reason=0 表示普通停止/失败，1 表示 LEASE_EXPIRED；到期清除失败仍是 FAILED /
+APPLY_FAILED，不得以 reason=1 冒充成功去激活。scene Actual suffix 为 16 B：
+`applied_generation:u64, terminal_reason:u32, reserved:u32=0`；到期清除完成后 generation=0。
+这三个 Actual route 的 schema version 升 2；旧 v9/v10 的空 suffix、8 B HUD status 及 schema 不变。
+到期只改变 effective 状态；保留最后 Desired 身份，不改写为 Host 曾请求 disabled。
+
+失败向量：旧版本拒收 v11 graph；未知枚举/非零保留位/截断/越界预算/过短 lease 不写接收状态；
+重复或倒退 Desired 不续期；LINK_DES 不让已到期内容复活；三类时钟独立；时钟倒退不误清屏；
+清除 pending/failed 不产生 STOPPED；旧 Session、旧 production epoch 与旧 heartbeat 不能恢复新生产。

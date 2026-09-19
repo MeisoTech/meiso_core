@@ -3,14 +3,16 @@
 #include <meiso/profiles/display_ingress/overlay.h>
 #include <meiso/profiles/display_ingress/scene.h>
 #include <meiso/profiles/display_ingress/camera.h>
+#include <meiso/profiles/display_ingress/link.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 /* One bounded graph: display, optional HUD, optional CameraMedia, in that order.
  * Layout and output geometry are capabilities, not Profile variants. */
 enum { MEISO_DISPLAY_APPLICATION_PROFILE_VERSION=9, MEISO_DISPLAY_SCENE_APPLICATION_PROFILE_VERSION=10,
-    MEISO_DISPLAY_APPLICATION_MAX_ENDPOINTS=3, MEISO_DISPLAY_APPLICATION_MAX_ROUTES=10,
-    MEISO_DISPLAY_APPLICATION_MAX_CAPABILITY_BYTES=148,
+    MEISO_DISPLAY_LINK_APPLICATION_PROFILE_VERSION=11,
+    MEISO_DISPLAY_APPLICATION_MAX_ENDPOINTS=4, MEISO_DISPLAY_APPLICATION_MAX_ROUTES=12,
+    MEISO_DISPLAY_APPLICATION_MAX_CAPABILITY_BYTES=188,
     MEISO_DISPLAY_APPLICATION_VIDEO_CAPABILITY_BYTES=48,
     MEISO_DISPLAY_APPLICATION_VIDEO_NATIVE=0, MEISO_DISPLAY_APPLICATION_VIDEO_SIDE_BY_SIDE=1 };
 typedef struct {
@@ -21,6 +23,8 @@ typedef struct {
     MeisoDisplayOverlayCapability overlay;
     MeisoCompositionMediaCapability camera;
     MeisoDisplaySceneCapability scene; /* v10's optional native 2D capability */
+    bool link_enabled; /* v11 only; appended after the content endpoints */
+    MeisoDisplayLinkCapability link;
 } MeisoDisplayApplicationCatalogConfig;
 const MeisoSchemaRef *meiso_display_application_video_capability_schema(void);
 bool meiso_display_application_video_capability_decode(MeisoByteView,

@@ -8,7 +8,8 @@ static const MeisoSchemaRef schema={{UINT64_C(0x444953505f534348),UINT64_C(0x434
 const MeisoSchemaRef *meiso_display_application_video_capability_schema(void){return &schema;}
 static bool geometry(const MeisoDisplayApplicationCatalogConfig *c,uint32_t version)
 {
-    return (version==9 || version==10) && c->video.capability.frame_format==MEISO_DISPLAY_INGRESS_FRAME_H264_IDR &&
+    return (version==9 || version==10 || version==11) && (!c->link_enabled || version==11) &&
+        c->video.capability.frame_format==MEISO_DISPLAY_INGRESS_FRAME_H264_IDR &&
         (c->video.capability.evidence_classes==1 || c->video.capability.evidence_classes==2) &&
         c->output_width && c->output_width<=4096 && c->output_height && c->output_height<=4096 &&
         c->video.capability.max_input_width<=c->output_width && c->video.capability.max_input_height<=c->output_height &&
@@ -32,18 +33,19 @@ bool meiso_display_application_video_capability_decode(MeisoByteView in,
 }
 bool meiso_display_application_configure_session_for_version(MeisoSessionConfig *out,uint32_t version)
 {
-    if(!out || (version!=9 && version!=10)) return false;
+    if(!out || (version!=9 && version!=10 && version!=11)) return false;
     MeisoSessionConfig c=*out;
     if(meiso_display_ingress_configure_session_for_format(&c,MEISO_DISPLAY_INGRESS_FRAME_H264_IDR)!=MEISO_DISPLAY_INGRESS_PROFILE_OK) return false;
-    c.profile.version=version;c.limits.max_registry_entries=13;
+    c.profile.version=version;c.limits.max_registry_entries=version==11?15:13;
     if(!meiso_session_memory_required(&c)) return false;
     *out=c;return true;
 }
 bool meiso_display_application_configure_runtime_for_version(MeisoRuntimeV4Config *out,MeisoSession *session,uint32_t version)
 {
-    if(!out || !session || (version!=9 && version!=10)) return false;
-    MeisoRuntimeV4Config c={0};c.base.session=session;c.base.max_endpoints=3;c.base.max_endpoint_history=6;
-    c.base.max_routes=10;c.base.max_capability_bytes=148;c.base.max_desired_profile_bytes_per_endpoint=version==10?MEISO_DISPLAY_SCENE_MAX_PLAN_BYTES:112;
+    if(!out || !session || (version!=9 && version!=10 && version!=11)) return false;
+    MeisoRuntimeV4Config c={0};c.base.session=session;c.base.max_endpoints=version==11?4:3;c.base.max_endpoint_history=version==11?8:6;
+    c.base.max_routes=version==11?12:10;c.base.max_capability_bytes=version==11?188:148;
+    c.base.max_desired_profile_bytes_per_endpoint=version>=10?MEISO_DISPLAY_SCENE_MAX_PLAN_BYTES:112;
     c.base.max_actual_profile_bytes_per_endpoint=80;c.max_blob_transfer_bytes=1;
     if(!meiso_runtime_v4_memory_required(&c)) return false;
     *out=c;return true;
@@ -52,18 +54,20 @@ bool meiso_display_application_build_catalog_for_version(const MeisoDisplayAppli
     MeisoMutableBuffer storage,MeisoRuntimeEndpointDescriptor *ep,size_t ec,MeisoRuntimeV4RouteDescriptor *rt,size_t rc)
 {
     if(!c || !geometry(c,version) || !ep || !rt || !storage.data) return false;
-    const size_t endpoints=1+c->overlay_enabled+c->camera_enabled,routes=4+3*(endpoints-1);
-    const size_t bytes=48+36*c->overlay_enabled+64*c->camera_enabled;
+    const size_t endpoints=1+c->overlay_enabled+c->camera_enabled+c->link_enabled;
+    const size_t routes=4+3*(c->overlay_enabled+c->camera_enabled)+2*c->link_enabled;
+    const size_t bytes=48+36*c->overlay_enabled+64*c->camera_enabled+40*c->link_enabled;
     if(ec<endpoints || rc<routes || storage.capacity<bytes) return false;
     const void *p[]={c,ep,rt,storage.data};const size_t n[]={sizeof(*c),endpoints*sizeof(*ep),routes*sizeof(*rt),bytes};
     for(unsigned i=0;i<4;++i) for(unsigned j=i+1;j<4;++j) if(overlap(p[i],n[i],p[j],n[j])) return false;
-    uint8_t cap[148]={0},tmp[96];MeisoRuntimeEndpointDescriptor e[3]={0},te[2];MeisoRuntimeV4RouteDescriptor r[10]={0},tr[7];
+    uint8_t cap[188]={0},tmp[96];MeisoRuntimeEndpointDescriptor e[4]={0},te[2];MeisoRuntimeV4RouteDescriptor r[12]={0},tr[7];
     if(meiso_display_ingress_build_catalog(&c->video,(MeisoMutableBuffer){cap,32},e,1,r,4)!=MEISO_DISPLAY_INGRESS_PROFILE_OK) return false;
     e[0].capability_schema=schema;e[0].capability=(MeisoByteView){storage.data,48};
     put32(cap+32,c->output_width);put32(cap+36,c->output_height);cap[40]=c->video_layout;
+    if(version==11) r[MEISO_DISPLAY_INGRESS_ROUTE_ACTUAL].route.resource.schema.version=2;
     size_t at=48,ei=1,ri=4;
     if(c->overlay_enabled){
-        const bool scene=version==10;
+        const bool scene=version>=10;
         if(scene ? !meiso_display_scene_capability_encode(&c->scene,(MeisoMutableBuffer){cap+at,36}) :
             !meiso_display_overlay_capability_encode(&c->overlay,(MeisoMutableBuffer){cap+at,36})) return false;
         e[ei]=meiso_display_overlay_private_endpoint(c->video.endpoint_incarnation);
@@ -71,37 +75,52 @@ bool meiso_display_application_build_catalog_for_version(const MeisoDisplayAppli
         for(unsigned i=0;i<3;++i) r[ri+i]=meiso_display_overlay_private_route(i,c->video.endpoint_incarnation);
         if(scene) { r[ri].route.resource.schema.version=4;
             r[ri].route.resource.max_payload_size=MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE+MEISO_DISPLAY_SCENE_MAX_PLAN_BYTES; }
+        if(version==11) { r[ri+1].route.resource.schema.version=2;
+            r[ri+1].route.resource.max_payload_size=MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+16; }
         r[ri+2].route.resource.schema.version=2;ri+=3;
     }
     if(c->camera_enabled){
         if(!meiso_display_camera_build_catalog(&c->video,&c->camera,(MeisoMutableBuffer){tmp,sizeof(tmp)},te,2,tr,7)) return false;
         memcpy(cap+at,tmp+32,64);e[ei]=te[1];e[ei].capability=(MeisoByteView){storage.data+at,64};
         memcpy(r+ri,tr+4,3*sizeof(*r));
+        if(version==11) r[ri+1].route.resource.schema.version=2;
+        ++ei;ri+=3;at+=64;
+    }
+    if(c->link_enabled){
+        if(!meiso_display_link_capability_encode(&c->link,(MeisoMutableBuffer){cap+at,40})) return false;
+        e[ei]=meiso_display_link_endpoint(c->video.endpoint_incarnation);
+        e[ei].capability=(MeisoByteView){storage.data+at,40};
+        for(unsigned i=0;i<2;++i) r[ri+i]=meiso_display_link_route(i,c->video.endpoint_incarnation);
     }
     memcpy(storage.data,cap,bytes);memcpy(ep,e,endpoints*sizeof(*ep));memcpy(rt,r,routes*sizeof(*rt));return true;
 }
 bool meiso_display_application_validate_catalog_for_version(const MeisoRuntimeEndpointDescriptor *ep,size_t ec,
     const MeisoRuntimeV4RouteDescriptor *rt,size_t rc,uint32_t version,MeisoDisplayApplicationCatalogConfig *out)
 {
-    if((version!=9 && version!=10) || !ep || !rt || !out || ec<1 || ec>3 || rc!=4+3*(ec-1) ||
+    if((version!=9 && version!=10 && version!=11) || !ep || !rt || !out || ec<1 || ec>(version==11?4U:3U) || rc<4 || rc>12 ||
         overlap(out,sizeof(*out),ep,ec*sizeof(*ep)) || overlap(out,sizeof(*out),rt,rc*sizeof(*rt))) return false;
     for(size_t i=0;i<ec;++i) if(overlap(out,sizeof(*out),ep[i].capability.data,ep[i].capability.size)) return false;
     MeisoDisplayApplicationCatalogConfig c={0};c.video.endpoint_incarnation=ep[0].incarnation;
     if(!meiso_schema_ref_equal(ep[0].capability_schema,schema) ||
         !meiso_display_application_video_capability_decode(ep[0].capability,&c.video.capability,&c.output_width,&c.output_height,&c.video_layout)) return false;
     size_t ei=1;
-    if(ei<ec && !meiso_endpoint_id_equal(ep[ei].id,*meiso_composition_camera_media_endpoint())){
+    if(ei<ec && !meiso_endpoint_id_equal(ep[ei].id,*meiso_composition_camera_media_endpoint()) &&
+        !meiso_endpoint_id_equal(ep[ei].id,*meiso_display_link_endpoint_id())){
         c.overlay_enabled=true;
-        if(version==10 ? !meiso_display_scene_capability_decode(ep[ei++].capability,&c.scene) :
+        if(version>=10 ? !meiso_display_scene_capability_decode(ep[ei++].capability,&c.scene) :
             !meiso_display_overlay_capability_decode(ep[ei++].capability,&c.overlay)) return false;
     }
-    if(ei<ec){
+    if(ei<ec && meiso_endpoint_id_equal(ep[ei].id,*meiso_composition_camera_media_endpoint())){
         c.camera_enabled=true;
         if(meiso_composition_media_capability_decode(ep[ei++].capability,&c.camera)!=MEISO_COMPOSITION_PROFILE_OK) return false;
     }
-    if(ei!=ec) return false;
-    uint8_t cap[148];MeisoRuntimeEndpointDescriptor e[3];MeisoRuntimeV4RouteDescriptor r[10];
-    if(!meiso_display_application_build_catalog_for_version(&c,version,(MeisoMutableBuffer){cap,sizeof(cap)},e,3,r,10)) return false;
+    if(ei<ec && version==11 && meiso_endpoint_id_equal(ep[ei].id,*meiso_display_link_endpoint_id())){
+        c.link_enabled=true;
+        if(!meiso_display_link_capability_decode(ep[ei++].capability,&c.link)) return false;
+    }
+    if(ei!=ec || rc!=4+3*(c.overlay_enabled+c.camera_enabled)+2*c.link_enabled) return false;
+    uint8_t cap[188];MeisoRuntimeEndpointDescriptor e[4];MeisoRuntimeV4RouteDescriptor r[12];
+    if(!meiso_display_application_build_catalog_for_version(&c,version,(MeisoMutableBuffer){cap,sizeof(cap)},e,4,r,12)) return false;
     for(size_t i=0;i<ec;++i) if(!meiso_endpoint_id_equal(ep[i].id,e[i].id) || ep[i].incarnation!=e[i].incarnation ||
         !meiso_schema_ref_equal(ep[i].capability_schema,e[i].capability_schema) || ep[i].capability.size!=e[i].capability.size ||
         !ep[i].capability.data || memcmp(ep[i].capability.data,e[i].capability.data,e[i].capability.size)) return false;
