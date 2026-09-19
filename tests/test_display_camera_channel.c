@@ -13,7 +13,8 @@
 typedef union {max_align_t align;uint8_t bytes[65536];} Arena;
 typedef struct {Arena sm,rm;MeisoSession *s;MeisoRuntime *r;MeisoDisplayCameraChannel *c;} Peer;
 static Peer h,e;
-static bool application;
+static bool application,lease;
+static unsigned profile_version(void) {return lease?11:9;}
 static void transfer(Peer *from,Peer *to)
 {
     MeisoByteView bytes;uint8_t copy[5000];MeisoSessionRuntimeMessage message;
@@ -32,13 +33,13 @@ static void init(Peer *p,bool host)
     MeisoSessionConfig cfg={0};cfg.local_role=host?MEISO_SESSION_ROLE_HOST:MEISO_SESSION_ROLE_EDGE;
     cfg.local_peer_id=(MeisoPeerId){host?1:2,3};cfg.expected_peer_id=(MeisoPeerId){host?2:1,3};
     cfg.local_incarnation=host?4:5;cfg.local_nonce=(MeisoSessionNonce){host?6:7,8};cfg.protocol=(MeisoProtocolVersion){1,0};
-    CHECK(application?meiso_display_application_configure_session(&cfg):meiso_display_camera_configure_session(&cfg));
+    CHECK(application?meiso_display_application_configure_session_for_version(&cfg,profile_version()):meiso_display_camera_configure_session(&cfg));
     CHECK(meiso_session_init(p->sm.bytes,sizeof(p->sm.bytes),&cfg,&p->s)==MEISO_SESSION_INIT_OK);
     CHECK(meiso_session_start(p->s)==MEISO_SESSION_START_STARTED);
 }
 static void runtime(Peer *p)
 {
-    MeisoRuntimeV4Config cfg;CHECK(application?meiso_display_application_configure_runtime(&cfg,p->s):meiso_display_camera_configure_runtime(&cfg,p->s));
+    MeisoRuntimeV4Config cfg;CHECK(application?meiso_display_application_configure_runtime_for_version(&cfg,p->s,profile_version()):meiso_display_camera_configure_runtime(&cfg,p->s));
     CHECK(meiso_runtime_v4_init(p->rm.bytes,sizeof(p->rm.bytes),&cfg,&p->r)==MEISO_RUNTIME_INIT_OK);
 }
 static void tick(void)
@@ -51,7 +52,8 @@ int main(int argc,char **argv)
 {
     const bool nv12=argc>=2 && strcmp(argv[1],"--nv12")==0;
     const bool jpeg=argc>=2 && strcmp(argv[1],"--jpeg")==0;
-    application=argc==3 && strcmp(argv[2],"--application")==0;
+    lease=argc==3 && strcmp(argv[2],"--lease")==0;
+    application=lease || (argc==3 && strcmp(argv[2],"--application")==0);
     CHECK(argc==1 || (argc==2 && (nv12 || jpeg)) || (application && (nv12 || jpeg || strcmp(argv[1],"--rgba")==0)));
     const size_t pixel_bytes=jpeg?10013U:nv12?115200U:307200U;
     init(&h,true);init(&e,false);transfer(&h,&e);transfer(&e,&h);transfer(&h,&e);transfer(&e,&h);
@@ -64,8 +66,9 @@ int main(int argc,char **argv)
     uint8_t caps[148];MeisoRuntimeEndpointDescriptor ep[3];MeisoRuntimeV4RouteDescriptor rt[10];
     if(application){
         const MeisoDisplayApplicationCatalogConfig all={.video=v,.output_width=1920,.output_height=1080,.video_layout=1,
-            .overlay_enabled=true,.camera_enabled=true,.overlay={1920,1080,65536,48,10,16,16,2,1,3,1},.camera=c};
-        CHECK(meiso_display_application_build_catalog(&all,(MeisoMutableBuffer){caps,sizeof(caps)},ep,3,rt,10));
+            .overlay_enabled=true,.camera_enabled=true,.overlay={1920,1080,65536,48,10,16,16,2,1,3,1},.camera=c,
+            .scene={1920,1080,1152000,48,10,16,16,8,1,16,1}};
+        CHECK(meiso_display_application_build_catalog_for_version(&all,profile_version(),(MeisoMutableBuffer){caps,sizeof(caps)},ep,3,rt,10));
     }else CHECK(meiso_display_camera_build_catalog(&v,&c,(MeisoMutableBuffer){caps,sizeof(caps)},ep,3,rt,10));
     CHECK(meiso_runtime_v4_offer_catalog(e.r,1,ep,application?3:2,rt,application?10:7)==MEISO_RUNTIME_OK);transfer(&e,&h);transfer(&h,&e);
     int listener=socket(AF_INET,SOCK_STREAM,0);CHECK(listener>=0);
@@ -88,6 +91,7 @@ int main(int argc,char **argv)
         CHECK(!meiso_composition_media_desired_supported(&c,&invalid));
     }
     MeisoDisplayCameraChannelConfig ec={.session=e.s,.runtime=e.r,.media_fd=edge_fd,.edge_nonce={91,92}};
+    if(lease) hc.application_version=ec.application_version=11;
     h.c=meiso_display_camera_channel_open(&hc);e.c=meiso_display_camera_channel_open(&ec);CHECK(h.c && e.c);
     CHECK(!meiso_display_camera_channel_ready(h.c) && !meiso_display_camera_channel_ready(e.c));
     for(unsigned i=0;i<2000 && !(meiso_display_camera_channel_ready(h.c) && meiso_display_camera_channel_ready(e.c));++i) tick();
@@ -116,6 +120,22 @@ int main(int argc,char **argv)
     found=false;for(unsigned i=0;i<2000 && !found;++i) {tick();found=meiso_display_camera_channel_latest(h.c,&frame);}
     CHECK(found && frame.unit.frame_sequence==3 && frame.unit.producer_dropped_frames==1);
     CHECK(frame.unit.access_unit.size==second_bytes && !memcmp(frame.unit.access_unit.data,pixels,second_bytes));
+    if(lease) {
+        CHECK(meiso_display_camera_channel_release(h.c,&frame.ref));
+        CHECK(meiso_display_camera_channel_submit(e.c,4,(MeisoTimePoint){9,400},(MeisoByteView){pixels,second_bytes}));
+        CHECK(meiso_display_camera_channel_stop(e.c,MEISO_DISPLAY_LINK_LEASE_EXPIRED));
+        CHECK(meiso_display_camera_channel_stop(e.c,MEISO_DISPLAY_LINK_LEASE_EXPIRED));
+        CHECK(!meiso_display_camera_channel_ready(e.c));
+        CHECK(!meiso_display_camera_channel_submit(e.c,5,(MeisoTimePoint){9,500},(MeisoByteView){pixels,second_bytes}));
+        for(unsigned i=0;i<10 && !meiso_display_camera_channel_stopped(h.c);++i) tick();
+        CHECK(meiso_display_camera_channel_stopped(h.c) && !meiso_display_camera_channel_ready(h.c));
+        CHECK(!meiso_display_camera_channel_latest(h.c,&frame));
+        MeisoSessionSnapshot s;
+        CHECK(meiso_session_snapshot(h.s,&s) && s.state==MEISO_SESSION_STATE_READY);
+        CHECK(meiso_session_snapshot(e.s,&s) && s.state==MEISO_SESSION_STATE_READY);
+        meiso_display_camera_channel_close(e.c);meiso_display_camera_channel_close(h.c);close(edge_fd);close(host_fd);
+        puts("v11 camera: lease stop disposes pending media, truthful STOPPED, Session retained");return 0;
+    }
     meiso_display_camera_channel_close(e.c);close(edge_fd);
     bool lost=false;for(unsigned i=0;i<100 && !lost;++i) {lost=!meiso_display_camera_channel_poll(h.c);(void)poll(NULL,0,1);}
     CHECK(lost && !meiso_display_camera_channel_ready(h.c) && !meiso_display_camera_channel_latest(h.c,&frame));

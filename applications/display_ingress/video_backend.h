@@ -67,10 +67,11 @@ MeisoIngressVideoSubmitResult meiso_ingress_video_submit(MeisoIngressVideo *vide
 MeisoIngressVideoPollResult meiso_ingress_video_poll(MeisoIngressVideo *video,
                                                       MeisoIngressVideoPresentation *presentation);
 
-/* Stop video admission for the rest of this adapter lifetime and remove only
+/* Stop video admission until explicit reactivation and remove only
  * its video scanout. Call until terminal, while continuing video/overlay polls
  * to retire already submitted flips truthfully. No synthetic frame receipt is
- * produced and native scene remains usable. Restoration needs a new adapter.
+ * produced and native scene remains usable. Legacy callers use a new adapter;
+ * v11 calls reactivate only after real deactivation and a newer enabled Desired.
  * One call does bounded work; PENDING is not proof of removal. ERROR preserves
  * unknown scanout ownership until close. Decoder buffers remain owned until
  * close; CLEARED proves output removal, not release of all video resources.
@@ -81,6 +82,11 @@ typedef enum MeisoIngressVideoClearResult {
     MEISO_INGRESS_VIDEO_CLEAR_ERROR = 2
 } MeisoIngressVideoClearResult;
 MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *video);
+
+/* Explicit new production epoch after CLEARED. Flush old decoder work before
+ * admitting fresh IDRs; keep the independent scene/CRTC and its reserved buffers.
+ * Never called automatically on a timeout. Failure leaves video admission shut. */
+int meiso_ingress_video_reactivate(MeisoIngressVideo *video);
 
 int meiso_ingress_video_output_size(const MeisoIngressVideo *video, uint32_t *width, uint32_t *height);
 

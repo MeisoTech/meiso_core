@@ -42,6 +42,10 @@ bool meiso_display_application_build_catalog_for_version(const MeisoDisplayAppli
     MeisoMutableBuffer,MeisoRuntimeEndpointDescriptor *,size_t,MeisoRuntimeV4RouteDescriptor *,size_t);
 bool meiso_display_application_validate_catalog_for_version(const MeisoRuntimeEndpointDescriptor *,size_t,
     const MeisoRuntimeV4RouteDescriptor *,size_t,uint32_t,MeisoDisplayApplicationCatalogConfig *);
+/* v11 alone selects the 8-byte terminal suffix; running bytes stay unchanged. */
+MeisoDisplayIngressProfileStatus meiso_display_application_validate_video_actual(uint32_t version,
+    const MeisoDisplayIngressCapability *, const MeisoRuntimeDesiredState *, const MeisoRuntimeActualState *,
+    MeisoDisplayIngressActualStateView *);
 /* HUD_PRES v2 explicitly binds software or physical completion. Legacy HUD v1
  * codecs remain physical-only. The expected class must come from the Catalog. */
 bool meiso_display_overlay_evidence_encode_for_class(const MeisoDisplayOverlayEvidence *,

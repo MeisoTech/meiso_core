@@ -137,7 +137,7 @@ if(UNIX)
         target_compile_definitions(meiso_desktop_edge PRIVATE
             MEISO_DISPLAY_INGRESS_VIDEO_SERVICE=1 MEISO_DISPLAY_INGRESS_VIDEO_EDGE=1
             MEISO_DISPLAY_INGRESS_DESKTOP_EDGE=1 MEISO_DISPLAY_INGRESS_DESKTOP_VIDEO=1)
-        target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter meiso_display_camera_channel
+        target_link_libraries(meiso_desktop_edge PRIVATE meiso_posix_tcp_adapter meiso_display_camera_channel meiso_display_link_channel
             meiso_display_ingress_media_posix_udp_adapter
             PkgConfig::MEISO_DESKTOP_AV JPEG::JPEG)
         meiso_enable_warnings(meiso_desktop_edge)
@@ -197,7 +197,7 @@ if(UNIX)
         target_include_directories(meiso_display_ingress_video_edge SYSTEM PRIVATE
             "${MEISO_DISPLAY_DRM_INCLUDE_DIR}" "${MEISO_DISPLAY_DRM_UAPI_INCLUDE_DIR}")
         target_link_libraries(meiso_display_ingress_video_edge PRIVATE meiso_posix_tcp_adapter
-            meiso_display_camera_channel meiso_camera_v4l2_adapter
+            meiso_display_camera_channel meiso_camera_v4l2_adapter meiso_display_link_channel
             meiso_display_ingress_media_posix_udp_adapter
             "${MEISO_DISPLAY_DRM_LIBRARY}" JPEG::JPEG)
         set_target_properties(meiso_display_ingress_video_edge PROPERTIES SKIP_BUILD_RPATH TRUE)

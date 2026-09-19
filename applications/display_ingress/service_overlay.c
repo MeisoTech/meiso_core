@@ -20,6 +20,13 @@ static struct {
     MeisoDisplayOverlayEvidence evidence;
     uint64_t desired_version, last_generation, last_submit_ns, flip_ns;
     uint64_t actual_version, epoch, evidence_sequence, accepted, presented;
+    uint64_t adapter_sequence, submitted_sequence, applied_version, applied_generation;
+    uint64_t expiry_deadline;
+    bool expiring, expiry_submitted, expiry_confirmed, expiry_failed, expiry_published;
+    /* One latest State accepted while an old lease's detach is in flight. */
+    MeisoDisplayScenePlan deferred_scene;
+    MeisoDisplayOverlayEvidence deferred_evidence;
+    uint64_t deferred_version;
     bool enabled, pending, drawn, submitted, status_queued;
 } hud;
 
@@ -84,22 +91,97 @@ bool service_overlay_consume(Service *s, const MeisoRuntimeEvent *event)
         return service_fail(s,"hud","plan-commit");
     if(received==MEISO_STATE_RECEIVE_DUPLICATE || received==MEISO_STATE_RECEIVE_STALE) return true;
     const uint64_t generation=s->scene_enabled?scene.generation:plan.generation;
-    if(received!=MEISO_STATE_RECEIVE_NEW || hud.pending || generation<=hud.last_generation)
+    if(received!=MEISO_STATE_RECEIVE_NEW || generation<=hud.last_generation ||
+        (hud.deferred_version && generation<=hud.deferred_scene.generation) ||
+        (hud.pending && !(s->link_enabled && hud.expiring)))
         return service_fail(s,"hud","plan-order");
+    if(s->link_enabled && hud.expiring && !hud.expiry_published) {
+        hud.deferred_scene=scene;hud.deferred_version=version;
+        hud.deferred_evidence=(MeisoDisplayOverlayEvidence){.plan_generation=generation,.desired_version=version};
+        memcpy(hud.deferred_evidence.plan_sha256,digest,sizeof(digest));++hud.accepted;
+        (void)meiso_display_residence_accept(&s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE],version,service_now_ns()/UINT64_C(1000000));
+        return true;
+    }
     hud.plan=plan;hud.scene=scene; hud.desired_version=version; hud.last_generation=generation;
     hud.evidence=(MeisoDisplayOverlayEvidence){.plan_generation=generation,.desired_version=version};
     memcpy(hud.evidence.plan_sha256,digest,sizeof(digest));
     hud.pending=true; hud.drawn=false; hud.submitted=false; hud.status_queued=false; hud.flip_ns=0; ++hud.accepted;
+    if(s->link_enabled) {
+        hud.expiring=hud.expiry_submitted=hud.expiry_confirmed=hud.expiry_failed=hud.expiry_published=false;
+        (void)meiso_display_residence_accept(&s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE],version,service_now_ns()/UINT64_C(1000000));
+    }
+    return true;
+}
+
+static bool poll_expiry(Service *s)
+{
+    if(hud.expiry_published) return true;
+    MeisoIngressVideoPresentation flip;
+    const MeisoIngressVideoPollResult p=meiso_ingress_video_overlay_poll(hud.video,&flip);
+    if(p==MEISO_INGRESS_VIDEO_POLL_ERROR) hud.expiry_failed=true;
+    if(p==MEISO_INGRESS_VIDEO_PRESENTED) {
+        if(!flip.page_flip_monotonic_ns || flip.sequence!=hud.submitted_sequence) hud.expiry_failed=true;
+        else if(hud.expiry_submitted) hud.expiry_confirmed=true;
+        else hud.flip_ns=flip.page_flip_monotonic_ns;
+    }
+    if(!hud.expiry_failed && !hud.expiry_submitted && (!hud.pending || !hud.submitted || hud.flip_ns)) {
+        MeisoDisplayScenePlan empty={0};empty.generation=hud.last_generation;
+        empty.video_desired_version=s->video_geometry_desired_version;
+        empty.canvas_width=s->scene_capability.output_width;empty.canvas_height=s->scene_capability.output_height;
+        const MeisoIngressVideoSubmitResult r=meiso_ingress_video_scene_submit(hud.video,hud.adapter_sequence+1,&empty);
+        if(r==MEISO_INGRESS_VIDEO_ACCEPTED) {
+            hud.submitted_sequence=++hud.adapter_sequence;hud.expiry_submitted=true;
+            /* Retire the old transaction without a fabricated HUD_PRES. Host
+             * correlations remain unobserved unless their real evidence arrived. */
+            hud.pending=false;
+        } else if(r==MEISO_INGRESS_VIDEO_SUBMIT_ERROR) hud.expiry_failed=true;
+    }
+    if(!hud.expiry_confirmed && service_deadline_expired(hud.expiry_deadline)) hud.expiry_failed=true;
+    if((!hud.expiry_confirmed && !hud.expiry_failed) || !service_session_tx_idle(s)) return true;
+    uint8_t profile[16],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+16];MeisoByteView bytes;
+    put64(profile,hud.expiry_failed?hud.applied_generation:0);
+    if(!meiso_display_link_terminal_encode(hud.expiry_failed?0:MEISO_DISPLAY_LINK_LEASE_EXPIRED,(MeisoMutableBuffer){profile+8,8}))
+        return service_fail(s,"hud","expiry-reason");
+    MeisoRuntimeActualState actual={0};
+    actual.observed_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,
+        hud.deferred_version?hud.deferred_version:hud.desired_version};
+    if(hud.expiry_failed || hud.deferred_version) {
+        if(hud.applied_version) actual.applied_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,hud.applied_version};
+    } else actual.applied_desired=actual.observed_desired;
+    actual.apply_result=hud.expiry_failed?MEISO_RUNTIME_APPLY_FAILED:
+        hud.deferred_version?MEISO_RUNTIME_APPLY_PENDING:MEISO_RUNTIME_APPLY_APPLIED;
+    actual.availability=MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    actual.production_status=hud.expiry_failed?MEISO_RUNTIME_PRODUCTION_FAILED:MEISO_RUNTIME_PRODUCTION_STOPPED;
+    actual.reason=hud.expiry_failed?MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED:MEISO_RUNTIME_PRODUCTION_REASON_NONE;
+    actual.profile=(MeisoByteView){profile,16};
+    if(!meiso_runtime_actual_state_encode(&actual,(MeisoMutableBuffer){wire,sizeof(wire)},&bytes)) return service_fail(s,"hud","expiry-codec");
+    const MeisoStateOffer offer={{9},{s->edge_owner,hud.actual_version+1,bytes}};
+    if(meiso_runtime_send_state_offer(s->runtime,service_route_key(s,MEISO_DISPLAY_OVERLAY_ROUTE_STATUS),&offer)!=MEISO_RUNTIME_OK)
+        return service_fail(s,"hud","expiry-actual");
+    ++hud.actual_version;hud.expiry_published=true;hud.pending=false;
+    fprintf(stderr,"SCENE_LEASE_EXPIRED cleared=%d time_ns=%"PRIu64"\n",!hud.expiry_failed,service_now_ns());
+    if(hud.deferred_version && !hud.expiry_failed) {
+        hud.scene=hud.deferred_scene;hud.evidence=hud.deferred_evidence;hud.desired_version=hud.deferred_version;
+        hud.last_generation=hud.scene.generation;hud.deferred_version=0;
+        hud.expiring=hud.expiry_submitted=hud.expiry_confirmed=hud.expiry_failed=hud.expiry_published=false;
+        hud.pending=true;hud.drawn=hud.submitted=hud.status_queued=false;hud.flip_ns=0;
+    }
     return true;
 }
 bool service_overlay_poll(Service *s)
 {
-    if(!s->overlay_enabled || !hud.pending) return true;
+    if(!s->overlay_enabled) return true;
+    if(s->link_enabled && !hud.expiring && meiso_display_residence_expired(&s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE],service_now_ns()/UINT64_C(1000000))) {
+        s->leases[MEISO_DISPLAY_LINK_LEASE_SCENE].active=false;
+        hud.expiring=true;hud.expiry_deadline=service_now_ns()+UINT64_C(750000000);
+    }
+    if(hud.expiring) return poll_expiry(s);
+    if(!hud.pending) return true;
     MeisoIngressVideoPresentation flip;
     MeisoIngressVideoPollResult polled=meiso_ingress_video_overlay_poll(hud.video,&flip);
     if(polled==MEISO_INGRESS_VIDEO_POLL_ERROR) return service_fail(s,"hud","poll");
     if(polled==MEISO_INGRESS_VIDEO_PRESENTED) {
-        if(!hud.submitted || flip.sequence!=hud.desired_version || !flip.page_flip_monotonic_ns)
+        if(!hud.submitted || flip.sequence!=hud.submitted_sequence || !flip.page_flip_monotonic_ns)
             return service_fail(s,"hud","flip-identity");
         hud.flip_ns=flip.page_flip_monotonic_ns; ++hud.presented;
     }
@@ -115,30 +197,32 @@ bool service_overlay_poll(Service *s)
         }
         const MeisoDisplayOverlayPlan *p=&hud.plan;
         MeisoIngressVideoSubmitResult r=s->scene_enabled ?
-            meiso_ingress_video_scene_submit(hud.video,hud.desired_version,&hud.scene) :
+            meiso_ingress_video_scene_submit(hud.video,hud.adapter_sequence+1,&hud.scene) :
             meiso_ingress_video_overlay_submit(hud.video,hud.desired_version,
             p->visible?p->x:0,p->visible?p->y:0,hud.raster_width,hud.raster_height,
             hud.pixels,(size_t)hud.raster_width*hud.raster_height*4);
         if(r==MEISO_INGRESS_VIDEO_WOULD_BLOCK) return true;
         if(r!=MEISO_INGRESS_VIDEO_ACCEPTED) return service_fail(s,"hud","submit");
+        hud.submitted_sequence=s->scene_enabled?++hud.adapter_sequence:hud.desired_version;
         hud.submitted=true; hud.last_submit_ns=now;
     }
     if(!hud.flip_ns || !service_session_tx_idle(s)) return true;
     if(!hud.status_queued) {
-        uint8_t profile[8],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+8]; MeisoByteView bytes;
+        uint8_t profile[16]={0},wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+16]; MeisoByteView bytes;
         put64(profile,hud.last_generation);
         MeisoRuntimeActualState actual={0};
         actual.observed_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,hud.desired_version};
         actual.applied_desired=actual.observed_desired; actual.apply_result=MEISO_RUNTIME_APPLY_APPLIED;
         actual.availability=MEISO_RUNTIME_AVAILABILITY_PRESENT; actual.effective_enabled=true;
         actual.production_status=MEISO_RUNTIME_PRODUCTION_RUNNING; actual.production_epoch=hud.epoch+1;
-        actual.profile=(MeisoByteView){profile,8};
+        actual.profile=(MeisoByteView){profile,s->link_enabled?16:8};
         if(!meiso_runtime_actual_state_encode(&actual,(MeisoMutableBuffer){wire,sizeof(wire)},&bytes))
             return service_fail(s,"hud","status-codec");
         MeisoStateOffer offer={{9},{s->edge_owner,hud.actual_version+1,bytes}};
         if(meiso_runtime_send_state_offer(s->runtime,service_route_key(s,MEISO_DISPLAY_OVERLAY_ROUTE_STATUS),&offer)!=MEISO_RUNTIME_OK)
             return service_fail(s,"hud","status-send");
-        ++hud.epoch; ++hud.actual_version; hud.status_queued=true; return true;
+        ++hud.epoch; ++hud.actual_version; hud.status_queued=true;
+        hud.applied_version=hud.desired_version;hud.applied_generation=hud.last_generation;return true;
     }
     uint8_t wire[56];
     if(!meiso_display_overlay_evidence_encode_for_class(&hud.evidence,SERVICE_EVIDENCE_CLASS,(MeisoMutableBuffer){wire,sizeof(wire)}))

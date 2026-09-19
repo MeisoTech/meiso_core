@@ -8,6 +8,7 @@
 #include <meiso/profiles/display_ingress/profile.h>
 #include <meiso/profiles/display_ingress/overlay.h>
 #include <meiso/profiles/display_ingress/application.h>
+#include <meiso/integrations/display_link_channel.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -132,6 +133,11 @@ typedef struct {
     MeisoOwnerScope edge_owner;
     MeisoDisplayIngressCapability capability;
     bool overlay_enabled, scene_enabled, stereo_video, camera_enabled;
+    bool link_enabled;
+    MeisoDisplayLinkCapability link_capability;
+    MeisoDisplayLinkChannel *link;
+    MeisoDisplayResidenceLease leases[MEISO_DISPLAY_LINK_LEASE_COUNT];
+    uint64_t link_version;
     int camera_media_fd, camera_input_fd;
     MeisoCompositionMediaCapability camera_capability;
     uint32_t selected_input_width, selected_input_height;
@@ -190,8 +196,9 @@ static inline uint32_t service_frame_width(const Service *s)
 static inline uint32_t service_frame_height(const Service *s)
 { return s->selected_input_height ? s->selected_input_height : SERVICE_FRAME_HEIGHT; }
 
-static inline size_t service_endpoint_count(const Service *s) { return 1U + s->overlay_enabled + s->camera_enabled; }
-static inline size_t service_route_count(const Service *s) { return 4U + 3U * (s->overlay_enabled + s->camera_enabled); }
+static inline uint32_t service_profile_version(const Service *s) { return s->link_enabled?11U:s->scene_enabled?10U:9U; }
+static inline size_t service_endpoint_count(const Service *s) { return 1U + s->overlay_enabled + s->camera_enabled + s->link_enabled; }
+static inline size_t service_route_count(const Service *s) { return 4U + 3U * (s->overlay_enabled + s->camera_enabled) + 2U*s->link_enabled; }
 
 #ifdef MEISO_DISPLAY_INGRESS_DRM_SERVICE
 SERVICE_PRIVATE_API bool service_drm_open(Service *service);
@@ -231,6 +238,7 @@ SERVICE_PRIVATE_API bool service_validate_staged_catalog(Service *service);
 
 SERVICE_PRIVATE_API bool service_run_host(Service *service);
 SERVICE_PRIVATE_API bool service_run_edge(Service *service);
+SERVICE_PRIVATE_API bool service_queue_running_actual_and_arm(Service *service);
 SERVICE_PRIVATE_API bool service_run_host_media(Service *service);
 SERVICE_PRIVATE_API bool service_run_edge_media(Service *service);
 SERVICE_PRIVATE_API bool service_terminate_media(

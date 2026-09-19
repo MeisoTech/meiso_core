@@ -229,10 +229,19 @@ static bool capture_open(const char *path)
 }
 #endif
 static uint64_t capture_last,capture_next,camera_deadline,camera_eof_deadline;
+static bool capture_halted;
 static bool camera_tick(Service *s)
 {
     if(!camera) return true;
     const uint64_t now=service_now_ns();
+    if(s->link_enabled && meiso_display_residence_expired(&s->leases[MEISO_DISPLAY_LINK_LEASE_CAMERA],now/UINT64_C(1000000))) {
+#ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
+        if(!capture_stop()) return service_fail(s,"camera","lease-capture-stop");
+#endif
+        capture_halted=true;s->leases[MEISO_DISPLAY_LINK_LEASE_CAMERA].active=false;
+        if(!meiso_display_camera_channel_stop(camera,MEISO_DISPLAY_LINK_LEASE_EXPIRED)) return service_fail(s,"camera","lease-stop");
+        fprintf(stderr,"CAMERA_LEASE_EXPIRED time_ns=%"PRIu64"\n",now);
+    }
     if(camera_eof_deadline) return now<camera_eof_deadline || service_fail(s,"camera","control-close-timeout");
     if(!meiso_display_camera_channel_poll(camera)) {
         if(!meiso_display_camera_channel_peer_eof(camera)) return service_fail(s,"camera","transport");
@@ -244,8 +253,11 @@ static bool camera_tick(Service *s)
 #endif
         return true;
     }
+    if(capture_halted || meiso_display_camera_channel_stopped(camera)) return true;
     if(!meiso_display_camera_channel_ready(camera))
         return now<camera_deadline || service_fail(s,"camera","negotiation-timeout");
+    if(s->link_enabled && !s->leases[MEISO_DISPLAY_LINK_LEASE_CAMERA].desired_version)
+        (void)meiso_display_residence_accept(&s->leases[MEISO_DISPLAY_LINK_LEASE_CAMERA],1,now/UINT64_C(1000000));
 #ifdef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
     if(!capture_started) { capture_started=true;capture_last=now; }
     const ssize_t n=read(s->camera_input_fd,capture_pixels+capture_used,sizeof(capture_pixels)-capture_used);
@@ -333,8 +345,26 @@ bool service_video_host_event(Service *s, const MeisoRuntimeEvent *event)
 { (void)event; return service_fail(s, "application", "edge-only"); }
 bool service_run_host_media(Service *s) { return service_fail(s, "application", "edge-only"); }
 
-/* One terminal video stop per Session; scene retains enabled geometry v1. */
-static struct { uint64_t version, deadline; bool requested, finished, failed, published; } video_stop;
+/* v9/v10 stop remains terminal. v11 can explicitly start a newer production
+ * after confirmed removal, without touching the scene adapter or Session. */
+static struct { uint64_t version, deadline, restart_version; uint32_t reason;
+    bool requested, finished, failed, published; } video_stop;
+
+static bool request_video_stop(Service *s, uint64_t version, uint32_t reason)
+{
+    if(!video_stop.requested) {
+        video_stop.requested=true;video_stop.deadline=service_now_ns()+UINT64_C(750000000);
+        if(!service_terminate_media(s,MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_LOCAL_CLOSE)) return false;
+        const MeisoIngressVideoClearResult result=meiso_ingress_video_clear(video);
+        video_stop.finished=result!=MEISO_INGRESS_VIDEO_CLEAR_PENDING;
+        video_stop.failed=result==MEISO_INGRESS_VIDEO_CLEAR_ERROR;
+    }
+    s->leases[MEISO_DISPLAY_LINK_LEASE_VIDEO].active=false;
+    video_stop.version=version;video_stop.reason=reason;video_stop.published=false;
+    fprintf(stderr,"VIDEO_STOP_REQUESTED version=%"PRIu64" geometry=%"PRIu64" reason=%u time_ns=%"PRIu64"\n",
+        version,s->video_geometry_desired_version,reason,service_now_ns());
+    return true;
+}
 
 static int consume_video_stop(Service *s, const MeisoRuntimeEvent *event)
 {
@@ -348,31 +378,30 @@ static int consume_video_stop(Service *s, const MeisoRuntimeEvent *event)
         !meiso_endpoint_id_equal(event->route.endpoint_id,r.endpoint_id) ||
         !meiso_owner_scope_equal(offer->state.owner,s->host_owner) ||
         offer->generation.value!=SERVICE_DESIRED_DELIVERY_GENERATION ||
-        !meiso_runtime_desired_state_decode(offer->state.payload,&desired) || desired.enabled ||
+        !meiso_runtime_desired_state_decode(offer->state.payload,&desired) ||
         desired.profile.size!=sizeof(s->applied_desired_profile) ||
-        memcmp(desired.profile.data,s->applied_desired_profile,desired.profile.size) ||
-        offer->state.version<=s->video_geometry_desired_version) {
+        memcmp(desired.profile.data,s->applied_desired_profile,desired.profile.size)) {
         (void)meiso_runtime_commit_state_receive(s->runtime,event->route,offer,MEISO_STATE_RECEIVE_INVALID);
         return -1;
     }
     const uint64_t version=offer->state.version;
+    MeisoStateView previous;
+    const bool repeated=meiso_state_replica_current(s->state_replica,&previous) && version<=previous.version;
+    if(!repeated && (version<=s->video_geometry_desired_version ||
+        (desired.enabled && (!s->link_enabled || !video_stop.published || !video_stop.finished)))) {
+        (void)meiso_runtime_commit_state_receive(s->runtime,event->route,offer,MEISO_STATE_RECEIVE_INVALID);
+        return -1;
+    }
     const MeisoStateReceiveStatus received=meiso_state_replica_receive(s->state_replica,
         offer->state.owner,version,offer->state.payload);
     if(meiso_runtime_commit_state_receive(s->runtime,event->route,offer,received)!=MEISO_RUNTIME_OK) return -1;
     if(received==MEISO_STATE_RECEIVE_DUPLICATE || received==MEISO_STATE_RECEIVE_STALE) return 1;
     if(received!=MEISO_STATE_RECEIVE_NEW) return -1;
-    if(!video_stop.requested) {
-        video_stop.requested=true; video_stop.deadline=service_now_ns()+UINT64_C(750000000);
-        if(!service_terminate_media(s,MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_LOCAL_CLOSE)) return -1;
-        /* Gates adapter admission now, before another decoder poll. */
-        const MeisoIngressVideoClearResult result=meiso_ingress_video_clear(video);
-        video_stop.finished=result!=MEISO_INGRESS_VIDEO_CLEAR_PENDING;
-        video_stop.failed=result==MEISO_INGRESS_VIDEO_CLEAR_ERROR;
+    if(desired.enabled) {
+        video_stop.restart_version=version;
+        return 1;
     }
-    video_stop.version=version; video_stop.published=false;
-    fprintf(stderr,"VIDEO_STOP_REQUESTED version=%"PRIu64" geometry=%"PRIu64" time_ns=%"PRIu64"\n",
-        version,s->video_geometry_desired_version,service_now_ns());
-    return 1;
+    return request_video_stop(s,version,MEISO_DISPLAY_LINK_TERMINAL_NONE)?1:-1;
 }
 
 static bool poll_video_stop(Service *s)
@@ -391,14 +420,20 @@ static bool poll_video_stop(Service *s)
     MeisoRuntimeActualState actual={0};
     actual.observed_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,video_stop.version};
     actual.applied_desired=(MeisoRuntimeDesiredReference){true,s->host_owner,
-        video_stop.failed?s->video_geometry_desired_version:video_stop.version};
+        (video_stop.failed || video_stop.reason==MEISO_DISPLAY_LINK_LEASE_EXPIRED)?s->video_geometry_desired_version:video_stop.version};
     actual.apply_result=video_stop.failed?MEISO_RUNTIME_APPLY_FAILED:MEISO_RUNTIME_APPLY_APPLIED;
     actual.availability=MEISO_RUNTIME_AVAILABILITY_PRESENT;
     actual.production_status=video_stop.failed?MEISO_RUNTIME_PRODUCTION_FAILED:MEISO_RUNTIME_PRODUCTION_STOPPED;
-    actual.reason=video_stop.failed?MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED:MEISO_RUNTIME_PRODUCTION_REASON_DISABLED;
-    uint8_t wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE];MeisoByteView bytes;
+    actual.reason=video_stop.failed?MEISO_RUNTIME_PRODUCTION_REASON_APPLY_FAILED:
+        video_stop.reason==MEISO_DISPLAY_LINK_LEASE_EXPIRED?MEISO_RUNTIME_PRODUCTION_REASON_NONE:MEISO_RUNTIME_PRODUCTION_REASON_DISABLED;
+    uint8_t profile[8],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+8];MeisoByteView bytes;
+    if(s->link_enabled) {
+        if(!meiso_display_link_terminal_encode(video_stop.failed?0:video_stop.reason,(MeisoMutableBuffer){profile,8}))
+            return service_fail(s,"application","video-stop-reason");
+        actual.profile=(MeisoByteView){profile,8};
+    }
     MeisoDisplayIngressActualStateView view;
-    if(meiso_display_ingress_validate_actual_state(&s->capability,&s->applied_desired,&actual,&view)!=MEISO_DISPLAY_INGRESS_PROFILE_OK ||
+    if(meiso_display_application_validate_video_actual(service_profile_version(s),&s->capability,&s->applied_desired,&actual,&view)!=MEISO_DISPLAY_INGRESS_PROFILE_OK ||
         !meiso_runtime_actual_state_encode(&actual,(MeisoMutableBuffer){wire,sizeof(wire)},&bytes))
         return service_fail(s,"application","video-stop-codec");
     const MeisoStateOffer offer={{SERVICE_ACTUAL_DELIVERY_GENERATION},{s->edge_owner,s->actual_version+1,bytes}};
@@ -407,13 +442,31 @@ static bool poll_video_stop(Service *s)
     if(sent==MEISO_RUNTIME_TX_BUSY) return true;
     if(sent!=MEISO_RUNTIME_OK) return service_fail(s,"control","video-stop-actual");
     ++s->actual_version;video_stop.published=true;
-    if(!video_stop.failed) {
+    if(!video_stop.failed && video_stop.reason!=MEISO_DISPLAY_LINK_LEASE_EXPIRED) {
         s->applied_desired.enabled=false;s->applied_desired_version=video_stop.version;
     }
     fprintf(stderr,"VIDEO_STOP_RESULT version=%"PRIu64" cleared=%d evidence=%u unobserved=%"PRIu64" time_ns=%"PRIu64"\n",
         video_stop.version,!video_stop.failed,SERVICE_EVIDENCE_CLASS,ledger_count,service_now_ns());
     /* Local decoder correlation retirement is not a negative frame receipt. */
     if(!video_stop.failed) {memset(ledger,0,sizeof(ledger));ledger_count=0;}
+    return true;
+}
+
+static bool poll_video_restart(Service *s)
+{
+    if(!video_stop.restart_version || !service_session_tx_idle(s)) return true;
+    const uint64_t version=video_stop.restart_version;video_stop.restart_version=0;
+    if(meiso_ingress_video_reactivate(video)) {
+        video_stop.version=version;video_stop.failed=true;video_stop.published=false;video_stop.reason=0;
+        return true; /* FAILED/APPLY_FAILED preserves the last enabled identity. */
+    }
+    s->media=NULL;s->udp=NULL;s->binding_ready=false;
+    s->applied_desired.enabled=true;s->applied_desired_version=version;s->video_geometry_desired_version=version;
+    if(!service_queue_running_actual_and_arm(s)) return false;
+    memset(&video_stop,0,sizeof(video_stop));
+    memset(ledger,0,sizeof(ledger));ledger_count=0;last_evidence_sequence=0;
+    (void)meiso_display_residence_accept(&s->leases[MEISO_DISPLAY_LINK_LEASE_VIDEO],version,service_now_ns()/UINT64_C(1000000));
+    fprintf(stderr,"VIDEO_REACTIVATED version=%"PRIu64" epoch=%"PRIu64" session_unchanged=true\n",version,s->production_epoch);
     return true;
 }
 
@@ -548,8 +601,14 @@ static bool queue_presentation(Service *s)
 bool service_run_edge_media(Service *s)
 {
     if (!service_overlay_initialize(s, video)) return false;
+    if(s->link_enabled) {
+        s->link=meiso_display_link_channel_open(s->session,s->runtime,NULL);
+        if(!s->link) return service_fail(s,"link","open");
+        (void)meiso_display_residence_accept(&s->leases[0],s->applied_desired_version,service_now_ns()/UINT64_C(1000000));
+    }
     if(s->camera_enabled) {
-        MeisoDisplayCameraChannelConfig config={.session=s->session,.runtime=s->runtime,.media_fd=s->camera_media_fd};
+        MeisoDisplayCameraChannelConfig config={.session=s->session,.runtime=s->runtime,.media_fd=s->camera_media_fd,
+            .application_version=service_profile_version(s)};
         if(!service_random_bytes(&config.edge_nonce,sizeof(config.edge_nonce))) return false;
         camera=meiso_display_camera_channel_open(&config);
         if(!camera) return service_fail(s,"camera","open");
@@ -558,8 +617,11 @@ bool service_run_edge_media(Service *s)
     const uint64_t deadline = service_now_ns() + frame_limit * UINT64_C(1000000000) / 30U + UINT64_C(15000000000);
     uint64_t last_progress = service_now_ns(), previous_presented = 0;
     while (!interrupted && (continuous_edge || service_now_ns() < deadline)) {
+        if(s->link_enabled && meiso_display_residence_expired(&s->leases[0],service_now_ns()/UINT64_C(1000000)) &&
+            !request_video_stop(s,s->applied_desired_version,MEISO_DISPLAY_LINK_LEASE_EXPIRED)) return false;
         if ((!video_stop.requested && (!receive_batch(s) || !decode_latest(s))) ||
             (!video_stop.published && !poll_presentation(s)) || !service_overlay_poll(s)) return false;
+        if(!camera_tick(s)) return false;
         MeisoRuntimeEvent event;
         ServiceControlStep step = service_control_step(s, true, 0, &event);
         if (step == SERVICE_CONTROL_PEER_CLOSED) {
@@ -570,12 +632,22 @@ bool service_run_edge_media(Service *s)
         if (step == SERVICE_CONTROL_FAILED) return false;
         if (step == SERVICE_CONTROL_EVENT) {
             int consumed=0;
-            consumed=consume_video_stop(s,&event);
+            if(s->link) consumed=meiso_display_link_channel_consume(s->link,&event);
+            if(!consumed) consumed=consume_video_stop(s,&event);
             if(!consumed && camera) consumed=meiso_display_camera_channel_consume(camera,&event);
             if(consumed<0 || (!consumed && !service_overlay_consume(s,&event))) return service_fail(s,"camera","control");
         }
-        if(!camera_tick(s)) return false;
-        if (!queue_presentation(s) || !poll_video_stop(s)) return false;
+        if(s->link) {
+            MeisoDisplayLinkDesired settings;
+            const uint64_t version=meiso_display_link_channel_effective(s->link,&settings);
+            if(version && version!=s->link_version) {
+                for(unsigned i=0;i<MEISO_DISPLAY_LINK_LEASE_COUNT;++i)
+                    meiso_display_residence_renew(&s->leases[i],settings.lease_ms[i],service_now_ns()/UINT64_C(1000000));
+                s->link_version=version;
+            }
+            if(!meiso_display_link_channel_poll(s->link,service_now_ns()/UINT64_C(1000000))) return service_fail(s,"link","heartbeat");
+        }
+        if (!queue_presentation(s) || !poll_video_stop(s) || !poll_video_restart(s)) return false;
         if (presented != previous_presented || ledger_count == 0) last_progress = service_now_ns();
         previous_presented = presented;
         if (!video_stop.requested && ledger_count != 0 && service_now_ns() - last_progress > UINT64_C(5000000000))
@@ -633,6 +705,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--camera-input-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_input_fd=(int)n;
 #endif
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+        else if (strcmp(argv[i], "--link-control") == 0 && strcmp(argv[i+1], "on") == 0) service.link_enabled=true;
         else if (strcmp(argv[i], "--camera-codec") == 0 && strcmp(argv[i+1],"jpeg")==0) capture_jpeg=true;
         else if (strcmp(argv[i], "--camera-media-fd") == 0 && number(argv[i+1],1048575U,&n)) service.camera_media_fd=(int)n;
 #ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
@@ -655,6 +728,9 @@ int main(int argc, char **argv)
         return 2;
     }
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
+    if(service.link_enabled && service.overlay_enabled && !service.scene_enabled) {
+        fprintf(stderr,"v11 link control requires native-overlay scene when HUD is selected\n");return 2;
+    }
     service.camera_enabled=service.camera_media_fd>=0;
     if(service.camera_enabled && (service.camera_media_fd==service.control_fd ||
             service.camera_media_fd==service.media_fd)) {
@@ -749,6 +825,11 @@ int main(int argc, char **argv)
     if (input == NULL || !open_source(input)) { fprintf(stderr, "invalid H264 IDR source\n"); return 2; }
     fprintf(stderr, "SOURCE units=%zu bytes=%zu\n", unit_count, source_size);
 #endif
+    if(service.link_enabled) {
+        service.link_capability=(MeisoDisplayLinkCapability){7,{1000,20000,100000},{1000,20000,100000},
+            service_frame_width(&service)*service_frame_height(&service),
+            service.scene_enabled?service.scene_capability.max_pixels:service.output_width*service.output_height};
+    }
     bool ok=true;
 #if defined(MEISO_DISPLAY_INGRESS_VIDEO_EDGE) && !defined(MEISO_DISPLAY_INGRESS_DESKTOP_EDGE)
     if(service.camera_enabled) ok=capture_open(camera_path);
@@ -760,6 +841,7 @@ int main(int argc, char **argv)
     int restored = 1;
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_EDGE
     service_overlay_finish();
+    meiso_display_link_channel_close(service.link);
     meiso_display_camera_channel_close(camera);
     service_close_fd(&service.camera_media_fd); service_close_fd(&service.camera_input_fd);
 #ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE

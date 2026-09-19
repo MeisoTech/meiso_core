@@ -142,6 +142,13 @@ add_library(
     ALIAS meiso_display_ingress_profile
 )
 
+# Carrier-independent assembly of the v11 Runtime State heartbeat.
+add_library(meiso_display_link_channel integrations/display_link_channel.c)
+meiso_configure_public_target(meiso_display_link_channel DisplayLinkChannel)
+target_link_libraries(meiso_display_link_channel PUBLIC meiso_display_ingress_profile)
+meiso_enable_warnings(meiso_display_link_channel)
+add_library(Meiso::DisplayLinkChannel ALIAS meiso_display_link_channel)
+
 add_library(
     meiso_display_ingress_media_transport
     profiles/display_ingress/display_ingress_media_transport.c

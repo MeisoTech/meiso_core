@@ -2,6 +2,8 @@ meiso_add_c_test(meiso_display_ingress_application_test
     tests/test_display_ingress_application.c profile meiso_display_ingress_profile)
 meiso_add_c_test(meiso_display_ingress_link_test
     tests/test_display_ingress_link.c profile meiso_display_ingress_profile)
+meiso_add_c_test(meiso_display_link_channel_test
+    tests/test_display_link_channel.c profile meiso_display_link_channel)
 meiso_add_c_test(meiso_display_ingress_camera_test
     tests/test_display_ingress_camera.c profile meiso_display_ingress_profile)
 # Profile, renderer, offscreen target-policy, and Composition scheduling lanes.

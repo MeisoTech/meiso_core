@@ -166,7 +166,7 @@ static bool random_channel_nonce(MeisoSessionNonce *out_nonce)
     return false;
 }
 
-static bool queue_running_actual_and_arm(Service *service)
+bool service_queue_running_actual_and_arm(Service *service)
 {
     MeisoDisplayIngressActual profile;
     MeisoRuntimeActualState actual;
@@ -194,7 +194,7 @@ static bool queue_running_actual_and_arm(Service *service)
     }
     memset(&actual, 0, sizeof(actual));
     actual.observed_desired = (MeisoRuntimeDesiredReference){
-        true, service->host_owner, SERVICE_STATE_VERSION
+        true, service->host_owner, service->applied_desired_version
     };
     actual.applied_desired = actual.observed_desired;
     actual.apply_result = MEISO_RUNTIME_APPLY_APPLIED;
@@ -202,7 +202,9 @@ static bool queue_running_actual_and_arm(Service *service)
     actual.effective_enabled = true;
     actual.production_status = MEISO_RUNTIME_PRODUCTION_RUNNING;
     actual.reason = MEISO_RUNTIME_PRODUCTION_REASON_NONE;
-    actual.production_epoch = SERVICE_PRODUCTION_EPOCH;
+    if(service->production_epoch==UINT64_MAX || service->actual_version==UINT64_MAX)
+        return service_fail(service,"application","epoch-exhausted");
+    actual.production_epoch = service->production_epoch+1;
     actual.profile = (MeisoByteView){profile_wire, profile_size};
     if (meiso_display_ingress_validate_actual_state(
             &service->capability,
@@ -219,7 +221,7 @@ static bool queue_running_actual_and_arm(Service *service)
     }
     offer = (MeisoStateOffer){
         {SERVICE_ACTUAL_DELIVERY_GENERATION},
-        {service->edge_owner, SERVICE_STATE_VERSION, runtime_payload}
+        {service->edge_owner, service->actual_version+1, runtime_payload}
     };
     if (meiso_runtime_send_state_offer(
             service->runtime,
@@ -246,7 +248,8 @@ static bool queue_running_actual_and_arm(Service *service)
         meiso_posix_tcp_abort(service->tcp, EPROTO);
         return false;
     }
-    if (!service_flush_control(service)) {
+    service->media_terminated=false;
+    if (!service->link_enabled && !service_flush_control(service)) {
         return false;
     }
     return true;
@@ -255,7 +258,7 @@ static bool queue_running_actual_and_arm(Service *service)
 bool service_run_edge(Service *service)
 {
     return offer_catalog(service) && receive_desired(service) &&
-        queue_running_actual_and_arm(service);
+        service_queue_running_actual_and_arm(service);
 }
 
 #ifndef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE

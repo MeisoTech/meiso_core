@@ -94,6 +94,22 @@ int main(void)
             CHECK(!meiso_display_application_build_catalog_for_version(&c,10,(MeisoMutableBuffer){caps,188},ep,4,rt,12));
         }
     }
-    puts("v11 link wire, bounded heartbeat, independent leases and catalog vectors passed");
+    uint8_t desired_wire[12],terminal[8];size_t size=0;
+    const MeisoDisplayIngressDesired pixels={1280,720,30000};
+    CHECK(meiso_display_ingress_desired_encode(&pixels,(MeisoMutableBuffer){desired_wire,12},&size)==MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    MeisoRuntimeDesiredState enabled={true,{desired_wire,12}};
+    MeisoRuntimeActualState actual={0};
+    actual.observed_desired=(MeisoRuntimeDesiredReference){true,{MEISO_OWNER_ROLE_HOST,1},1};actual.applied_desired=actual.observed_desired;
+    actual.apply_result=MEISO_RUNTIME_APPLY_APPLIED;actual.availability=MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    actual.production_status=MEISO_RUNTIME_PRODUCTION_STOPPED;actual.profile=(MeisoByteView){terminal,8};
+    CHECK(meiso_display_link_terminal_encode(1,(MeisoMutableBuffer){terminal,8}));
+    MeisoDisplayIngressActualStateView view;
+    CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)==MEISO_DISPLAY_INGRESS_PROFILE_OK && !view.data_active);
+    CHECK(meiso_display_application_validate_video_actual(10,&c.video.capability,&enabled,&actual,&view)!=MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    actual.production_status=MEISO_RUNTIME_PRODUCTION_FAILED;actual.apply_result=MEISO_RUNTIME_APPLY_FAILED;
+    CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)!=MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    CHECK(meiso_display_link_terminal_encode(0,(MeisoMutableBuffer){terminal,8}));
+    CHECK(meiso_display_application_validate_video_actual(11,&c.video.capability,&enabled,&actual,&view)==MEISO_DISPLAY_INGRESS_PROFILE_OK);
+    puts("v11 link wire, bounded heartbeat, independent leases, truthful terminal and catalog vectors passed");
     return 0;
 }

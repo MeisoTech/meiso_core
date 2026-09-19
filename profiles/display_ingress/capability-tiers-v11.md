@@ -135,7 +135,7 @@ endpoint 时不启用心跳/lease。ID 的 high word 为 `DISPLAY_`，endpoint l
 |---|---:|---|
 | LINK_CAP | 40 B | tier_mask；T0/T1/T2 各 downlink、uplink kbit/s；decode_max_pixels；render_max_pixels；reserved=0 |
 | LINK_DES | 32 B | tier（0/1/2）；downlink、uplink kbit/s；keepalive_interval_ms；keepalive_miss_limit；video/scene/camera_lease_ms |
-| LINK_ACT | 32 B | 已接受 LINK_DES 的原 suffix；observed/applied 引用该版本，RUNNING，epoch=1（只有控制，无数据生产） |
+| LINK_ACT | 32 B | 已接受 LINK_DES 的原 suffix；observed/applied 引用该版本，RUNNING，epoch=该版本（只有控制，无数据 route；遵守 Runtime 新 applied 必须新 epoch 的规则） |
 
 未公布档位的两个预算必须为 0，公布档位的预算必须非零；解码/渲染像素上限非零。
 Desired 的 tier 必须公布、两预算不得超过对应公布值。内容的合计预算校验留给 #31。

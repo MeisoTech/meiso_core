@@ -113,6 +113,7 @@ int main(void)
     CHECK(meiso_ingress_video_scene_submit(v,4,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
     CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
     CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING);
+    CHECK(meiso_ingress_video_reactivate(v)!=0); // pending removal is not a release proof
     CHECK(meiso_ingress_video_submit(v,3,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
     CHECK(meiso_ingress_video_scene_submit(v,5,&scene)==MEISO_INGRESS_VIDEO_WOULD_BLOCK);
     CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==2);
@@ -129,6 +130,15 @@ int main(void)
     CHECK(meiso_ingress_video_scene_submit(v,5,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
     CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==5);
     CHECK(pixels(dir,got) && got[(8*64+8)*3+1]==0 && got[(8*64+20)*3+1]==255);
+    CHECK(!meiso_ingress_video_reactivate(v));
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_NONE); // flushing is not a new receipt
+    CHECK(meiso_ingress_video_submit(v,1,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==1);
+    scene.generation=6;
+    CHECK(meiso_ingress_video_scene_submit(v,6,&scene)==MEISO_INGRESS_VIDEO_ACCEPTED);
+    CHECK(meiso_ingress_video_overlay_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED && p.sequence==6);
+    CHECK(pixels(dir,got) && got[(12*64+12)*3]>240 && got[(12*64+44)*3+2]>240);
+    CHECK(got[(8*64+20)*3+1]==255); // independent scene survived video restart
     // Closing an active scene still clears all remaining current output.
     CHECK(!meiso_ingress_video_close(v));
     CHECK(pixels(dir,got));
@@ -144,6 +154,7 @@ int main(void)
     CHECK(meiso_ingress_video_poll(v,&p)==MEISO_INGRESS_VIDEO_PRESENTED);
     char moved[256];snprintf(moved,sizeof(moved),"%s/moved",root);CHECK(!rename(dir,moved));
     CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_ERROR);
+    CHECK(meiso_ingress_video_reactivate(v)!=0); // failed removal is never enough
     CHECK(!rename(moved,dir));
     CHECK(meiso_ingress_video_clear(v)==MEISO_INGRESS_VIDEO_CLEAR_ERROR);
     CHECK(meiso_ingress_video_submit(v,2,stereo_h264,sizeof(stereo_h264))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);

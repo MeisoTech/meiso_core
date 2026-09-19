@@ -6,6 +6,24 @@
 #define put32 meiso_display_ingress_private_put_u32
 static const MeisoSchemaRef schema={{UINT64_C(0x444953505f534348),UINT64_C(0x4341504142494c5f)},3};
 const MeisoSchemaRef *meiso_display_application_video_capability_schema(void){return &schema;}
+MeisoDisplayIngressProfileStatus meiso_display_application_validate_video_actual(uint32_t version,
+    const MeisoDisplayIngressCapability *capability, const MeisoRuntimeDesiredState *desired,
+    const MeisoRuntimeActualState *state, MeisoDisplayIngressActualStateView *out)
+{
+    if(version==9 || version==10 || (version==11 && state && state->production_status==MEISO_RUNTIME_PRODUCTION_RUNNING))
+        return meiso_display_ingress_validate_actual_state(capability,desired,state,out);
+    if(version!=11 || !state || !out || !capability ||
+        overlap(out,sizeof(*out),state,sizeof(*state)) || overlap(out,sizeof(*out),state->profile.data,state->profile.size) ||
+        overlap(out,sizeof(*out),capability,sizeof(*capability)) || (desired &&
+        (overlap(out,sizeof(*out),desired,sizeof(*desired)) || overlap(out,sizeof(*out),desired->profile.data,desired->profile.size))))
+        return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_ARGUMENT;
+    uint32_t reason;
+    if(!meiso_display_link_terminal_decode(state->profile,&reason) || (reason==MEISO_DISPLAY_LINK_LEASE_EXPIRED &&
+        (state->production_status!=MEISO_RUNTIME_PRODUCTION_STOPPED || !state->applied_desired.present ||
+         !desired || !desired->enabled))) return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_VALUE;
+    MeisoRuntimeActualState legacy=*state;legacy.profile=(MeisoByteView){NULL,0};
+    return meiso_display_ingress_validate_actual_state(capability,desired,&legacy,out);
+}
 static bool geometry(const MeisoDisplayApplicationCatalogConfig *c,uint32_t version)
 {
     return (version==9 || version==10 || version==11) && (!c->link_enabled || version==11) &&
@@ -36,7 +54,7 @@ bool meiso_display_application_configure_session_for_version(MeisoSessionConfig 
     if(!out || (version!=9 && version!=10 && version!=11)) return false;
     MeisoSessionConfig c=*out;
     if(meiso_display_ingress_configure_session_for_format(&c,MEISO_DISPLAY_INGRESS_FRAME_H264_IDR)!=MEISO_DISPLAY_INGRESS_PROFILE_OK) return false;
-    c.profile.version=version;c.limits.max_registry_entries=version==11?15:13;
+    c.profile.version=version;c.limits.max_registry_entries=version==11?16:13;
     if(!meiso_session_memory_required(&c)) return false;
     *out=c;return true;
 }

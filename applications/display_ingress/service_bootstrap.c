@@ -154,8 +154,9 @@ static bool build_catalog(Service *service)
         .output_width=service->output_width ? service->output_width : service_frame_width(service),
         .output_height=service->output_height ? service->output_height : service_frame_height(service),
         .video_layout=service->stereo_video,.overlay_enabled=service->overlay_enabled,
-        .camera_enabled=service->camera_enabled,.overlay=service->overlay_capability,.camera=service->camera_capability,.scene=service->scene_capability};
-    return meiso_display_application_build_catalog_for_version(&application,service->scene_enabled?10:9,
+        .camera_enabled=service->camera_enabled,.overlay=service->overlay_capability,.camera=service->camera_capability,.scene=service->scene_capability,
+        .link_enabled=service->link_enabled,.link=service->link_capability};
+    return meiso_display_application_build_catalog_for_version(&application,service_profile_version(service),
         (MeisoMutableBuffer){service->capability_wire,sizeof(service->capability_wire)},
         service->endpoints,MEISO_DISPLAY_APPLICATION_MAX_ENDPOINTS,service->routes,MEISO_DISPLAY_APPLICATION_MAX_ROUTES);
 #else
@@ -208,7 +209,7 @@ static bool initialize_session_and_tcp(Service *service)
     session_config.protocol = (MeisoProtocolVersion){1U, 0U};
     if (
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
-        !meiso_display_application_configure_session_for_version(&session_config,service->scene_enabled?10:9)
+        !meiso_display_application_configure_session_for_version(&session_config,service_profile_version(service))
 #else
         meiso_display_ingress_configure_session_for_format(&session_config, SERVICE_FRAME_FORMAT) != MEISO_DISPLAY_INGRESS_PROFILE_OK
 #endif
@@ -277,7 +278,7 @@ bool service_initialize_runtime(Service *service)
         snapshot.state != MEISO_SESSION_STATE_READY ||
         !snapshot.session_id_known || !snapshot.remote_identity_known ||
 #ifdef MEISO_DISPLAY_INGRESS_VIDEO_SERVICE
-        !meiso_display_application_configure_runtime_for_version(&runtime_config, service->session,service->scene_enabled?10:9)
+        !meiso_display_application_configure_runtime_for_version(&runtime_config, service->session,service_profile_version(service))
 #else
         meiso_display_ingress_configure_runtime_v4(&runtime_config, service->session) != MEISO_DISPLAY_INGRESS_PROFILE_OK
 #endif

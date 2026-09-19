@@ -201,6 +201,13 @@ MeisoIngressVideoClearResult meiso_ingress_video_clear(MeisoIngressVideo *v)
 
 int meiso_ingress_video_output_size(const MeisoIngressVideo *v,uint32_t *w,uint32_t *h)
 {if(!v || !w || !h)return -1;*w=v->output_width;*h=v->output_height;return 0;}
+int meiso_ingress_video_reactivate(MeisoIngressVideo *v)
+{
+    if(!v || !v->cleared || v->clear_failed || v->pending) return -1;
+    avcodec_flush_buffers(v->decoder);av_frame_unref(v->frame);
+    v->sequence=0;v->stopping=false;v->cleared=false;
+    return 0;
+}
 int meiso_ingress_video_set_output_size(MeisoIngressVideo *v,uint32_t w,uint32_t h)
 {
     if(!v || v->scene_pixels || v->sequence || v->overlay_sequence || v->stereo || w<v->width || h<v->height || w>4096 || h>4096) return -1;

@@ -17,9 +17,20 @@ struct MeisoDisplayCameraChannel {
     MeisoCompositionMediaPosixTcp *tcp;
     void *replica_memory,*transport_memory,*tcp_memory;
     bool sent,received,failed;
+    bool stopped,stop_published;
+    uint32_t terminal_reason;
+    uint64_t actual_version;
     uint64_t submitted_sequence,producer_dropped;
 };
 static bool fail(MeisoDisplayCameraChannel *c) { c->failed=true; return false; }
+static bool stop_media(MeisoDisplayCameraChannel *c)
+{
+    if(c->tcp && meiso_composition_media_posix_tcp_terminate(c->tcp,MEISO_COMPOSITION_MEDIA_TERMINAL_LOCAL_CLOSE,0)!=
+        MEISO_COMPOSITION_MEDIA_POSIX_TCP_TERMINATE_OK) return fail(c);
+    free(c->tcp_memory);free(c->transport_memory);
+    c->tcp_memory=NULL;c->transport_memory=NULL;c->tcp=NULL;c->transport=NULL;
+    return true;
+}
 static bool route_equal(MeisoRuntimeRouteKey a, MeisoRuntimeRouteKey b)
 {
     return a.catalog_generation==b.catalog_generation && a.endpoint_incarnation==b.endpoint_incarnation &&
@@ -101,9 +112,30 @@ int meiso_display_camera_channel_consume(MeisoDisplayCameraChannel *c,const Meis
     const unsigned receive_route=host?1:0;
     if(event->type==MEISO_RUNTIME_EVENT_STATE_ACCEPT) {
         if(c->sent && route_equal(event->route,c->routes[host?0:1]) &&
-            event->state_accept_generation.value==(host?11U:12U) && event->state_accept_version==1 &&
+            event->state_accept_generation.value==(host?11U:12U) && event->state_accept_version &&
+            event->state_accept_version<=(host?1:c->actual_version) &&
             meiso_owner_scope_equal(event->state_accept_owner,host?c->host:c->edge)) return 1;
         fail(c); return -1;
+    }
+    if(host && c->config.application_version==11 && c->received &&
+        event->type==MEISO_RUNTIME_EVENT_STATE_OFFER && route_equal(event->route,c->routes[1]) &&
+        event->state_offer.generation.value==12 && meiso_owner_scope_equal(event->state_offer.state.owner,c->edge)) {
+        MeisoRuntimeActualState a;uint32_t reason;
+        if(!meiso_runtime_actual_state_decode(event->state_offer.state.payload,&a) ||
+            a.production_status!=MEISO_RUNTIME_PRODUCTION_STOPPED || a.effective_enabled || a.production_epoch ||
+            a.apply_result!=MEISO_RUNTIME_APPLY_APPLIED || a.availability!=MEISO_RUNTIME_AVAILABILITY_PRESENT ||
+            a.reason!=MEISO_RUNTIME_PRODUCTION_REASON_NONE || !a.observed_desired.present ||
+            a.observed_desired.version!=1 || !meiso_owner_scope_equal(a.observed_desired.owner,c->host) ||
+            !meiso_display_link_terminal_decode(a.profile,&reason) || reason!=MEISO_DISPLAY_LINK_LEASE_EXPIRED) {fail(c);return -1;}
+        const uint64_t version=event->state_offer.state.version;
+        const MeisoStateReceiveStatus r=meiso_state_replica_receive(c->replica,event->state_offer.state.owner,version,event->state_offer.state.payload);
+        if(meiso_runtime_commit_state_receive(c->config.runtime,event->route,&event->state_offer,r)!=MEISO_RUNTIME_OK ||
+            (r!=MEISO_STATE_RECEIVE_NEW && r!=MEISO_STATE_RECEIVE_DUPLICATE && r!=MEISO_STATE_RECEIVE_STALE)) {fail(c);return -1;}
+        if(r==MEISO_STATE_RECEIVE_NEW) {
+            if(!stop_media(c)) return -1;
+            c->actual_version=version;c->terminal_reason=reason;c->stopped=c->stop_published=true;
+        }
+        return 1;
     }
     if(event->type!=MEISO_RUNTIME_EVENT_STATE_OFFER || c->received ||
         !route_equal(event->route,c->routes[receive_route]) || event->state_offer.state.version!=1 ||
@@ -129,13 +161,28 @@ int meiso_display_camera_channel_consume(MeisoDisplayCameraChannel *c,const Meis
         event->state_offer.state.version,event->state_offer.state.payload);
     if(received!=MEISO_STATE_RECEIVE_NEW || meiso_runtime_commit_state_receive(c->config.runtime,event->route,
         &event->state_offer,received)!=MEISO_RUNTIME_OK) {fail(c);return -1;}
-    c->received=true;
+    c->received=true;if(host)c->actual_version=event->state_offer.state.version;
     return !host || arm(c)?1:-1;
 }
 bool meiso_display_camera_channel_poll(MeisoDisplayCameraChannel *c)
 {
     if(!c || c->failed) return false;
     const bool host=c->role==MEISO_SESSION_ROLE_HOST;
+    if(c->stopped) {
+        if(!host && !c->stop_published && idle(c)) {
+            uint8_t suffix[8],wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE+8];MeisoByteView bytes;
+            MeisoRuntimeActualState a={0};
+            a.observed_desired=(MeisoRuntimeDesiredReference){true,c->host,1};a.applied_desired=a.observed_desired;
+            a.apply_result=MEISO_RUNTIME_APPLY_APPLIED;a.availability=MEISO_RUNTIME_AVAILABILITY_PRESENT;
+            a.production_status=MEISO_RUNTIME_PRODUCTION_STOPPED;a.profile=(MeisoByteView){suffix,8};
+            if(!meiso_display_link_terminal_encode(c->terminal_reason,(MeisoMutableBuffer){suffix,8}) ||
+                !meiso_runtime_actual_state_encode(&a,(MeisoMutableBuffer){wire,sizeof(wire)},&bytes)) return fail(c);
+            const MeisoStateOffer offer={{12},{c->edge,c->actual_version+1,bytes}};
+            if(meiso_runtime_send_state_offer(c->config.runtime,c->routes[1],&offer)!=MEISO_RUNTIME_OK) return fail(c);
+            ++c->actual_version;c->stop_published=true;
+        }
+        return true;
+    }
     if(!c->sent && (host || c->received) && idle(c)) {
         uint8_t profile[80],wire[MEISO_COMPOSITION_MEDIA_ACTUAL_STATE_MAX_PAYLOAD_SIZE]; size_t size;
         MeisoByteView payload;
@@ -157,7 +204,7 @@ bool meiso_display_camera_channel_poll(MeisoDisplayCameraChannel *c)
         }
         const MeisoStateOffer offer={{host?11U:12U},{host?c->host:c->edge,1,payload}};
         if(meiso_runtime_send_state_offer(c->config.runtime,c->routes[host?0:1],&offer)!=MEISO_RUNTIME_OK) return fail(c);
-        c->sent=true; if(!host && !arm(c)) return false;
+        c->sent=true; if(!host) {c->actual_version=1;if(!arm(c))return false;}
     }
     if(!c->tcp) return true;
     /* Bounded work: at most 16 packets per direction, ~64 KiB. */
@@ -179,9 +226,19 @@ bool meiso_display_camera_channel_poll(MeisoDisplayCameraChannel *c)
 bool meiso_display_camera_channel_ready(const MeisoDisplayCameraChannel *c)
 {
     MeisoCompositionMediaTransportSnapshot s;
-    return c && !c->failed && c->transport && meiso_composition_media_transport_snapshot(c->transport,&s)==MEISO_COMPOSITION_MEDIA_TRANSPORT_OK &&
+    return c && !c->failed && !c->stopped && c->transport && meiso_composition_media_transport_snapshot(c->transport,&s)==MEISO_COMPOSITION_MEDIA_TRANSPORT_OK &&
         (s.phase==MEISO_COMPOSITION_MEDIA_TRANSPORT_HOST_ACTIVE || s.phase==MEISO_COMPOSITION_MEDIA_TRANSPORT_EDGE_ACTIVE);
 }
+bool meiso_display_camera_channel_stop(MeisoDisplayCameraChannel *c,uint32_t reason)
+{
+    if(!c || c->failed || c->config.application_version!=11 || c->role!=MEISO_SESSION_ROLE_EDGE ||
+        !c->sent || reason!=MEISO_DISPLAY_LINK_LEASE_EXPIRED) return false;
+    if(c->stopped) return c->terminal_reason==reason;
+    if(!stop_media(c)) return false;
+    c->stopped=true;c->terminal_reason=reason;return true;
+}
+bool meiso_display_camera_channel_stopped(const MeisoDisplayCameraChannel *c)
+{ return c && !c->failed && c->stopped; }
 bool meiso_display_camera_channel_peer_eof(const MeisoDisplayCameraChannel *c)
 {
     MeisoCompositionMediaPosixTcpSnapshot s;

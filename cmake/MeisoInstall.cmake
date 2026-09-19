@@ -92,6 +92,7 @@ install(
         meiso_composition_profile
         meiso_composition_media_transport
         meiso_display_ingress_profile
+        meiso_display_link_channel
         meiso_display_ingress_media_transport
     EXPORT MeisoProfilesTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Profiles
@@ -346,6 +347,9 @@ install(
 
 unset(meiso_composition_headers)
 unset(meiso_composition_install_targets)
+
+install(FILES include/meiso/integrations/display_link_channel.h
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/integrations" COMPONENT Profiles)
 
 if(TARGET meiso_display_camera_channel)
     install(FILES include/meiso/integrations/display_camera_channel.h

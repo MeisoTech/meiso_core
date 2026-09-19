@@ -612,6 +612,42 @@ int meiso_ingress_video_output_size(const MeisoIngressVideo *v, uint32_t *width,
     *width=v->output_w; *height=v->output_h; return 0;
 }
 
+int meiso_ingress_video_reactivate(MeisoIngressVideo *v)
+{
+    if(!v || !v->clear.completed || v->clear.failed || v->flip.pending || v->clear.pending ||
+        !video_planes_inactive(v)) return errno=EBUSY,-1;
+    /* Old MVX queues may still contain decoded frames with the old epoch.
+     * Quiesce both queues before releasing any DMA-BUF, then recreate just the
+     * decoder allocation. There is never a second simultaneous capture pool. */
+    const enum v4l2_buf_type cap=V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,out=V4L2_BUF_TYPE_VIDEO_OUTPUT;
+    if(v->capture_streaming && stream(v,cap,0)) goto fail;
+    v->capture_streaming=0;
+    if(v->output_streaming && stream(v,out,0)) goto fail;
+    v->output_streaming=0;
+    if(v->capture_buffers_requested && request_buffers(v,cap,0)) goto fail;
+    if(v->output_buffers_requested && request_buffers(v,out,0)) goto fail;
+    if(v->source_subscribed) {
+        struct v4l2_event_subscription sub={.type=V4L2_EVENT_SOURCE_CHANGE};
+        if(ioctl(v->video_fd,VIDIOC_UNSUBSCRIBE_EVENT,&sub)) goto fail;
+        v->source_subscribed=0;
+    }
+    if(release_fb(v,v->shown_fb,v->shown_handles)) goto fail;
+    v->shown_fb=0;memset(v->shown_handles,0,sizeof(v->shown_handles));
+    if(release_fb(v,v->flip.fb,v->flip.handles)) goto fail;
+    memset(&v->flip,0,sizeof(v->flip));
+    for(unsigned i=0;i<CAPTURE_BUFFERS;++i)
+        for(unsigned p=0;p<2;++p) if(destroy_surface(v->drm_fd,&v->capture[i][p])) goto fail;
+    for(unsigned i=0;i<INPUT_BUFFERS;++i) if(destroy_surface(v->drm_fd,&v->input[i])) goto fail;
+    for(unsigned i=0;i<2;++i) if(destroy_surface(v->drm_fd,&v->dummy[i])) goto fail;
+    memset(v->input_busy,0,sizeof(v->input_busy));
+    v->held_capture=-1;v->capture_count=0;v->source_changed=0;v->state=DECODER_IDLE;
+    if(start_decoder(v)) goto fail;
+    memset(&v->clear,0,sizeof(v->clear));
+    return 0;
+fail:
+    v->state=FAILED;return -1;
+}
+
 static int setup_overlay(struct MeisoIngressVideo *v)
 {
     if (v->overlay.plane) return 0;
