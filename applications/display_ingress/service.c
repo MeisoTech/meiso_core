@@ -621,7 +621,7 @@ bool service_run_edge_media(Service *s)
         if(s->link_enabled && meiso_display_residence_expired(&s->leases[0],service_now_ns()/UINT64_C(1000000)) &&
             !request_video_stop(s,s->applied_desired_version,MEISO_DISPLAY_LINK_LEASE_EXPIRED)) return false;
         if ((!video_stop.requested && (!receive_batch(s) || !decode_latest(s))) ||
-            (!video_stop.published && !poll_presentation(s)) || !service_overlay_poll(s)) return false;
+            (!video_stop.published && !video_stop.failed && !poll_presentation(s)) || !service_overlay_poll(s)) return false;
         if(!camera_tick(s)) return false;
         MeisoRuntimeEvent event;
         ServiceControlStep step = service_control_step(s, true, 0, &event);

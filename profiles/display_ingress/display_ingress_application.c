@@ -136,7 +136,7 @@ bool meiso_display_application_validate_catalog_for_version(const MeisoRuntimeEn
         c.link_enabled=true;
         if(!meiso_display_link_capability_decode(ep[ei++].capability,&c.link)) return false;
     }
-    if(ei!=ec || rc!=4+3*(c.overlay_enabled+c.camera_enabled)+2*c.link_enabled) return false;
+    if(ei!=ec || rc!=4U+3U*(c.overlay_enabled+c.camera_enabled)+2U*c.link_enabled) return false;
     uint8_t cap[188];MeisoRuntimeEndpointDescriptor e[4];MeisoRuntimeV4RouteDescriptor r[12];
     if(!meiso_display_application_build_catalog_for_version(&c,version,(MeisoMutableBuffer){cap,sizeof(cap)},e,4,r,12)) return false;
     for(size_t i=0;i<ec;++i) if(!meiso_endpoint_id_equal(ep[i].id,e[i].id) || ep[i].incarnation!=e[i].incarnation ||
