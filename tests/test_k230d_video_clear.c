@@ -103,7 +103,10 @@ static struct MeisoIngressVideo scene_adapter(void)
 }
 int main(void)
 {
-    struct MeisoIngressVideo v=adapter();v.flip.pending=1;v.overlay.pending=1;
+    struct MeisoIngressVideo v=adapter();
+    CHECK(meiso_ingress_video_reactivate(&v)==-1 && errno==EBUSY && !bad_operation);
+    CHECK(meiso_ingress_video_retry_clear(&v)==-1);
+    v.flip.pending=1;v.overlay.pending=1;
     CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING && commits==0);
     const uint8_t au[]={0};
     CHECK(meiso_ingress_video_submit(&v,4,au,sizeof(au))==MEISO_INGRESS_VIDEO_SUBMIT_ERROR);
@@ -124,6 +127,18 @@ int main(void)
     v=adapter();reject_commit=1;
     CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEAR_ERROR && v.shown_fb==52);
     reject_commit=0;CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEAR_ERROR && commits==1);
+    CHECK(meiso_ingress_video_reactivate(&v)==-1 && errno==EBUSY);
+    CHECK(meiso_ingress_video_retry_clear(&v)==0 && !v.clear.failed && !v.clear.completed);
+    CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING && commits==3);
+    event_ready=1;CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEARED && !bad_operation);
+    /* A timed-out clear may still own an event: retry must retain its cookie and
+     * cannot accept a new decoder pool while that event is outstanding. */
+    v=adapter();CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING);
+    v.clear.failed=1;void *retained_cookie=event_cookie;
+    CHECK(meiso_ingress_video_retry_clear(&v)==0 && v.clear.pending && event_cookie==retained_cookie);
+    CHECK(meiso_ingress_video_reactivate(&v)==-1 && errno==EBUSY);
+    event_ready=1;CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEARED && commits==2 && !bad_operation);
+    bad_plane=41;CHECK(meiso_ingress_video_reactivate(&v)==-1 && errno==EBUSY && !bad_operation);
     for(unsigned plane=31;plane<=41;plane+=10) {
         v=adapter();CHECK(meiso_ingress_video_clear(&v)==MEISO_INGRESS_VIDEO_CLEAR_PENDING);
         event_ready=1;bad_plane=plane;

@@ -13,7 +13,7 @@
 typedef union {max_align_t align;uint8_t bytes[65536];} Arena;
 typedef struct {Arena sm,rm;MeisoSession *s;MeisoRuntime *r;MeisoDisplayCameraChannel *c;} Peer;
 static Peer h,e;
-static bool application,lease;
+static bool application,lease,capture_failed;
 static unsigned profile_version(void) {return lease?11:9;}
 static void transfer(Peer *from,Peer *to)
 {
@@ -52,7 +52,8 @@ int main(int argc,char **argv)
 {
     const bool nv12=argc>=2 && strcmp(argv[1],"--nv12")==0;
     const bool jpeg=argc>=2 && strcmp(argv[1],"--jpeg")==0;
-    lease=argc==3 && strcmp(argv[2],"--lease")==0;
+    capture_failed=argc==3 && strcmp(argv[2],"--lease-failed")==0;
+    lease=capture_failed || (argc==3 && strcmp(argv[2],"--lease")==0);
     application=lease || (argc==3 && strcmp(argv[2],"--application")==0);
     CHECK(argc==1 || (argc==2 && (nv12 || jpeg)) || (application && (nv12 || jpeg || strcmp(argv[1],"--rgba")==0)));
     const size_t pixel_bytes=jpeg?10013U:nv12?115200U:307200U;
@@ -123,18 +124,19 @@ int main(int argc,char **argv)
     if(lease) {
         CHECK(meiso_display_camera_channel_release(h.c,&frame.ref));
         CHECK(meiso_display_camera_channel_submit(e.c,4,(MeisoTimePoint){9,400},(MeisoByteView){pixels,second_bytes}));
-        CHECK(meiso_display_camera_channel_stop(e.c,MEISO_DISPLAY_LINK_LEASE_EXPIRED));
-        CHECK(meiso_display_camera_channel_stop(e.c,MEISO_DISPLAY_LINK_LEASE_EXPIRED));
+        CHECK(meiso_display_camera_channel_stop(e.c,MEISO_DISPLAY_LINK_LEASE_EXPIRED,!capture_failed));
+        CHECK(meiso_display_camera_channel_stop(e.c,MEISO_DISPLAY_LINK_LEASE_EXPIRED,!capture_failed));
         CHECK(!meiso_display_camera_channel_ready(e.c));
         CHECK(!meiso_display_camera_channel_submit(e.c,5,(MeisoTimePoint){9,500},(MeisoByteView){pixels,second_bytes}));
         for(unsigned i=0;i<10 && !meiso_display_camera_channel_stopped(h.c);++i) tick();
         CHECK(meiso_display_camera_channel_stopped(h.c) && !meiso_display_camera_channel_ready(h.c));
+        CHECK(meiso_display_camera_channel_stop_failed(h.c)==capture_failed);
         CHECK(!meiso_display_camera_channel_latest(h.c,&frame));
         MeisoSessionSnapshot s;
         CHECK(meiso_session_snapshot(h.s,&s) && s.state==MEISO_SESSION_STATE_READY);
         CHECK(meiso_session_snapshot(e.s,&s) && s.state==MEISO_SESSION_STATE_READY);
         meiso_display_camera_channel_close(e.c);meiso_display_camera_channel_close(h.c);close(edge_fd);close(host_fd);
-        puts("v11 camera: lease stop disposes pending media, truthful STOPPED, Session retained");return 0;
+        puts("v11 camera: lease stop disposes pending media, truthful STOPPED/FAILED, Session retained");return 0;
     }
     meiso_display_camera_channel_close(e.c);close(edge_fd);
     bool lost=false;for(unsigned i=0;i<100 && !lost;++i) {lost=!meiso_display_camera_channel_poll(h.c);(void)poll(NULL,0,1);}

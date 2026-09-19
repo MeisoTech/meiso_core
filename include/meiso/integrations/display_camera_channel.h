@@ -23,11 +23,14 @@ MeisoDisplayCameraChannel *meiso_display_camera_channel_open(const MeisoDisplayC
 int meiso_display_camera_channel_consume(MeisoDisplayCameraChannel *, const MeisoRuntimeEvent *);
 bool meiso_display_camera_channel_poll(MeisoDisplayCameraChannel *);
 bool meiso_display_camera_channel_ready(const MeisoDisplayCameraChannel *);
-/* v11 Edge expiry: revoke media now; poll publishes STOPPED after disposal.
+/* v11 Edge expiry: revoke media now; poll publishes STOPPED after disposal
+ * only if capture_stopped, otherwise FAILED/APPLY_FAILED with the same reason.
  * Caller stops its physical capture as part of the same serialized operation.
  * The channel retains its control identity and never closes caller's fd. */
-bool meiso_display_camera_channel_stop(MeisoDisplayCameraChannel *, uint32_t terminal_reason);
+bool meiso_display_camera_channel_stop(MeisoDisplayCameraChannel *, uint32_t terminal_reason, bool capture_stopped);
+/* Terminal admission state; failed() distinguishes unsuccessful capture cleanup. */
 bool meiso_display_camera_channel_stopped(const MeisoDisplayCameraChannel *);
+bool meiso_display_camera_channel_stop_failed(const MeisoDisplayCameraChannel *);
 /* EOF revokes camera data immediately. It is not proof of normal Session close;
  * callers may await that independent control result within a bounded grace. */
 bool meiso_display_camera_channel_peer_eof(const MeisoDisplayCameraChannel *);

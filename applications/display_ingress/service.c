@@ -235,12 +235,13 @@ static bool camera_tick(Service *s)
     if(!camera) return true;
     const uint64_t now=service_now_ns();
     if(s->link_enabled && meiso_display_residence_expired(&s->leases[MEISO_DISPLAY_LINK_LEASE_CAMERA],now/UINT64_C(1000000))) {
+        bool capture_stopped=true;
 #ifndef MEISO_DISPLAY_INGRESS_DESKTOP_EDGE
-        if(!capture_stop()) return service_fail(s,"camera","lease-capture-stop");
+        capture_stopped=capture_stop();
 #endif
         capture_halted=true;s->leases[MEISO_DISPLAY_LINK_LEASE_CAMERA].active=false;
-        if(!meiso_display_camera_channel_stop(camera,MEISO_DISPLAY_LINK_LEASE_EXPIRED)) return service_fail(s,"camera","lease-stop");
-        fprintf(stderr,"CAMERA_LEASE_EXPIRED time_ns=%"PRIu64"\n",now);
+        if(!meiso_display_camera_channel_stop(camera,MEISO_DISPLAY_LINK_LEASE_EXPIRED,capture_stopped)) return service_fail(s,"camera","lease-stop");
+        fprintf(stderr,"CAMERA_LEASE_EXPIRED time_ns=%"PRIu64" capture_stopped=%d\n",now,capture_stopped);
     }
     if(camera_eof_deadline) return now<camera_eof_deadline || service_fail(s,"camera","control-close-timeout");
     if(!meiso_display_camera_channel_poll(camera)) {
