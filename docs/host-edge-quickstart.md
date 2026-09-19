@@ -51,6 +51,8 @@ Looking Glass `be0f725f037c3d266c560ae712dfc84879009d7d`；本次预发布增加
 当前配对版本随后只更新两侧连接启动器，补充空闲失联收敛；受控TCP丢包后应用恢复、
 配合中转路由保护的Host普通重启及重启后真实视频/消息/清屏已通过。
 验证沿用已配置的板级固件和中转网络，不代表未准备的任意BSP可直接运行，也不是长期性能测试。
+当前组合（v9/v10）是 Wi-Fi 量级 Profile；BLE 量级链路的能力分档、会话活性与驻留 lease 见
+[Display Ingress v11 草案](../profiles/display_ingress/capability-tiers-v11.md)，本部署步骤不因草案改变。
 
 在 Jetson 的工作目录执行；`host-package/` 同时包含运行程序和客户端 SDK：
 
