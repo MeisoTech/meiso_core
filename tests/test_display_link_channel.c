@@ -5,12 +5,13 @@
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 typedef union { max_align_t align; uint8_t bytes[65536]; } Arena;
-typedef struct { Arena sm,rm; MeisoSession *s; MeisoRuntime *r; MeisoDisplayLinkChannel *c; unsigned offers,accepts; } Peer;
+typedef struct { Arena sm,rm; MeisoSession *s; MeisoRuntime *r; MeisoDisplayLinkChannel *c; unsigned offers,accepts; size_t wire_bytes; } Peer;
 static Peer h,e;
 static void transfer(Peer *from, Peer *to)
 {
     MeisoByteView bytes; uint8_t copy[5000]; MeisoSessionRuntimeMessage message;
     if (!meiso_session_next_outbound(from->s,&bytes)) return;
+    from->wire_bytes+=bytes.size;
     CHECK(bytes.size<=sizeof(copy)); memcpy(copy,bytes.data,bytes.size);
     CHECK(meiso_session_mark_outbound_sent(from->s)==MEISO_SESSION_OUTBOUND_SENT);
     const MeisoSessionReceiveStatus status=meiso_session_receive(to->s,(MeisoByteView){copy,bytes.size},&message);
@@ -62,6 +63,7 @@ int main(void)
     const MeisoDisplayLinkDesired desired={0,1000,1000,1000,5,{3000,3000,4000},750};
     e.c=meiso_display_link_channel_open(e.s,e.r,NULL);h.c=meiso_display_link_channel_open(h.s,h.r,&desired);
     CHECK(h.c && e.c);
+    h.wire_bytes=e.wire_bytes=0;
     MeisoDisplayLinkDesired effective;
     CHECK(!meiso_display_link_channel_effective(h.c,&effective));
     CHECK(meiso_display_link_channel_poll(h.c,100));transfer(&h,&e);transfer(&e,&h);
@@ -72,6 +74,7 @@ int main(void)
     CHECK(e.offers==1); /* one outstanding despite two elapsed intervals */
     CHECK(meiso_display_link_channel_poll(e.c,2100));transfer(&e,&h);transfer(&h,&e);
     CHECK(meiso_display_link_channel_effective(h.c,&effective)==1 && h.offers==1 && e.accepts==1);
+    printf("LINK first exchange including State acceptance and Session framing: host=%zu edge=%zu bytes\n",h.wire_bytes,e.wire_bytes);
     CHECK(meiso_display_link_channel_poll(h.c,2200));transfer(&h,&e);transfer(&e,&h);
     CHECK(e.offers==2 && meiso_display_link_channel_effective(e.c,&effective)==2);
     CHECK(meiso_display_link_channel_poll(e.c,2200));transfer(&e,&h);transfer(&h,&e);

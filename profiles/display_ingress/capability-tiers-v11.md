@@ -67,7 +67,7 @@ v11 用 Runtime State 路由实现：
 - Host **最多一个 outstanding**：未收到上一版本的 `LINK_ACT` 前不发下一版本；连续 `keepalive_miss_limit`
   次超时即调用 `meiso_session_transport_lost`，进入现有 sticky 失败与清理路径。
 - Edge 侧不因心跳缺失终止 Session；它只驱动第 5 节的 lease 时钟。
-- 代价：每方向 8-byte prefix + suffix（≈24 B）每 interval；T0 建议 2000 ms（≈0.2 kbit/s），T1/T2 建议 1000 ms。
+- 代价：当前 36 B suffix 加 Runtime/State/Session framing 与 State acceptance，实测每轮 Host 340 B、Edge 388 B（`meiso_display_link_channel_test`，未计 TCP/IP）。每 1000 ms 一轮约双向合计 5.82 kbit/s；2000 ms 约 2.91 kbit/s。T0 建议 2000 ms，T1/T2 建议 1000 ms；不能沿用早期只算 suffix 的 ≈0.2 kbit/s 估算。
 - 心跳只证明对端在时窗内回应，不代替 endpoint actual、应用健康或物理呈现证据（link.md）。
 
 ## 5. 驻留 lease
