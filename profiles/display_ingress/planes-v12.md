@@ -11,6 +11,8 @@ Edge 每次刷新给每个平面算透视变换后贴上屏，自己不渲染网
 Host 能告诉它什么（当前 APP 名）。
 
 v12 是一次显式的应用选择（Session profile version 12），与 v9/v10 并列，不隐式升降级。
+Loop 1 验收后 v12 是唯一往前走的显示路径：v9/v10 不再加功能，像 Composition 一样原地留着，
+没人用了再退役。大屏串流就是一块 HEAD 锚定的 STREAM 平面。
 
 ## 2. Resource Graph
 
@@ -31,6 +33,19 @@ v12 是一次显式的应用选择（Session profile version 12），与 v9/v10 
 显示 endpoint 的 Desired 仍给出串流宽高与帧率；这个宽高就是串流纹理的尺寸。v9 的输出几何与
 `video_layout` 不属于 v12：画面怎样上屏只由平面模型决定。视频帧的呈现证据沿用 v2：一帧**第一次
 被合成进一个已翻页的缓冲**时，按它的 AU SHA-256 发 `PRES_EVT`。
+
+### 串流拼图
+
+只有一路串流。多块 STREAM 平面各取串流纹理里的一块矩形，等于 Host 把所有会变的内容拼进同一帧。
+这张拼图由 Host 系统排，APP 只拿到并只画自己那一块；会变的内容走串流，不变的走静态图（§7）。
+MeisoOS 的统一调度从这里接：谁占拼图的哪一块、哪块平面放在哪，都是 Host 系统的决定。
+
+### 停视频
+
+显示 Desired 可以像 v9/v10 那样改成 `enabled=false`（尺寸后缀不变、版本更高）。Edge 停止收视频，
+STREAM 平面不再画、计为等待；等一帧不含它们的画面真实翻页后，才发布
+`APPLIED / STOPPED / DISABLED`、production epoch 0、后缀为空的 Actual。本 Session 内不能重新启用，
+要视频就建新 Session。
 
 ## 3. 平面能力（Edge → Host，64 B，大端）
 
@@ -174,7 +189,15 @@ Session 结束（任何原因）时 Edge 立刻撤下这个 Session 的全部平
 | 串流 | 与 v2 相同：独立帧 H.264，大小与帧率由显示 Desired 和 AU 上限决定 |
 | Runtime | 3 endpoint、11 route、capability 160 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes` |
 
-## 10. 验收
+## 10. 不在本版
+
+- 深度网格。S-025 说深度网格场景就是大量小平面，但现有稀疏网格有 30×34 到 120×135 个顶点，
+  一格一条 96 B 的平面记录走不通。以后作为"带深度网格的平面"另加；16 块的上限只管普通面板，
+  不为深度网格放大。
+- 6DoF：Host→Edge 带时间戳的位姿、相机与 IMU 回传提档，都是另加的路由，平面模型不改。
+- 按键等输入上行。
+
+## 11. 验收
 
 - 编解码：golden bytes 往返；保留位、越界数值、非有限浮点、非单位四元数、重复 id、
   坏 UTF-8、`video_desired_version` 不符、超出能力，全部拒绝且不改输出。
