@@ -127,6 +127,7 @@ add_library(
     profiles/display_ingress/display_ingress_camera.c
     profiles/display_ingress/display_ingress_application.c
     profiles/display_ingress/display_ingress_planes.c
+    profiles/display_ingress/display_ingress_tracking.c
     profiles/display_ingress/display_ingress_profile_codec.c
     profiles/display_ingress/display_ingress_projection.c
 )

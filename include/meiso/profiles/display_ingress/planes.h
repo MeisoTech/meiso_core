@@ -2,20 +2,22 @@
 #define MEISO_DISPLAY_INGRESS_PLANES_H
 #include <meiso/profiles/display_ingress/profile.h>
 #include <meiso/profiles/composition/profile.h>
+#include <meiso/profiles/display_ingress/tracking.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 /* Application Profile v12: planes in space (planes-v12.md). Display (v2 H.264,
- * a texture source), planes (model/status/evidence/image Blob), optional camera. */
+ * a texture source), planes (model/status/evidence/image Blob), optional camera,
+ * optional tracking (IMU up, head pose down; tracking.h). */
 enum {
     MEISO_DISPLAY_PLANES_PROFILE_VERSION = 12,
-    MEISO_DISPLAY_PLANES_MAX_ENDPOINTS = 3,
-    MEISO_DISPLAY_PLANES_MAX_ROUTES = 11,
+    MEISO_DISPLAY_PLANES_MAX_ENDPOINTS = 4,
+    MEISO_DISPLAY_PLANES_MAX_ROUTES = 15,
     MEISO_DISPLAY_PLANES_ROUTE_MODEL = 4,
     MEISO_DISPLAY_PLANES_ROUTE_STATUS = 5,
     MEISO_DISPLAY_PLANES_ROUTE_EVIDENCE = 6,
     MEISO_DISPLAY_PLANES_ROUTE_IMAGE = 7,
-    MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES = 160,
+    MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES = 192,
     MEISO_DISPLAY_PLANES_CAPABILITY_BYTES = 64,
     MEISO_DISPLAY_PLANES_MAX_PLANES = 16,
     MEISO_DISPLAY_PLANES_MAX_APPS = 8,
@@ -121,7 +123,20 @@ typedef struct {
     MeisoDisplayPlanesCapability planes;
     bool camera_enabled;
     MeisoCompositionMediaCapability camera;
+    /* With tracking, planes.tracking is POSE; without it, NONE. */
+    bool tracking_enabled;
+    MeisoDisplayTrackingCapability tracking;
 } MeisoDisplayPlanesCatalogConfig;
+
+/* Tracking routes, in catalog order after the camera's: Desired, Actual, IMU, pose. */
+enum {
+    MEISO_DISPLAY_TRACKING_ROUTE_DESIRED = 0,
+    MEISO_DISPLAY_TRACKING_ROUTE_ACTUAL = 1,
+    MEISO_DISPLAY_TRACKING_ROUTE_IMU = 2,
+    MEISO_DISPLAY_TRACKING_ROUTE_POSE = 3
+};
+/* Index of the first tracking route in a catalog built from this configuration. */
+size_t meiso_display_planes_tracking_route_base(const MeisoDisplayPlanesCatalogConfig *);
 
 bool meiso_display_planes_configure_session(MeisoSessionConfig *);
 /* max_image_bytes sizes the Runtime Blob admission (and Edge reassembly). */
