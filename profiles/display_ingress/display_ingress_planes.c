@@ -273,6 +273,12 @@ bool meiso_display_planes_evidence_decode(MeisoByteView in, MeisoDisplayPlanesEv
     *out = v; return true;
 }
 
+bool meiso_display_planes_sha256(MeisoByteView bytes, uint8_t out[32])
+{
+    return out && (bytes.data || !bytes.size) && !overlap(bytes.data, bytes.size, out, 32) &&
+        meiso_display_ingress_private_payload_sha256(bytes, out);
+}
+
 bool meiso_display_planes_jpeg_header(MeisoByteView in, uint32_t *width, uint32_t *height)
 {
     if (!in.data || in.size < 4 || !width || !height || in.data[0] != 0xff || in.data[1] != 0xd8) return false;

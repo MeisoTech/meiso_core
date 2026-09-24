@@ -115,6 +115,10 @@ int main(void)
     b[60] = 1; CHECK(!meiso_display_planes_evidence_decode((MeisoByteView){b, 64}, &ed)); b[60] = 0;
     b[0] = 3; CHECK(!meiso_display_planes_evidence_decode((MeisoByteView){b, 64}, &ed));
 
+    /* evidence digest: SHA-256("abc") */
+    uint8_t digest[32];
+    CHECK(meiso_display_planes_sha256((MeisoByteView){(const uint8_t *)"abc", 3}, digest) && digest[0] == 0xba && digest[31] == 0xad);
+
     /* baseline JPEG header */
     static const uint8_t jpeg[] = {0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 'J', 'F', 0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0x80,
         0x02, 0x00, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xda, 0, 2, 0xff, 0xd9};

@@ -117,6 +117,12 @@ WORLD 平面在 Host 的世界坐标系里（§5）。平面中心在 `position`
 
 ## 6. 状态与证据
 
+线上编号（Host 与 Edge 都按这些值收发）：
+- 显示 endpoint 沿用 v2：Desired 的 delivery generation 为 7，Actual 为 8；视频呈现证据流的 stream epoch 为 3。
+- 平面模型 Desired 的 delivery generation 为 13，平面 Actual 为 14。平面 Actual 每发一版，production epoch 加一；
+  证据用最近一版 Actual 的 production epoch 发送，stream epoch 为 1，序号逐条递增。
+- 证据样本的 source time 是 Edge 单调时钟上的翻页时刻（clock epoch 4），不宣称与 Host 时钟可比。
+
 Actual 后缀 16 B：
 
 ```text
