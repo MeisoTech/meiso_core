@@ -224,6 +224,10 @@ Desired 后缀 16 B：`0 imu_enabled u8 0/1`（capability 没有 IMU 时只能�
 其余全零。Actual 后缀 16 B：`0 imu_state u8`（0 OFF、1 RUNNING、2 FAILED）、`1 pose_state u8`
 （0 OFF：与 0DoF 相同；1 APPLYING；2 HOLDING，见下）、其余全零。
 
+线上编号：Desired 的 delivery generation 为 15，Actual 为 16。两者任一开着时 Actual 为 RUNNING，
+Desired 每变一次 production epoch 加一；IMU 与位姿两条流都用这个 epoch（production gate 按 Runtime 规则
+由 Edge 的 Actual 建立，Host 拥有的位姿流也一样），stream epoch 都为 1，序号逐条递增。
+
 IMU 记录（Edge → Host，16 + 32×n B）：
 
 ```text
