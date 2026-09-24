@@ -4,10 +4,11 @@
 [Resource](../../docs/resource.md)、[Runtime](../../docs/runtime.md)、
 [Link](../../docs/link.md) 和 [Composition](../../docs/composition.md) 拥有。
 
-- 当前应用选择：[v9 组合视频/HUD/相机](#组合应用-profile-v9)、
-  [v10 原生多区域 scene](#application-v10-native-scene-selection)。两端必须显式选同一版本。
+- 当前应用选择：[v12 空间中的平面](planes-v12.md)（往后唯一的显示路径），以及原地保留、不再加功能的
+  [v9 组合视频/HUD/相机](#组合应用-profile-v9)、[v10 原生多区域 scene](#application-v10-native-scene-selection)。
+  两端必须显式选同一版本。
 - v9/v10 是 **Wi-Fi 量级 Profile**（720p 视频、NV12 相机）；能力分档、会话活性、驻留 lease、单路重新激活与 BLE 适配器边界见 [v11 草案](capability-tiers-v11.md)（#9/#18），其带宽账目表集中列出全部常量。
-- [v12 草案：空间中的平面](planes-v12.md)（meiso_edge #2，S-025/S-026）：串流作为平面纹理、平面模型、静态图 Blob；Edge 按位姿做透视合成，本地 HUD 在最上层。
+- [v12：空间中的平面](planes-v12.md)（meiso_edge #2，S-025/S-026）：串流作为平面纹理、平面模型、静态图 Blob；Edge 按位姿做透视合成，本地 HUD 在最上层。
 - H.264、RAW、HUD、CameraMedia 的基础字段按各版本继承；[v4/v5](overlay-v4-v5.md)另页保存，未撤销被新版本继承的规则。
 - 使用与部署见[快速开始](../../docs/host-edge-quickstart.md)和[K230D 产品入口](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)。
   单帧模拟、DRM 研究和旧验收顺序见[历史记录](../../docs/archive/display-ingress-bringup-through-20260906.md)，不作为当前产品前置门。

@@ -1,7 +1,7 @@
 # Display Ingress v12：空间中的平面（0DoF 起步）
 
-> 状态：`DRAFT PROFILE CONTRACT`（meiso_edge #2，S-025/S-026）。本页只定义两端契约；
-> 第一版实现随 meiso_edge #2 在 Zero 与 Orin NX 上验收后冻结。冻结前 v9/v10 的 bytes、版本号与行为不变。
+> 状态：`VERSIONED PROFILE CONTRACT`（meiso_edge #2，S-025/S-026）。本页只定义两端契约。
+> 2026-09-24 第一版实现在 Zero 与 Orin NX 上验收后冻结；v9/v10 的 bytes、版本号与行为不变。
 
 ## 1. 解决什么
 
