@@ -45,7 +45,7 @@ vblank或面板像素证据。历史standalone K1a offline ELF仍只是build-onl
   `81758307e111da177caa8dbc88ff22b71054cebec7e79e984f4a45e1f6d6a713`。
 
 以上是旧身份历史证据；当前正式身份的fresh board复验尚未完成。验收字段与不外推边界见
-[K230D Composition E2E](../k230d-composition-e2e.md)。
+[K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。
 
 ## 连接与恢复现状
 

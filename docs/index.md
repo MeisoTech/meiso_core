@@ -7,7 +7,7 @@
 | 运行眼镜或写一个视频/消息应用 | [Host/Edge 快速开始](host-edge-quickstart.md) |
 | 下载、构建一套匹配的版本 | [版本配对与发布](releases.md) |
 | 理解代码、链接库或换平台 | [SDK 指南](sdk-guide.md)，需要进程/缓冲细节时读[实现地图](system-runtime-map.md) |
-| 没有开发板，或验证跨设备Host/Edge | [桌面开发工具](desktop-development.md) |
+| 没有开发板，或验证跨设备Host/Edge | [桌面开发工具](https://github.com/MeisoTech/meiso_edge/blob/main/docs/desktop-development.md) |
 | 改通信、资源或显示语义 | 下方对应的产品规范 |
 | 查协议字段、旧集成或板测记录 | [工程参考索引](reference.md) |
 

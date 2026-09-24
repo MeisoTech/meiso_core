@@ -31,8 +31,8 @@ Direct IP 只是当前 bootstrap/transport 选择，不进入 Core identity，�
 | `src/runtime/meiso_runtime.c` | portable Runtime core | catalog、State commit、production gate 与 Stream route；不读取 IP/sysfs |
 | `profiles/wifi/` | versioned Profile | capability、desired/effective 参数与 sample schema |
 | `adapters/posix/meiso_posix_tcp.*` | transport adapter | 已连接 nonblocking stream 与 Session frame 的有界搬运；不 connect/listen |
-| `targets/k230d-linux/adapters/wifi_linux_adapter.*` | Edge private adapter | 私有 interface locator 到匿名 Linux telemetry 的映射 |
-| `targets/k230d-linux/wifi_runtime_edge.c` | Edge target | listen、catalog、desired apply、actual、production 与 shutdown policy |
+| `targets/k230d-linux/adapters/wifi_linux_adapter.*`（meiso_edge） | Edge private adapter | 私有 interface locator 到匿名 Linux telemetry 的映射 |
+| `targets/k230d-linux/wifi_runtime_edge.c`（meiso_edge） | Edge target | listen、catalog、desired apply、actual、production 与 shutdown policy |
 | `devtools/macos/wifi_runtime_host.c` | Host Dev Tool | 可执行联调客户端；不是 Host SDK、Virtual Edge 或应用 API |
 | `devtools/web/wifi_runtime_dashboard/` | 可视化 Dev Tool | 固定 API 把用户意图交给 native Host，并投影脱敏 NDJSON；不解析 wire、不拥有 Runtime truth |
 
@@ -158,7 +158,7 @@ interactive stdin 只接受精确 compact NDJSON；`stop` 是 `enabled=false` �
 {"command":"close"}
 ```
 
-Edge：
+Edge（在 meiso_edge 检出中执行）：
 
 ```sh
 MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \

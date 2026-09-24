@@ -1,7 +1,7 @@
 # Jetson → K230D：视频、消息与应用 SDK
 
 > 本页主要保留 `v0.1.0-alpha.1` / 2026-09-08 视频与单区域 HUD 的配对命令和实测范围。
-> 当前 scene、多区域与相机入口见[实现地图](system-runtime-map.md)、[K230D 产品说明](../targets/k230d-linux/README.md)及
+> 当前 scene、多区域与相机入口见[实现地图](system-runtime-map.md)、[K230D 产品说明](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)及
 > [Looking Glass Host SDK](https://github.com/MeisoTech/looking_glass/blob/main/sdc/integrations/meiso/presentation_sink/README.md)；
 > 使用当前 main 时跟随其源码锁与对应 README，不把本页旧范围当成今天的全部能力。
 
@@ -79,12 +79,14 @@ done
 只需要原生应用时可将 OpenXR 选项改为 `OFF`，并从构建目标中移除 `sdc_openxr_capture_layer`。
 应用包保留现有 C++20 源接口，跨版本不保证 C++ 二进制 ABI；应用与安装包应一起重建。
 
-Edge 在有 Xuantie Linux 工具链的构建机交叉编译。`CC` 指定目标 C 编译器，`DRM_ROOT`
-指向匹配板端的 sysroot，`FONT_FILE` 指向已生成的可选字库：
+Edge 在有 Xuantie Linux 工具链的构建机交叉编译，源码在 [meiso_edge](https://github.com/MeisoTech/meiso_edge)
+（2026-09-24 从本仓拆出）。把 meiso_edge 检出到 `meiso_edge/`，本仓按其 `meiso.lock.json` 的修订检出到
+`meiso/`；`CC` 指定目标 C 编译器，`DRM_ROOT` 指向匹配板端的 sysroot，`FONT_FILE` 指向已生成的可选字库：
 
 ```sh
-MEISO_K230_LINUX_CC="$CC" cmake -S meiso -B build-edge \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/k230d-linux-xuantie.cmake \
+MEISO_K230_LINUX_CC="$CC" cmake -S meiso_edge -B build-edge \
+  -DMEISO_CORE_SOURCE_DIR="$PWD/meiso" \
+  -DCMAKE_TOOLCHAIN_FILE=meiso_edge/cmake/toolchains/k230d-linux-xuantie.cmake \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
   -DMEISO_BUILD_K230D_VIDEO_SERVICE=ON \
   -DMEISO_DISPLAY_DRM_INCLUDE_DIR="$DRM_ROOT/usr/include" \
@@ -98,9 +100,9 @@ cmake --install build-edge --component K230dVideoRuntime
 ```
 
 不装字体时令 `FONT_FILE` 为空，只使用内建字符。CJK16 使用
-[字体工具](../targets/k230d-linux/make_overlay_font.py)中固定下载地址及 SHA-256 的 Unifont 输入：
-`python3 meiso/targets/k230d-linux/make_overlay_font.py unifont-17.0.05.hex.gz overlay-cjk16.bin`。
-字符范围见 Display Ingress Profile，授权见[字体声明](../targets/k230d-linux/overlay-font-NOTICE.txt)。
+[字体工具](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/make_overlay_font.py)中固定下载地址及 SHA-256 的 Unifont 输入：
+`python3 meiso_edge/targets/k230d-linux/make_overlay_font.py unifont-17.0.05.hex.gz overlay-cjk16.bin`。
+字符范围见 Display Ingress Profile，授权见[字体声明](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/overlay-font-NOTICE.txt)。
 保留安装组件交付的字体声明。Host 开发包不携带供应商库，Edge 包不携带内核/驱动/系统镜像。
 
 ## 安装并连接
@@ -159,7 +161,7 @@ chmod 755 /etc/init.d/S90meiso-edge
 ```
 
 默认宽高、布局和端口与上面一致；脚本会选择包内已安装的字库。详情见
-[BusyBox 服务说明](../targets/k230d-linux/README.md#busybox-开机服务)。
+[BusyBox 服务说明](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md#busybox-开机服务)。
 预先配置双向路由；服务安装不改 Wi-Fi、转发或防火墙。
 
 相机上行是可选的。确认目标板 ISP 与采集节点可用后，在 Edge `edge.conf` 同时设置

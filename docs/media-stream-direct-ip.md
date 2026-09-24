@@ -120,5 +120,5 @@ Public receipt 不得包含 locator、完整 identity/nonce、credential、原�
 
 Portable codec/lifecycle、POSIX/AF_INET 与 Host/editor path 已有测试证据。当前
 formal identity 对应的 fresh K230D cross + board run 仍待
-[K230D Composition E2E](k230d-composition-e2e.md) 收口。通过后也不外推为
+[K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md) 收口。通过后也不外推为
 physical display、codec、security、performance、soak 或自动恢复。

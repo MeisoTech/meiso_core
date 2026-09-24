@@ -18,10 +18,10 @@
 
 ## 平台、工具与证据
 
-- [K230D target](../targets/k230d-linux/README.md)、[Linux 开发基线](k230d-linux-edge-development-baseline.md)。
-- [相机/Composition E2E](k230d-composition-e2e.md)：独立 camera 已验与 combined 未验范围。
+- [K230D target](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)、[Linux 开发基线](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-linux-edge-development-baseline.md)。
+- [相机/Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)：独立 camera 已验与 combined 未验范围。
 - [Edge 离屏 compositor](edge-local-compositor-v0.md)：CPU 离屏路径，不等同于当前硬件视频显示。
 - [Composition Editor](../devtools/web/composition_editor/README.md)：默认关闭的旧栈调试工具。
-- [DRM scanout research](../research/k230d-drm/README.md)：显式启用的拓扑/TEST_ONLY 研究，独立于产品视频后端。
+- [DRM scanout research](https://github.com/MeisoTech/meiso_edge/blob/main/research/k230d-drm/README.md)：显式启用的拓扑/TEST_ONLY 研究，独立于产品视频后端。
 - [Display fixture 输入](../integrations/host/display_ingress_fixture_input.md)：DIFI/v1 调试输入格式。
 - [历史报告](archive/README.md)：旧阶段状态和结构审计。

@@ -194,7 +194,7 @@ Recorded/local UI preview is not RenderResult evidence. Native CMFB caching and
 typed service projection do not make the browser a source of protocol truth.
 
 The fresh bounded K230D gate defined in
-[`k230d-composition-e2e.md`](../../../docs/k230d-composition-e2e.md) will use
+[`k230d-composition-e2e.md`](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md) will use
 this fixed Web API and the sole native Host child to carry camera, telemetry
 and scene-transform intents. Until that page records a fresh receipt, earlier
 runs do not verify the current identity or Editor path. The page projection is

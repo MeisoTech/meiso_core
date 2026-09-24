@@ -8,7 +8,7 @@
   [v10 原生多区域 scene](#application-v10-native-scene-selection)。两端必须显式选同一版本。
 - v9/v10 是 **Wi-Fi 量级 Profile**（720p 视频、NV12 相机）；能力分档、会话活性、驻留 lease、单路重新激活与 BLE 适配器边界见 [v11 草案](capability-tiers-v11.md)（#9/#18），其带宽账目表集中列出全部常量。
 - H.264、RAW、HUD、CameraMedia 的基础字段按各版本继承；[v4/v5](overlay-v4-v5.md)另页保存，未撤销被新版本继承的规则。
-- 使用与部署见[快速开始](../../docs/host-edge-quickstart.md)和[K230D 产品入口](../../targets/k230d-linux/README.md)。
+- 使用与部署见[快速开始](../../docs/host-edge-quickstart.md)和[K230D 产品入口](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)。
   单帧模拟、DRM 研究和旧验收顺序见[历史记录](../../docs/archive/display-ingress-bringup-through-20260906.md)，不作为当前产品前置门。
 - 当前受控 UDP 搬运不提供认证或加密；最终安全 carrier 仍未交付。
 
@@ -443,7 +443,7 @@ sequence 和双方对完整输入计算的 SHA-256 精确相符。
 
 ## 研究与早期实现记录
 
-K230D topology / TEST_ONLY policy 的唯一维护入口是[DRM research](../../research/k230d-drm/README.md)，
+K230D topology / TEST_ONLY policy 的唯一维护入口是[DRM research](https://github.com/MeisoTech/meiso_edge/blob/main/research/k230d-drm/README.md)，
 不属于默认产品后端。原 v1 非目标、研究边界与阶段顺序见[历史记录](../../docs/archive/display-ingress-bringup-through-20260906.md)。
 
 ## Display Ingress v6/v7: bounded CJK screen text
@@ -489,7 +489,7 @@ and right glyph pixels, unchanged raster bounds, actual update/hide evidence
 alongside compressed video, and bounded memory on K230D.
 
 For K230D, generate the optional 2 MiB bank with
-`targets/k230d-linux/make_overlay_font.py INPUT.hex.gz OUTPUT.bin`; the converter
+`targets/k230d-linux/make_overlay_font.py INPUT.hex.gz OUTPUT.bin` (in meiso_edge); the converter
 pins the upstream archive hash and documents its download URL. Configure
 `MEISO_K230D_OVERLAY_FONT_FILE` to that generated file when installing the
 `K230dVideoRuntime` component. CMake installs the bank with its SIL OFL license

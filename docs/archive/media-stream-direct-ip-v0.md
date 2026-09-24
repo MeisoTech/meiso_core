@@ -195,6 +195,6 @@ source digest 与TCP ordered delivery都不提供对端认证、机密性、抗�
    stop，同时Wi-Fi/device telemetry继续。不存在camera时只接受truthful unavailable transcript。
 
 G0–G2已有portable/real-AF_INET证据；旧身份下的G3记录已归档。当前正式身份必须按
-[K230D Composition E2E](../k230d-composition-e2e.md)重新完成fresh K230D/GC2093 run，旧receipt不能
+[K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)重新完成fresh K230D/GC2093 run，旧receipt不能
 替代。该证据即使完成也不外推为scanout/physical presentation、未测codec、性能、长稳、安全、
 自动resume或其他sensor。

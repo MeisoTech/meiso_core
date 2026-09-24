@@ -4,7 +4,7 @@
 > `HISTORICAL / NON-AUTHORITATIVE`。以下为截至 2026-09-06 的工程路径与原 v1 范围，
 > 从 Profile 入口迁出；“当前”“下一步”均按当时理解，不约束后续 v2–v10 产品。
 > 现行协议见[Display Ingress](../../profiles/display_ingress/README.md)，
-> 研究构建与探针合同见[DRM research](../../research/k230d-drm/README.md)。
+> 研究构建与探针合同见[DRM research](https://github.com/MeisoTech/meiso_edge/blob/main/research/k230d-drm/README.md)。
 > DIFI 输入合同仍由[原入口](../../integrations/host/display_ingress_fixture_input.md)拥有。
 
 ### 受控双进程模拟 service
@@ -107,7 +107,7 @@ Host 参数与模拟角色相同；Edge 另要求 `--drm-device PATH`，由 Edge
 `actual_running_authorized=false / physical_evidence=false`，不能生成 Display Actual
 RUNNING 或本 Profile 的 `DRM_KMS_PAGE_FLIP` 呈现证据。精确 CLI、收据字段、退出语义、
 默认关闭的 CMake locator 和禁止调用清单由
-[K230D target入口](../../research/k230d-drm/README.md#drm-scanout-policy-core)拥有。
+[K230D target入口](https://github.com/MeisoTech/meiso_edge/blob/main/research/k230d-drm/README.md#drm-scanout-policy-core)拥有。
 
 仓内还新增了一份独立、无系统调用的 `single_plane_test_candidate` 判定器。它不改变上述
 拓扑探针或现有 scanout `begin()`：调用方必须给出期望 topology SHA-256 和精确的
@@ -134,7 +134,7 @@ IDENTIFIED 后，便携执行器从 topology #1 复制实际 hash/route/plane，
 real-commit eligibility 或任何物理/可见性门。
 
 下一层便携诊断执行器的 explicit 与 derived 合同由
-[K230D target 入口](../../research/k230d-drm/README.md#便携的-test_only-only-执行器合同)
+[K230D target 入口](https://github.com/MeisoTech/meiso_edge/blob/main/research/k230d-drm/README.md#便携的-test_only-only-执行器合同)
 拥有。在走到 TEST_ONLY callback 的分支，它计划在同一 master fd 上同步完成三次完整枚举：
 第一次核对精确候选，创建但不映射也不写像素的 RGB565 dumb buffer 与 framebuffer 后，
 第二次重新枚举并在任何 TEST_ONLY 前阻断漂移；一次 TEST_ONLY 后再做第三次枚举与候选复核。它的专用回调表无法
@@ -151,7 +151,7 @@ topology read 的 libdrm object 释放、exact atomic flags 与 cleanup；只有
 callback 的分支才必须执行第三次读取，未尝试的 slot 不能冒充 COMPLETE。不能从
 portable result 硬推这些事实。该调用计数不观测 libdrm 内部的 syscall 尝试或重试。
 精确 CLI、收据和 cross-link 门由
-[K230D target 入口](../../research/k230d-drm/README.md#原生-test_only-only-adapter-与一次性探针)
+[K230D target 入口](https://github.com/MeisoTech/meiso_edge/blob/main/research/k230d-drm/README.md#原生-test_only-only-adapter-与一次性探针)
 拥有。旧显式模式继续输出 byte-exact V1；derived 模式必须由 operator 显式选择
 `--derive-unique-plane`，不接收 plane ID，并输出 V2，其中
 `selection_mode=UNIQUE_POLICY_DERIVED`、`requested_plane_id=0` 与独立
@@ -246,7 +246,7 @@ Display Actual 不得因本策略内核或拓扑收据存在而报告 RUNNING。
    codec 和只证明协议状态机的双 Runtime fixture；
 3. **部分完成：** K230D 的 portable policy/state machine、fake failure matrix，以及原生
    native libdrm topology/admission runner 已接到同一判定器；
-   [2026-09-05 真板拓扑收据](../../targets/k230d-linux/evidence/drm-topology-admission-2026-09-05.md)
+   [2026-09-05 真板拓扑收据](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/evidence/drm-topology-admission-2026-09-05.md)
    已得到 `ADMISSION_BLOCKED / ZPOS_UNPROVABLE`，所以没有选择 plane 或授权 Actual
    RUNNING；TEST_ONLY、真实 page-flip 与恢复仍按独立门推进；
 4. **已完成：** connected UDP 行为适配器；它只关闭有界 connected-datagram 搬运与

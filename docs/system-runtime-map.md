@@ -14,9 +14,9 @@ K230D 是 **128 MiB 整机内存**目标，应用、Linux/ISP、CMA、网络与�
 | 身份、Session、State / Stream / Action / Blob 传输语义 | Meiso [`include/meiso/core/`](../include/meiso/core/)、[`src/core/`](../src/core/) |
 | catalog、能力/路由、desired/actual 与媒体契约 | Meiso [`src/runtime/`](../src/runtime/)、[`profiles/`](../profiles/)、[`integrations/`](../integrations/)；这里的 Runtime 是 SDK 协议运行库 |
 | 应用 API/IPC、合成、编码、感知与记录服务 | 独立 [Looking Glass Host assembly](https://github.com/MeisoTech/looking_glass/blob/main/sdc/integrations/meiso/presentation_sink/README.md)；链接安装的 Meiso C SDK |
-| Edge 产品进程、控制会话与媒体接线 | [`applications/display_ingress/`](../applications/display_ingress/)；不依赖 `devtools/` 源码 |
-| K230D V4L2 采集、MVX 解码、DRM 显示与启动 | [`targets/k230d-linux/`](../targets/k230d-linux/README.md)，交付 `K230dVideoRuntime` 组件 |
-| 桌面 Edge 与协议/输入诊断 | [桌面开发入口](desktop-development.md)；模拟完成和物理呈现分别标注 |
+| Edge 产品进程、控制会话与媒体接线 | [`applications/display_ingress/`](https://github.com/MeisoTech/meiso_edge/tree/main/applications/display_ingress)；不依赖 `devtools/` 源码 |
+| K230D V4L2 采集、MVX 解码、DRM 显示与启动 | [`targets/k230d-linux/`](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)，交付 `K230dVideoRuntime` 组件 |
+| 桌面 Edge 与协议/输入诊断 | [桌面开发入口](https://github.com/MeisoTech/meiso_edge/blob/main/docs/desktop-development.md)；模拟完成和物理呈现分别标注 |
 | 内核、设备树、rootfs 与厂商补丁 | 独立 [k230d-bsp](https://github.com/MeisoTech/k230d-bsp)，不在 SDK 中保存补丁副本 |
 
 Meiso 与 Looking Glass 保持独立仓库，使用安装包和精确源码锁配对，不靠源码复制或相同版本号隐式匹配。
@@ -38,9 +38,9 @@ State 送达、配置 Actual、媒体接收和物理翻页是不同事实。桌�
 
 ## 平台和使用入口
 
-- [K230D 构建、安装和启动](../targets/k230d-linux/README.md)：当前产品源码、CI 交叉构建、解码/scene 缓冲与相机边界。
+- [K230D 构建、安装和启动](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)：当前产品源码、CI 交叉构建、解码/scene 缓冲与相机边界。
 - [Host/Edge 快速开始](host-edge-quickstart.md)：含初次技术预览的视频/HUD 命令与注明版本的证据；当前 Host 选项跟随其安装包入口。
-- [桌面开发](desktop-development.md)：跨平台接线与模拟证据；Host 的 scene 路径可不编入 Jetson 视频编码后端，平台支持范围由 Looking Glass 声明。
+- [桌面开发](https://github.com/MeisoTech/meiso_edge/blob/main/docs/desktop-development.md)：跨平台接线与模拟证据；Host 的 scene 路径可不编入 Jetson 视频编码后端，平台支持范围由 Looking Glass 声明。
 - [版本配对](releases.md)：源码 SHA、运行包和 BSP 分别记录；技术预览不代表完整产品上线。
 
 安全 carrier、完整 XR 设备兼容、光学校准、长时运行和功耗仍需各自验证；协议身份声明不等于密码学认证。

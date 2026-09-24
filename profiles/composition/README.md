@@ -123,7 +123,7 @@ K230D 使用 `K230dCompositionEdgeRuntime/K230dCompositionEdgeService`，本地�
 portable codec、bounded lifecycle、simulator、POSIX/AF_INET 与 Host/Edge 组合路径已有
 测试证据。当前正式身份的 fresh K230D cross + board E2E 仍待本轮收口；
 旧身份的实机记录只作历史。具体门见
-[K230D Composition E2E](../../docs/k230d-composition-e2e.md)。
+[K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。
 
 即使 fresh board gate 通过，也只证明指定 K230D/GC2093、源码、工具链和
 受控网络中的 CPU off-screen/render-camera-media 链路；不证明 physical display、

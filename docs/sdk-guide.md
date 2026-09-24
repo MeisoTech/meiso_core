@@ -35,8 +35,7 @@ IP、port、TCP、NDJSON 与 CMFB 都是 bootstrap/adapter 边界，不是 peer 
 | `integrations/host/` | Host Runtime 与 Remote Edge backend |
 | `simulation/` | deterministic simulator 与 trace |
 | `adapters/posix/` | POSIX Session/media transport |
-| `targets/k230d-linux/` | K230D Runtime、Linux adapter、service 与 CMake wrapper |
-| `applications/display_ingress/` | 当前产品进程与共享会话/媒体接线；不编译 `devtools/` 源文件 |
+| [meiso_edge](https://github.com/MeisoTech/meiso_edge) | K230D Runtime、Linux adapter、Display Ingress 服务进程与桌面 Edge（原 `targets/k230d-linux/`、`applications/display_ingress/`，路径不变） |
 | `applications/host/`, `devtools/` | 历史 Composition 入口与明确的开发/诊断工具；不等于当前 Host SDK |
 
 `*_private.h` 只属于同一 target 内部：不安装、不提供跨 target ABI、不得被应用 include。
@@ -69,8 +68,8 @@ catalog）→ CompositionMediaTransport → CompositionMediaPosixTcpAdapter → 
 DisplayIngressProfile仍链接CompositionProfile。V4L2、显示后端与当前桌面Edge保留。这里保留
 schema/catalog的链接闭包，不代表重新启用旧Composition应用栈；本次不重写或复制CameraMedia。
 
-K230D/Linux adapter 不进入 portable 库导出；视频程序与启动入口可通过独立的
-`K230dVideoRuntime` 组件安装。两端应用包和构建依赖见[快速开始](host-edge-quickstart.md)。
+K230D/Linux adapter 不进入 portable 库导出；视频程序与启动入口在 [meiso_edge](https://github.com/MeisoTech/meiso_edge) 构建，
+通过其 `K230dVideoRuntime` 组件安装。两端应用包和构建依赖见[快速开始](host-edge-quickstart.md)。
 安装包同时导出源码 revision；Looking Glass 用固定清单检查它，见[版本配对](releases.md)。
 内部协议 fixture 和 Four-kind lab 也不安装。
 
@@ -195,7 +194,7 @@ Linux source graph authority。RT-Smart overlay 因外部 SDK 约束保留 Makef
 - simulator/hosted/cross-build 不等于 K230D camera/media/cleanup E2E；
 
 当前代码见[实现地图](system-runtime-map.md)，使用入口见[Host/Edge 快速开始](host-edge-quickstart.md)。
-旧 Composition 的[E2E 门](k230d-composition-e2e.md)只适用于该栈；历史记录从[archive](archive/README.md)追溯。
+旧 Composition 的[E2E 门](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)只适用于该栈；历史记录从[archive](archive/README.md)追溯。
 
 ## 9. 许可与分发材料
 

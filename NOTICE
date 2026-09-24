@@ -11,10 +11,10 @@ Optional CJK16 font data — OFL-1.1
 --------------------------------
 The optional glyph bank is a format conversion of GNU Unifont 17.0.05.
 The existing distribution selects SIL Open Font License 1.1 for that data.
-Keep targets/k230d-linux/overlay-font-NOTICE.txt (copyright, upstream and
-conversion attribution) and overlay-font-OFL.txt with the font. They are
-installed with the optional bank by K230dVideoRuntime. The converter's Meiso
-code and the font data have distinct license scopes.
+The converter, targets/k230d-linux/overlay-font-NOTICE.txt (copyright, upstream
+and conversion attribution) and overlay-font-OFL.txt moved to MeisoTech/meiso_edge
+with the K230D target on 2026-09-24; its NOTICE carries this section. Keep them
+with the font.
 Upstream: https://unifoundry.com/unifont/
 
 Historical VVCAM / Linux BSP patches — upstream terms retained

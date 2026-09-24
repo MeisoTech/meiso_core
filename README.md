@@ -32,12 +32,12 @@ Edge 硬件解码并叠加本地绘制的框和中文短消息。纯消息可以
 |---|---|
 | `include/meiso/core`、`src/core` | C11 Core：身份、Session、State / Stream / Action / Blob 传输语义。 |
 | `src/runtime`、`profiles`、`integrations` | 资源目录、能力协商、desired/actual、媒体契约与 Host facade。 |
-| `targets/k230d-linux` | K230D 的摄像头、解码、DRM 显示和 Linux 服务适配。 |
+| [meiso_edge](https://github.com/MeisoTech/meiso_edge) | 眼镜端（K230D）：Display Ingress 服务、摄像头、解码、DRM 显示、Linux 服务适配与板级 bring-up，2026-09-24 从本仓拆出（S-027）。 |
 | `applications`、`simulation`、`tests` | 使用入口、模拟后端与契约检查。 |
 
 [Looking Glass](https://github.com/MeisoTech/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
 它通过 CMake `find_package(MeisoGlass)` 链接本仓安装的库，再交付 Host 服务和客户端 SDK；
-本仓另外交叉编译 Edge 包。两仓按固定源码组合发布，不需要整仓复制或相同的提交节奏。
+Edge 包由 meiso_edge 以本仓固定修订的源码交叉编译。两仓按固定源码组合发布，不需要整仓复制或相同的提交节奏。
 
 协议核心可以跨平台复用；运行包仍需要相应 OS、编解码和设备驱动。板级固件及私有实验资料不属于
 本 SDK 的源码包。

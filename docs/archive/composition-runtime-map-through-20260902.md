@@ -78,8 +78,8 @@ flowchart LR
 | ControlSession | 一个 arena 内的 Session、TCP adapter、Runtime、Scheduler、20 个 fixed source | fd ownership、隐藏 poll loop | [`integrations/composition/`](../../integrations/composition/) |
 | HostRuntime/RemoteEdge | 6 desired publisher、6 actual replica、3 inline Stream、mesh transfer、最多 4 个一次性 media slot | 应用 draft、Browser、socket ownership | [`integrations/host/`](../../integrations/host/) |
 | C HostBridge application | control/media socket、Host arena、stdin/stdout NDJSON、frame-fd | 浏览器 UI、设备驱动 | [`applications/host/`](../../applications/host/) |
-| K230D EdgeRuntime | 6 desired replica、6 actual publisher、telemetry、Blob/Scene/C2/render/camera/media | listener/process policy | [`targets/k230d-linux/composition_edge_runtime.c`](../../targets/k230d-linux/composition_edge_runtime.c) |
-| K230D EdgeService | listeners、accepted fd、Runtime arena、signal/cleanup、thermal worker | Meiso 产品语义 | [`targets/k230d-linux/composition_edge_service_run.c`](../../targets/k230d-linux/composition_edge_service_run.c) |
+| K230D EdgeRuntime | 6 desired replica、6 actual publisher、telemetry、Blob/Scene/C2/render/camera/media | listener/process policy | [`targets/k230d-linux/composition_edge_runtime.c`](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/composition_edge_runtime.c) |
+| K230D EdgeService | listeners、accepted fd、Runtime arena、signal/cleanup、thermal worker | Meiso 产品语义 | [`targets/k230d-linux/composition_edge_service_run.c`](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/composition_edge_service_run.c) |
 | Python Editor | local draft、HTTP/SSE、child supervision、sanitized native projection、latest frame cache | MSL0/MRT0 编解码和 Edge truth | [`devtools/web/composition_editor/`](../../devtools/web/composition_editor/) |
 
 关键所有权：应用层拥有 socket 和进程；C library 只借用 fd。每个 portable handle 都在 caller arena 中，必须由一个 owner 串行调用。`RemoteEdge` 借用 `HostRuntime`；camera adapter 才真正拥有 `/dev/video1` fd 和 4 个 MMAP，直到 stop。
@@ -365,8 +365,8 @@ Committed 93f 的Python层同时维护child、5 workers、terminal flags、drain
 
 1. 先读[系统设计](../system.md)和[Composition Profile](../../profiles/composition/README.md)，建立角色、truth和6/18 graph。
 2. 读[`include/meiso/core/session.h`](../../include/meiso/core/session.h)、[`include/meiso/runtime/runtime.h`](../../include/meiso/runtime/runtime.h)和[`include/meiso/composition/control_session.h`](../../include/meiso/composition/control_session.h)，理解连接/catalog/pump。
-3. 读[`include/meiso/host/composition_runtime.h`](../../include/meiso/host/composition_runtime.h)与[`include/meiso/edge/linux/composition_runtime.h`](../../include/meiso/edge/linux/composition_runtime.h)，看两端actual/desired所有权。
-4. 读[`targets/k230d-linux/composition_edge_runtime_private.h`](../../targets/k230d-linux/composition_edge_runtime_private.h)，看Edge全部长期状态如何集中在一个arena。
+3. 读[`include/meiso/host/composition_runtime.h`](../../include/meiso/host/composition_runtime.h)与[`include/meiso/edge/linux/composition_runtime.h`](https://github.com/MeisoTech/meiso_edge/blob/main/include/meiso/edge/linux/composition_runtime.h)，看两端actual/desired所有权。
+4. 读[`targets/k230d-linux/composition_edge_runtime_private.h`](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/composition_edge_runtime_private.h)，看Edge全部长期状态如何集中在一个arena。
 5. 读[`applications/host/composition_host_bridge.c`](../../applications/host/composition_host_bridge.c)，看C Host单poll loop和machine-local NDJSON边界。
 6. 最后才读[`devtools/web/composition_editor/native_bridge.py`](../../devtools/web/composition_editor/native_bridge.py)与[`server.py`](../../devtools/web/composition_editor/server.py)，把它们视为本地devtool/supervisor，而不是协议authority。
 

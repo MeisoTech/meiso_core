@@ -764,5 +764,5 @@ cross ELF与receipt stdout SHA-256分别为
 endpoint。后续当前source的fresh复验与同一boot combined run已经另外覆盖CameraMedia desired/actual、
 external media binding、完整NV12 transport、Host local bridge与zero-ledger shutdown；两层证据不互相
 替代；当前正式身份的fresh复验门见
-[K230D Composition E2E](../k230d-composition-e2e.md)。旧receipt仍不
+[K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。旧receipt仍不
 改变历史K1a offline runner artifact的`TARGET_NOT_RUN`，也不证明Host display或physical presentation。

@@ -97,6 +97,8 @@ SHA helper 只接受非空且不超过 64 MiB 的 payload，并要求 digest out
 
 ## 模拟 Host 的一次性 fd reader
 
+（该程序与其测试在 [meiso_edge](https://github.com/MeisoTech/meiso_edge)，2026-09-24 随 Display Ingress 服务拆出。）
+
 `meiso_display_ingress_simulated_service --role host` 必须额外收到且只收到一次
 `--frame-fd N`；Edge 角色禁止这个参数。该 fd 必须大于等于 3、不同于 control/media fd，
 且是调用方建立并已连接的 nonblocking `AF_UNIX SOCK_STREAM`。service 不改变 fd flags，

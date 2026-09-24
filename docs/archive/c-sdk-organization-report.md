@@ -239,7 +239,7 @@ native bridge 和 installed-consumer gate 标为 `RUN_SERIAL`；
 由主任务统一收口。
 
 历史 `ecc12b3` 已有 K230D combined camera/render/media/telemetry 证据，见
-[K230D Composition E2E gate](../k230d-composition-e2e.md)。
+[K230D Composition E2E gate](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。
 它证明历史准确源码，不证明当前未提交重构候选。
 
 证据层必须保持分离：

@@ -2,7 +2,7 @@
 
 > 状态：`HISTORICAL / NON-AUTHORITATIVE`。本页保留旧 target artifact、
 > 逐 commit receipt 与当时的运行边界。当前构建/运行入口只读
-> [K230D Linux targets](../../targets/k230d-linux/README.md)。
+> [K230D Linux targets](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)。
 
 ## V4L2 camera capture source（THREE_FRAME_CAPTURE_RECEIPT）
 
@@ -35,7 +35,7 @@ Host/Edge service或浏览器，也不证明desired/actual闭环、encoder、性
 `baba7181efd4df60f9e0fe09142b7609293259bc3b92865e951cae8e25ea78bb`。三帧仍为
 NV12 320x240/115200B、effective sequence 1/2/3、drop 0，退出ledger为0。该fresh camera门随后被
 一个独立combined run实际消费；完整证据与边界见
-[K230D Composition E2E 验收状态](../../docs/k230d-composition-e2e.md)。历史receipt仍保留，
+[K230D Composition E2E 验收状态](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。历史receipt仍保留，
 不会被新run重写成同一个artifact。
 
 ## Composition Edge combined target（bounded board evidence）
@@ -116,7 +116,7 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
   targets/k230d-linux/build_wifi_runtime_edge.sh /tmp/meiso_wifi_runtime_edge-k230d
 ```
 
-把 [`wifi_runtime_edge.example.conf`](../../targets/k230d-linux/wifi_runtime_edge.example.conf) 复制到 ignored local path，
+把 [`wifi_runtime_edge.example.conf`](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/wifi_runtime_edge.example.conf) 复制到 ignored local path，
 替换 numeric listen locator、synthetic PeerId 和私有 interface；不得提交部署值或凭据。然后在
 K230D Linux 上启动一个 foreground attempt：
 

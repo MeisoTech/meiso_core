@@ -7,52 +7,6 @@ meiso_add_c_test(
     meiso_display_ingress_host_fixture_input
 )
 
-if(TARGET meiso_device_telemetry_linux_adapter)
-    meiso_add_c_test(
-        meiso_device_telemetry_linux_adapter_test
-        tests/test_device_telemetry_linux_adapter.c
-        adapter
-        meiso_device_telemetry_linux_adapter
-    )
-endif()
-if(TARGET meiso_wifi_linux_adapter)
-    meiso_add_c_test(
-        meiso_wifi_linux_adapter_test
-        tests/test_wifi_linux_adapter.c
-        adapter
-        meiso_wifi_linux_adapter
-    )
-endif()
-if(TARGET meiso_camera_v4l2_adapter)
-    meiso_add_c_test(
-        meiso_camera_v4l2_adapter_test
-        tests/test_camera_v4l2_adapter.c
-        adapter
-        meiso_camera_v4l2_adapter
-    )
-
-    add_executable(
-        meiso_camera_v4l2_capture_once_test
-        tests/test_camera_v4l2_capture_once.c
-        targets/k230d-linux/camera_v4l2_capture_once.c
-    )
-    target_compile_definitions(
-        meiso_camera_v4l2_capture_once_test
-        PRIVATE MEISO_CAMERA_V4L2_CAPTURE_ONCE_NO_MAIN=1
-    )
-    target_link_libraries(
-        meiso_camera_v4l2_capture_once_test
-        PRIVATE meiso_camera_v4l2_adapter
-    )
-    meiso_enable_warnings(meiso_camera_v4l2_capture_once_test)
-    meiso_set_target_folder(
-        meiso_camera_v4l2_capture_once_test
-        "Meiso/Tests/target-policy"
-    )
-    meiso_register_target_test(
-        meiso_camera_v4l2_capture_once_test "target-policy"
-    )
-endif()
 
 if(TARGET meiso_composition_control_session)
     meiso_add_c_test(
@@ -203,47 +157,3 @@ if(TARGET meiso_composition_edge AND
     )
 endif()
 
-if(TARGET meiso_k230d_composition_edge_runtime)
-    meiso_add_c_test(
-        meiso_k230d_composition_edge_runtime_test
-        tests/test_k230d_composition_edge_runtime.c
-        integration
-        meiso_k230d_composition_edge_runtime
-    )
-    target_sources(
-        meiso_k230d_composition_edge_runtime_test
-        PRIVATE tests/k230d_composition_edge_cadence_fixture.c
-    )
-    target_include_directories(
-        meiso_k230d_composition_edge_runtime_test
-        PRIVATE targets/k230d-linux
-    )
-
-    find_package(Threads REQUIRED)
-    add_executable(
-        meiso_k230d_composition_edge_service_lifecycle_test
-        targets/k230d-linux/composition_edge_service.c
-        targets/k230d-linux/composition_edge_service_config.c
-        targets/k230d-linux/composition_edge_service_lifecycle.c
-        targets/k230d-linux/composition_edge_service_run.c
-        targets/k230d-linux/composition_edge_service_run_loop.c
-    )
-    target_compile_definitions(
-        meiso_k230d_composition_edge_service_lifecycle_test
-        PRIVATE MEISO_K230D_COMPOSITION_EDGE_SERVICE_LIFECYCLE_TEST=1
-    )
-    target_link_libraries(
-        meiso_k230d_composition_edge_service_lifecycle_test
-        PRIVATE meiso_k230d_composition_edge_runtime Threads::Threads
-    )
-    meiso_enable_warnings(meiso_k230d_composition_edge_service_lifecycle_test)
-    meiso_set_target_folder(
-        meiso_k230d_composition_edge_service_lifecycle_test
-        "Meiso/Tests/service"
-    )
-    meiso_register_target_test(
-        meiso_k230d_composition_edge_service_lifecycle_test
-        "service"
-        --lifecycle-self-test
-    )
-endif()

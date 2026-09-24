@@ -14,7 +14,6 @@ LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 SCAN_ROOTS = (
     ROOT / "docs",
     ROOT / "profiles",
-    ROOT / "targets" / "k230d-linux",
     ROOT / "devtools" / "web",
 )
 

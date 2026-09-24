@@ -3,7 +3,7 @@
 > 归档来源：Meiso `e9f555e` 中保留的历史正文（2026-09-18 整理）。
 > `HISTORICAL / NON-AUTHORITATIVE`。保存早期 Composition、单帧与 2026-09-07 视频验收，
 > 原命令/版本选择按记录时解释，不代表当前默认构建或验收范围。
-> 当前连续视频、scene、相机、安装与资源边界见[K230D 产品入口](../../targets/k230d-linux/README.md)。
+> 当前连续视频、scene、相机、安装与资源边界见[K230D 产品入口](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/README.md)。
 > 旧 Composition 目标需要显式选择 `MEISO_BUILD_LEGACY_COMPOSITION=ON`。
 
 ## Targets
@@ -34,7 +34,7 @@ MEISO_K230_LINUX_CC=/path/to/riscv64-unknown-linux-gnu-gcc \
 `meiso_display_ingress_drm_service`。它复用现有 service 协议源文件，新增一个窄的 libdrm 后端；
 不依赖下节的拓扑准入/TEST_ONLY supervisor，也不替换最终 Composition 的层策略。
 合同及失败向量见 [Profile](../../profiles/display_ingress/README.md#受控单帧-drm-service)，
-实测边界见 [2026-09-06 结果](../../targets/k230d-linux/evidence/display-ingress-page-flip-2026-09-06.md)。
+实测边界见 [2026-09-06 结果](https://github.com/MeisoTech/meiso_edge/blob/main/targets/k230d-linux/evidence/display-ingress-page-flip-2026-09-06.md)。
 
 交叉构建在既有 CMake 工具链外显式传入：
 
@@ -91,7 +91,7 @@ Host frame fd 仍按 DIFI 合同提供 64×32 图像和 EOF。service 一帧完�
 当前拓扑观察已有上述 exact-commit fresh cross 与真板收据；Composition 的 fresh cross +
 combined board E2E 仍待收口。拓扑收据不能替代 frame、TEST_ONLY、真实 commit 或恢复门。
 验收定义见
-[K230D Composition E2E](../k230d-composition-e2e.md)。Cross-build 不证明板端运行；
+[K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。Cross-build 不证明板端运行；
 CPU off-screen 不证明 DRM/DSI/fence/vblank/panel；单 camera probe 不证明 combined E2E。
 
 

@@ -2,7 +2,7 @@
 
 > 状态：`HISTORICAL / NON-AUTHORITATIVE`。本页只证明下述 exact 旧 source/
 > artifact/board run，不证明当前 Profile 身份或当前工作树。当前验收门见
-> [K230D Composition E2E](../k230d-composition-e2e.md)。
+> [K230D Composition E2E](https://github.com/MeisoTech/meiso_edge/blob/main/docs/k230d-composition-e2e.md)。
 
 > 这是一次准确 source commit、准确 K230D/GC2093 实例和受控局域网条件下的
 > target evidence。它记录四个独立验收门，不改变 [Composition](../composition.md)、
