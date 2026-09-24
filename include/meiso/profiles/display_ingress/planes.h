@@ -109,6 +109,9 @@ bool meiso_display_planes_model_supported(const MeisoDisplayPlanesCapability *,
     uint32_t video_input_width, uint32_t video_input_height);
 /* Number of distinct images the model references (0 on an invalid model). */
 uint32_t meiso_display_planes_model_image_count(const MeisoDisplayPlanesModel *);
+/* SHA-256 used by v12 evidence: the canonical model bytes (model_sha256) and a
+ * displayed H.264 access unit (the v2 PRES_EVT digest). False on bad arguments. */
+bool meiso_display_planes_sha256(MeisoByteView bytes, uint8_t out[32]);
 /* Baseline JPEG header check for the image Blob: SOI, SOF0 8-bit 1 or 3
  * components; reports the frame size. Does not decode entropy data. */
 bool meiso_display_planes_jpeg_header(MeisoByteView, uint32_t *width, uint32_t *height);
