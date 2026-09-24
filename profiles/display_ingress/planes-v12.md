@@ -2,6 +2,7 @@
 
 > 状态：`VERSIONED PROFILE CONTRACT`（meiso_edge #2，S-025/S-026）。本页只定义两端契约。
 > 2026-09-24 第一版实现在 Zero 与 Orin NX 上验收后冻结；v9/v10 的 bytes、版本号与行为不变。
+> 同日加可选的跟踪 endpoint（§10，meiso_host #53）：只加不改，没有它的 v12 Catalog 照旧合法。
 
 ## 1. 解决什么
 
@@ -16,7 +17,7 @@ Loop 1 验收后 v12 是唯一往前走的显示路径：v9/v10 不再加功能�
 
 ## 2. Resource Graph
 
-一个 Catalog 最多三个 endpoint，顺序固定：
+一个 Catalog 最多四个 endpoint，顺序固定：
 
 | endpoint | route | owner / kind / facet | delivery | schema | 含义 |
 |---|---|---|---|---|---|
@@ -26,8 +27,9 @@ Loop 1 验收后 v12 是唯一往前走的显示路径：v9/v10 不再加功能�
 | | `DISPLAY_/PLN_PRES` | Edge / Stream / DATA | inline | `DISP_SCH/PLN_PRES:v1` | 模型首次上屏的证据 |
 | | `DISPLAY_/PLN_IMG_` | Host / Blob / IMMUTABLE | inline | `DISP_SCH/PLN_JPEG:v1` | 静态图，内容寻址（SHA-256） |
 | 相机（可选） | 3 条，与 v9 相同 | — | — | — | 不变 |
+| 跟踪（可选）`DISPLAY_/TRCK_END` | 4 条，见 §10 | — | — | — | IMU 上行、头部位姿下行 |
 
-显示与平面两个 endpoint 必选，相机可选。平面 endpoint 的 capability 是 `DISP_SCH/PLN_CAP_:v1`（64 B）。
+显示与平面两个 endpoint 必选，相机、跟踪可选，出现时按上表的顺序。平面 endpoint 的 capability 是 `DISP_SCH/PLN_CAP_:v1`（64 B）。
 所有 endpoint 共用本次设备 incarnation。缺项、多项、乱序、schema 或 delivery 不符，整个 Catalog 拒绝。
 
 显示 endpoint 的 Desired 仍给出串流宽高与帧率；这个宽高就是串流纹理的尺寸。v9 的输出几何与
@@ -53,7 +55,7 @@ STREAM 平面不再画、计为等待；等一帧不含它们的画面真实翻�
 0..3    output_width            u32  1..4096，整块输出的像素
 4..7    output_height           u32  1..4096
 8       view_layout             u8   1 = MONO（一个视图覆盖整块输出）；2 = SIDE_BY_SIDE（左右两半各一眼）
-9       tracking                u8   0 = NONE；1 = ROTATION；2 = POSE（见 §5）
+9       tracking                u8   0 = NONE；1 = ROTATION（保留，不用）；2 = POSE。有跟踪 endpoint 时为 POSE，没有时为 NONE
 10      max_planes              u8   1..16
 11      max_images              u8   1..8，每个 Session 最多几张不同的静态图
 12..15  max_image_bytes         u32  1..1048576，一张图（JPEG）的字节上限，也是图 Blob 路由的 payload 上限
@@ -126,8 +128,8 @@ WORLD 平面在 Host 的世界坐标系里（§5）。平面中心在 `position`
 - 由远到近画：按平面中心到视图原点的距离，距离相同按表中顺序。
 - Edge 本地 HUD 画在所有平面之上，平面永远不遮挡它。
 - `tracking=NONE`（0DoF）：头部位姿恒为单位，WORLD 平面看起来与 HEAD 相同。
-  `ROTATION`、`POSE` 留给 IMU 与 Host 定位接入后（S-025），届时 WORLD 平面按显示时刻的头部位姿变换；
-  HEAD 平面不受影响。本版 Edge 只报 NONE。
+- `tracking=POSE`：WORLD 平面按显示时刻的头部位姿变换（§10）；HEAD 平面和 HUD 不受影响。
+  `ROTATION` 保留不用（S-025 不做 3DoF）。
 - STREAM 平面画当前最新解出的一帧，第一帧到之前不画。IMAGE 平面在图到齐并解码后才画。
 
 ## 6. 状态与证据
@@ -187,19 +189,92 @@ Session 结束（任何原因）时 Edge 立刻撤下这个 Session 的全部平
 | 模型 | ≤ 1888 B/次，≤ `max_updates_per_second` 次/秒 |
 | 静态图 | ≤ `max_image_bytes`/张，4096 B 一块 Blob chunk |
 | 串流 | 与 v2 相同：独立帧 H.264，大小与帧率由显示 Desired 和 AU 上限决定 |
-| Runtime | 3 endpoint、11 route、capability 160 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes` |
+| Runtime | 4 endpoint、15 route、capability 192 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes` |
+| IMU（§10） | 200 Hz × 32 B = 6.4 KB/s；每批 8 个时约 25 条/秒 |
+| 位姿（§10） | Host 自定，建议跟相机帧（约 30 Hz），≤ 200 Hz；72 B/条 |
 
-## 10. 不在本版
+## 10. 跟踪：IMU 上行、头部位姿下行（meiso_host #53）
+
+S-025：眼镜把相机与 IMU 用同一个时钟打时间戳回传，Host 算出"某一时刻的头部位姿"送回，
+眼镜把它推到显示时刻再合成。相机沿用可选相机 endpoint；IMU 与位姿是这个可选 endpoint。
+两边的时间都在 Edge 时钟上（clock epoch 4，与 §6 证据相同），Core 不加对时：
+Host 的位姿由 Edge 时间的相机帧与 IMU 算出，本来就落在 Edge 时间上。
+
+| route | owner / kind / facet | delivery | schema | 含义 |
+|---|---|---|---|---|
+| `DISPLAY_/TRK_DES_` | Host / State / DESIRED | inline | `DISP_SCH/TRK_DESI:v1` | 开不开 IMU 上行、会不会送位姿 |
+| `DISPLAY_/TRK_ACT_` | Edge / State / ACTUAL | inline | `DISP_SCH/TRK_STAT:v1` | IMU 与位姿各自的状态 |
+| `DISPLAY_/TRK_IMU_` | Edge / Stream / DATA | inline | `DISP_SCH/TRK_IMU_:v1` | IMU 样本，成批 |
+| `DISPLAY_/TRK_POSE` | Host / Stream / DATA | inline | `DISP_SCH/TRK_POSE:v1` | 头部位姿 |
+
+能力（Edge → Host，`DISP_SCH/TRK_CAP_:v1`，32 B，大端）：
+
+```text
+0..3    imu_rate_millihz     u32  0 = 没有 IMU 上行；否则 50000..2000000
+4..7    accel_range_mps2     f32  满量程，0 < v ≤ 2000（imu_rate 为 0 时为 +0）
+8..11   gyro_range_rps       f32  满量程，0 < v ≤ 200（同上）
+12      max_imu_batch        u8   1..32，一条 IMU 记录最多几个样本
+13      correction           u8   0 = NONE：只按位姿里的速度外推；1 = IMU：Edge 用与屏同板的 IMU
+                                  从位姿时刻推到显示时刻（要求有 IMU 上行）
+14..15  max_prediction_ms    u16  1..200，Edge 最多往前推多久
+16..31  reserved             全零
+```
+
+Desired 后缀 16 B：`0 imu_enabled u8 0/1`（capability 没有 IMU 时只能为 0）、`1 pose_enabled u8 0/1`、
+其余全零。Actual 后缀 16 B：`0 imu_state u8`（0 OFF、1 RUNNING、2 FAILED）、`1 pose_state u8`
+（0 OFF：与 0DoF 相同；1 APPLYING；2 HOLDING，见下）、其余全零。
+
+IMU 记录（Edge → Host，16 + 32×n B）：
+
+```text
+0..7    first_sequence       u64  本 Session 从 1 起连续编号；跳号即丢了样本
+8       count n              u8   1..max_imu_batch
+9..15   reserved             全零
+每个样本 32 B：
+0..7    time_ns              u64  Edge 时钟上的采样时刻，记录内严格递增
+8..19   accel x/y/z          3×f32  m/s²，IMU 自己的轴，含重力，|v| ≤ 1.1 × 满量程
+20..31  gyro x/y/z           3×f32  rad/s，IMU 自己的轴，|v| ≤ 1.1 × 满量程
+```
+
+IMU 到相机、到头部坐标系的外参是 Host 的标定，不上线。
+
+位姿记录（Host → Edge，72 B）：
+
+```text
+0..7    time_ns              u64  非零，Edge 时钟：这个位姿描述的时刻
+8..11   world_epoch          u32  非零；Host 的世界坐标系重置（定位重新初始化）时换新值
+12      state                u8   1 = TRACKING；2 = LOST
+13..15  reserved             全零
+16..27  position x/y/z       3×f32  头部原点在世界里的位置，米，|分量| ≤ 1000
+28..43  orientation x/y/z/w  4×f32  头部 → 世界的旋转，单位四元数（容差同平面模型）
+44..55  velocity x/y/z       3×f32  世界系线速度，m/s，|分量| ≤ 20
+56..67  angular x/y/z        3×f32  头部系角速度，rad/s，|分量| ≤ 35
+68..71  reserved             全零
+```
+
+头部坐标系与世界坐标系就是 §4 的（右手，米，x 右、y 上、看向 −z；头部原点是投影的视点）。
+
+Edge 怎样用：
+- 每次合成取最新的一条位姿，从 `time_ns` 推到这一帧预计翻页的时刻，推多久不超过 `max_prediction_ms`：
+  `correction=NONE` 时按两个速度匀速外推，`IMU` 时积分本板陀螺。时刻在将来的位姿直接用，不往回推。
+- `state=LOST`，或最新位姿比显示时刻旧 500 ms 以上：保持上一帧用过的位姿（HOLDING），WORLD 平面停在原处，
+  不跳回单位位姿；新位姿到了回到 APPLYING。`world_epoch` 变了直接换，不在两个世界系之间插值。
+- `pose_enabled=0` 或还没收到位姿：与 0DoF 相同。
+- 同一世界里时刻不晚于已有位姿的记录丢弃。IMU 队列满了丢最旧的（Host 看跳号），位姿只留最新的。
+
+## 11. 不在本版
 
 - 深度网格。S-025 说深度网格场景就是大量小平面，但现有稀疏网格有 30×34 到 120×135 个顶点，
   一格一条 96 B 的平面记录走不通。以后作为"带深度网格的平面"另加；16 块的上限只管普通面板，
   不为深度网格放大。
-- 6DoF：Host→Edge 带时间戳的位姿、相机与 IMU 回传提档，都是另加的路由，平面模型不改。
 - 按键等输入上行。
 
-## 11. 验收
+## 12. 验收
 
 - 编解码：golden bytes 往返；保留位、越界数值、非有限浮点、非单位四元数、重复 id、
   坏 UTF-8、`video_desired_version` 不符、超出能力，全部拒绝且不改输出。
 - 桌面：模拟后端画出的像素与几何期望一致（换位姿后四角跟着变）。
 - 板上（meiso_edge #2）：三样同屏、换位姿、断线与恢复、实际翻页证据。
+- 跟踪（§10）：能力、Desired、Actual、IMU、位姿的 golden bytes 往返；保留位、越界、非有限值、时间不递增、
+  批量超限、`world_epoch`/时刻为 0、没有 IMU 却要 IMU、跟踪与 `tracking` 字段不一致、optional endpoint 乱序，
+  全部拒绝。板上（meiso_host #53）：Host 脚本位姿下 WORLD 平面跟着动、HEAD 平面与 HUD 不动。
