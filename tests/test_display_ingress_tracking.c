@@ -1,8 +1,63 @@
 #include <meiso/profiles/display_ingress/planes.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s\n", __LINE__, #x); return 1; } } while (0)
+
+typedef union { max_align_t align; uint8_t bytes[65536]; } Arena;
+static Arena session_memory[2], runtime_memory;
+
+/* Two planes Sessions through the handshake; old_peer negotiates the registry of a peer from
+ * before tracking (3 endpoints + 11 routes). */
+static int handshake(bool old_peer, MeisoSession **host, MeisoSession **edge)
+{
+    MeisoSession *s[2];
+    for (int i = 0; i < 2; ++i) {
+        MeisoSessionConfig cfg = {0};
+        cfg.local_role = i ? MEISO_SESSION_ROLE_EDGE : MEISO_SESSION_ROLE_HOST;
+        cfg.local_peer_id = (MeisoPeerId){i ? 2 : 1, 3}; cfg.expected_peer_id = (MeisoPeerId){i ? 1 : 2, 3};
+        cfg.local_incarnation = 4U + (uint64_t)i; cfg.local_nonce = (MeisoSessionNonce){6U + (uint64_t)i, 8};
+        cfg.protocol = (MeisoProtocolVersion){1, 0};
+        CHECK(meiso_display_planes_configure_session(&cfg) && cfg.limits.max_registry_entries == 19);
+        if (old_peer && i) cfg.limits.max_registry_entries = 14;
+        CHECK(meiso_session_init(session_memory[i].bytes, sizeof(session_memory[i].bytes), &cfg, &s[i]) == MEISO_SESSION_INIT_OK);
+        CHECK(meiso_session_start(s[i]) == MEISO_SESSION_START_STARTED);
+    }
+    for (int round = 0; round < 4; ++round) {
+        MeisoSession *from = s[round % 2], *to = s[1 - round % 2];
+        MeisoByteView bytes;
+        uint8_t copy[512];
+        MeisoSessionRuntimeMessage message;
+        if (!meiso_session_next_outbound(from, &bytes)) continue;
+        CHECK(bytes.size <= sizeof(copy));
+        memcpy(copy, bytes.data, bytes.size);
+        CHECK(meiso_session_mark_outbound_sent(from) == MEISO_SESSION_OUTBOUND_SENT);
+        CHECK(meiso_session_receive(to, (MeisoByteView){copy, bytes.size}, &message) == MEISO_SESSION_RECEIVE_HANDSHAKE_PROGRESS);
+    }
+    *host = s[0]; *edge = s[1];
+    return 0;
+}
+
+/* A peer from before tracking still gets a Session: the Runtime is sized without the tracking
+ * endpoint, and says so. */
+static int session_sizing(void)
+{
+    for (int old_peer = 0; old_peer < 2; ++old_peer) {
+        MeisoSession *host, *edge;
+        CHECK(handshake(old_peer, &host, &edge) == 0);
+        MeisoSessionSnapshot snapshot;
+        CHECK(meiso_session_snapshot(host, &snapshot) && snapshot.state == MEISO_SESSION_STATE_READY);
+        CHECK(meiso_display_planes_session_allows_tracking(host) == !old_peer &&
+              meiso_display_planes_session_allows_tracking(edge) == !old_peer);
+        MeisoRuntimeV4Config rc;
+        MeisoRuntime *runtime;
+        CHECK(meiso_display_planes_configure_runtime(&rc, host, 65536));
+        CHECK(rc.base.max_endpoints == (old_peer ? 3U : 4U) && rc.base.max_routes == (old_peer ? 11U : 15U));
+        CHECK(meiso_runtime_v4_init(runtime_memory.bytes, sizeof(runtime_memory.bytes), &rc, &runtime) == MEISO_RUNTIME_INIT_OK);
+    }
+    return 0;
+}
 
 /* planes-v12.md §10: the tracking endpoint. */
 int main(void)
@@ -135,6 +190,7 @@ int main(void)
     CHECK(!meiso_display_planes_build_catalog(&cc, (MeisoMutableBuffer){cap, sizeof(cap)}, ep, 4, rt, 15));
     cc.tracking_enabled = true; cc.tracking.max_imu_batch = 0;
     CHECK(!meiso_display_planes_build_catalog(&cc, (MeisoMutableBuffer){cap, sizeof(cap)}, ep, 4, rt, 15));
+    CHECK(session_sizing() == 0);
     printf("display ingress tracking v12: ok\n");
     return 0;
 }

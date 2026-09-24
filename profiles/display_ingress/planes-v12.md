@@ -189,7 +189,7 @@ Session 结束（任何原因）时 Edge 立刻撤下这个 Session 的全部平
 | 模型 | ≤ 1888 B/次，≤ `max_updates_per_second` 次/秒 |
 | 静态图 | ≤ `max_image_bytes`/张，4096 B 一块 Blob chunk |
 | 串流 | 与 v2 相同：独立帧 H.264，大小与帧率由显示 Desired 和 AU 上限决定 |
-| Runtime | 4 endpoint、15 route、capability 192 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes` |
+| Runtime | 4 endpoint、15 route（Session registry 19）、capability 192 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §10 时 Session 协商成 14，Runtime 按 3 endpoint、11 route 配，Edge 这个 Session 不放跟踪 endpoint |
 | IMU（§10） | 200 Hz × 32 B = 6.4 KB/s；每批 8 个时约 25 条/秒 |
 | 位姿（§10） | Host 自定，建议跟相机帧（约 30 Hz），≤ 200 Hz；72 B/条 |
 
