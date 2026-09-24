@@ -338,12 +338,22 @@ bool meiso_display_planes_configure_session(MeisoSessionConfig *out)
     *out = c; return true;
 }
 
+bool meiso_display_planes_session_allows_tracking(const MeisoSession *session)
+{
+    MeisoSessionSnapshot s;
+    return session && meiso_session_snapshot(session, &s) && s.state == MEISO_SESSION_STATE_READY &&
+        s.negotiated_limits.max_registry_entries >= MEISO_DISPLAY_PLANES_MAX_ENDPOINTS + MEISO_DISPLAY_PLANES_MAX_ROUTES;
+}
+
 bool meiso_display_planes_configure_runtime(MeisoRuntimeV4Config *out, MeisoSession *session, uint32_t max_image_bytes)
 {
     if (!out || !session || !max_image_bytes || max_image_bytes > MEISO_DISPLAY_PLANES_MAX_IMAGE_BYTES) return false;
+    const bool tracking = meiso_display_planes_session_allows_tracking(session);
+    const uint32_t endpoints = tracking ? MEISO_DISPLAY_PLANES_MAX_ENDPOINTS : MEISO_DISPLAY_PLANES_MAX_ENDPOINTS - 1U;
+    const uint32_t routes = tracking ? MEISO_DISPLAY_PLANES_MAX_ROUTES : MEISO_DISPLAY_PLANES_MAX_ROUTES - 4U;
     MeisoRuntimeV4Config c = {0};
-    c.base.session = session; c.base.max_endpoints = MEISO_DISPLAY_PLANES_MAX_ENDPOINTS;
-    c.base.max_endpoint_history = 2 * MEISO_DISPLAY_PLANES_MAX_ENDPOINTS; c.base.max_routes = MEISO_DISPLAY_PLANES_MAX_ROUTES;
+    c.base.session = session; c.base.max_endpoints = endpoints;
+    c.base.max_endpoint_history = 2 * endpoints; c.base.max_routes = routes;
     c.base.max_capability_bytes = MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES;
     c.base.max_desired_profile_bytes_per_endpoint = MEISO_DISPLAY_PLANES_MAX_MODEL_BYTES;
     c.base.max_actual_profile_bytes_per_endpoint = 80;

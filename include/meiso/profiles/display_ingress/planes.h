@@ -139,7 +139,12 @@ enum {
 size_t meiso_display_planes_tracking_route_base(const MeisoDisplayPlanesCatalogConfig *);
 
 bool meiso_display_planes_configure_session(MeisoSessionConfig *);
-/* max_image_bytes sizes the Runtime Blob admission (and Edge reassembly). */
+/* A READY Session whose peer can hold the tracking endpoint (planes-v12.md §10). A peer from before
+ * tracking negotiates room for the camera only (3 endpoints, 11 routes): the Edge then leaves
+ * tracking out of the catalog. */
+bool meiso_display_planes_session_allows_tracking(const MeisoSession *);
+/* max_image_bytes sizes the Runtime Blob admission (and Edge reassembly). The registry is sized to
+ * what the Session allows, with or without tracking. */
 bool meiso_display_planes_configure_runtime(MeisoRuntimeV4Config *, MeisoSession *, uint32_t max_image_bytes);
 bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *, MeisoMutableBuffer capability_storage,
     MeisoRuntimeEndpointDescriptor *, size_t, MeisoRuntimeV4RouteDescriptor *, size_t);
