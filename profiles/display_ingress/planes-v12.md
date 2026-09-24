@@ -222,11 +222,15 @@ Host 的位姿由 Edge 时间的相机帧与 IMU 算出，本来就落在 Edge �
 
 Desired 后缀 16 B：`0 imu_enabled u8 0/1`（capability 没有 IMU 时只能为 0）、`1 pose_enabled u8 0/1`、
 其余全零。Actual 后缀 16 B：`0 imu_state u8`（0 OFF、1 RUNNING、2 FAILED）、`1 pose_state u8`
-（0 OFF：与 0DoF 相同；1 APPLYING；2 HOLDING，见下）、其余全零。
+（0 OFF：与 0DoF 相同；1 APPLYING：WORLD 平面按收到的位姿画）、其余全零。
 
-线上编号：Desired 的 delivery generation 为 15，Actual 为 16。两者任一开着时 Actual 为 RUNNING，
-Desired 每变一次 production epoch 加一；IMU 与位姿两条流都用这个 epoch（production gate 按 Runtime 规则
-由 Edge 的 Actual 建立，Host 拥有的位姿流也一样），stream epoch 都为 1，序号逐条递增。
+线上编号：Desired 的 delivery generation 为 15，Actual 为 16。两者任一开着时 Actual 为 RUNNING。
+IMU 与位姿两条流都用 Actual 的 production epoch（production gate 按 Runtime 规则由 Edge 的 Actual 建立，
+Host 拥有的位姿流也一样），stream epoch 都为 1，序号逐条递增。Runtime 要求同一 epoch 内 Actual 字节不变，
+所以 Actual 只在有效配置变（Desired 变、IMU 坏了或恢复）时换，每换一次 production epoch 加一；
+某一刻位姿用上没有（下面的保持）不进 Actual。Actual 换了之后，Host 在接受它之前发出的旧 epoch 位姿
+到 Edge 时被 Runtime 拒收（`PRODUCTION_EPOCH_MISMATCH` 或 `ROUTE_NOT_ACTIVE`），Edge 丢掉，不算 Session 错误；
+Host 接受新 Actual 后用新 epoch 接着发。
 
 IMU 记录（Edge → Host，16 + 32×n B）：
 
@@ -261,8 +265,8 @@ IMU 到相机、到头部坐标系的外参是 Host 的标定，不上线。
 Edge 怎样用：
 - 每次合成取最新的一条位姿，从 `time_ns` 推到这一帧预计翻页的时刻，推多久不超过 `max_prediction_ms`：
   `correction=NONE` 时按两个速度匀速外推，`IMU` 时积分本板陀螺。时刻在将来的位姿直接用，不往回推。
-- `state=LOST`，或最新位姿比显示时刻旧 500 ms 以上：保持上一帧用过的位姿（HOLDING），WORLD 平面停在原处，
-  不跳回单位位姿；新位姿到了回到 APPLYING。`world_epoch` 变了直接换，不在两个世界系之间插值。
+- `state=LOST`，或最新位姿比显示时刻旧 500 ms 以上：保持上一帧用过的位姿，WORLD 平面停在原处，
+  不跳回单位位姿；新位姿到了接着用。`world_epoch` 变了直接换，不在两个世界系之间插值。
 - `pose_enabled=0` 或还没收到位姿：与 0DoF 相同。
 - 同一世界里时刻不晚于已有位姿的记录丢弃。IMU 队列满了丢最旧的（Host 看跳号），位姿只留最新的。
 

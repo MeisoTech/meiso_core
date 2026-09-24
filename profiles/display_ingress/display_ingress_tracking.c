@@ -75,7 +75,7 @@ bool meiso_display_tracking_desired_supported(const MeisoDisplayTrackingCapabili
 
 bool meiso_display_tracking_actual_encode(const MeisoDisplayTrackingActual *a, MeisoMutableBuffer out)
 {
-    if (!a || a->imu_state > MEISO_DISPLAY_TRACKING_IMU_FAILED || a->pose_state > MEISO_DISPLAY_TRACKING_POSE_HOLDING ||
+    if (!a || a->imu_state > MEISO_DISPLAY_TRACKING_IMU_FAILED || a->pose_state > MEISO_DISPLAY_TRACKING_POSE_APPLYING ||
         !out.data || out.capacity < 16 || overlap(a, sizeof(*a), out.data, 16)) return false;
     memset(out.data, 0, 16);
     out.data[0] = a->imu_state; out.data[1] = a->pose_state;
@@ -85,7 +85,7 @@ bool meiso_display_tracking_actual_encode(const MeisoDisplayTrackingActual *a, M
 bool meiso_display_tracking_actual_decode(MeisoByteView in, MeisoDisplayTrackingActual *out)
 {
     if (!in.data || in.size != 16 || !out || overlap(in.data, in.size, out, sizeof(*out)) ||
-        in.data[0] > MEISO_DISPLAY_TRACKING_IMU_FAILED || in.data[1] > MEISO_DISPLAY_TRACKING_POSE_HOLDING ||
+        in.data[0] > MEISO_DISPLAY_TRACKING_IMU_FAILED || in.data[1] > MEISO_DISPLAY_TRACKING_POSE_APPLYING ||
         !zero(in.data + 2, 14)) return false;
     *out = (MeisoDisplayTrackingActual){in.data[0], in.data[1]};
     return true;

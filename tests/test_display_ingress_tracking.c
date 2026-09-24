@@ -39,10 +39,11 @@ int main(void)
     b[9] = 1; CHECK(!meiso_display_tracking_desired_decode((MeisoByteView){b, 16}, &dd)); b[9] = 0;
     CHECK(meiso_display_tracking_desired_supported(&c, &d) && !meiso_display_tracking_desired_supported(&pose_only, &d));
     d.imu_enabled = false; CHECK(meiso_display_tracking_desired_supported(&pose_only, &d));
-    MeisoDisplayTrackingActual a = {MEISO_DISPLAY_TRACKING_IMU_RUNNING, MEISO_DISPLAY_TRACKING_POSE_HOLDING}, ad;
-    CHECK(meiso_display_tracking_actual_encode(&a, (MeisoMutableBuffer){b, 16}) && b[0] == 1 && b[1] == 2);
-    CHECK(meiso_display_tracking_actual_decode((MeisoByteView){b, 16}, &ad) && ad.pose_state == MEISO_DISPLAY_TRACKING_POSE_HOLDING);
-    b[1] = 3; CHECK(!meiso_display_tracking_actual_decode((MeisoByteView){b, 16}, &ad));
+    MeisoDisplayTrackingActual a = {MEISO_DISPLAY_TRACKING_IMU_FAILED, MEISO_DISPLAY_TRACKING_POSE_APPLYING}, ad;
+    CHECK(meiso_display_tracking_actual_encode(&a, (MeisoMutableBuffer){b, 16}) && b[0] == 2 && b[1] == 1);
+    CHECK(meiso_display_tracking_actual_decode((MeisoByteView){b, 16}, &ad) && ad.imu_state == MEISO_DISPLAY_TRACKING_IMU_FAILED &&
+          ad.pose_state == MEISO_DISPLAY_TRACKING_POSE_APPLYING);
+    b[1] = 2; CHECK(!meiso_display_tracking_actual_decode((MeisoByteView){b, 16}, &ad));
     a.imu_state = 3; CHECK(!meiso_display_tracking_actual_encode(&a, (MeisoMutableBuffer){b, 16}));
 
     /* IMU record: three samples 5 ms apart */

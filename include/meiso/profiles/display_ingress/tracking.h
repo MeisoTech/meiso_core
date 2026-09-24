@@ -32,7 +32,7 @@ enum { MEISO_DISPLAY_TRACKING_CORRECTION_NONE = 0, MEISO_DISPLAY_TRACKING_CORREC
 typedef uint8_t MeisoDisplayTrackingImuState;
 enum { MEISO_DISPLAY_TRACKING_IMU_OFF = 0, MEISO_DISPLAY_TRACKING_IMU_RUNNING = 1, MEISO_DISPLAY_TRACKING_IMU_FAILED = 2 };
 typedef uint8_t MeisoDisplayTrackingPoseState;
-enum { MEISO_DISPLAY_TRACKING_POSE_OFF = 0, MEISO_DISPLAY_TRACKING_POSE_APPLYING = 1, MEISO_DISPLAY_TRACKING_POSE_HOLDING = 2 };
+enum { MEISO_DISPLAY_TRACKING_POSE_OFF = 0, MEISO_DISPLAY_TRACKING_POSE_APPLYING = 1 };
 typedef uint8_t MeisoDisplayTrackingPoseQuality;
 enum { MEISO_DISPLAY_TRACKING_TRACKING = 1, MEISO_DISPLAY_TRACKING_LOST = 2 };
 
@@ -48,6 +48,8 @@ typedef struct {
     bool imu_enabled, pose_enabled;
 } MeisoDisplayTrackingDesired;
 
+/* Changes only with the effective configuration (a new production epoch each time); whether a
+ * pose was fresh enough for a given frame is not reported. */
 typedef struct {
     MeisoDisplayTrackingImuState imu_state;
     MeisoDisplayTrackingPoseState pose_state;
