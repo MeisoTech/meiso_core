@@ -59,6 +59,107 @@ static int session_sizing(void)
     return 0;
 }
 
+/* The Edge's Runtime also holds the image reassembly scratch. */
+static union { max_align_t align; uint8_t bytes[1 << 20]; } runtime_pair[2];
+
+/* One Session message from one peer to the other; a Runtime message comes back as its event.
+ * State accepts are sent by hand here, as the POSIX transport's scheduler would. */
+static int deliver(MeisoSession *from, MeisoSession *to, MeisoRuntime *runtime, MeisoRuntimeStatus *status, MeisoRuntimeEvent *event)
+{
+    MeisoByteView bytes;
+    uint8_t copy[8192];
+    MeisoSessionRuntimeMessage message;
+    CHECK(meiso_session_next_outbound(from, &bytes) && bytes.size <= sizeof(copy));
+    memcpy(copy, bytes.data, bytes.size);
+    CHECK(meiso_session_mark_outbound_sent(from) == MEISO_SESSION_OUTBOUND_SENT);
+    CHECK(meiso_session_receive(to, (MeisoByteView){copy, bytes.size}, &message) == MEISO_SESSION_RECEIVE_RUNTIME);
+    *status = meiso_runtime_receive(runtime, &message, event);
+    return 0;
+}
+
+/* §10: a pose that fails its schema is the receiver's to drop. The Runtime carries it like any
+ * sample, the Session stays up, and the next good pose is used. */
+static int bad_pose_is_dropped(const MeisoDisplayPlanesCatalogConfig *cc)
+{
+    MeisoSession *hs, *es;
+    MeisoRuntime *hr, *er;
+    MeisoRuntimeV4Config rc;
+    MeisoRuntimeStatus status;
+    MeisoRuntimeEvent event;
+    CHECK(handshake(false, &hs, &es) == 0);
+    CHECK(meiso_display_planes_configure_runtime(&rc, hs, cc->planes.max_image_bytes) &&
+          meiso_runtime_v4_init(runtime_pair[0].bytes, sizeof(runtime_pair[0].bytes), &rc, &hr) == MEISO_RUNTIME_INIT_OK);
+    CHECK(meiso_display_planes_configure_runtime(&rc, es, cc->planes.max_image_bytes) &&
+          meiso_runtime_v4_init(runtime_pair[1].bytes, sizeof(runtime_pair[1].bytes), &rc, &er) == MEISO_RUNTIME_INIT_OK);
+
+    uint8_t cap[MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES];
+    MeisoRuntimeEndpointDescriptor ep[MEISO_DISPLAY_PLANES_MAX_ENDPOINTS];
+    MeisoRuntimeV4RouteDescriptor rt[MEISO_DISPLAY_PLANES_MAX_ROUTES];
+    CHECK(!cc->camera_enabled && meiso_display_planes_build_catalog(cc, (MeisoMutableBuffer){cap, sizeof(cap)}, ep, 3, rt, 12));
+    CHECK(meiso_runtime_v4_offer_catalog(er, 1, ep, 3, rt, 12) == MEISO_RUNTIME_OK);
+    CHECK(deliver(es, hs, hr, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_CATALOG_OFFERED);
+    CHECK(meiso_runtime_accept_catalog(hr) == MEISO_RUNTIME_OK);
+    CHECK(deliver(hs, es, er, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_CATALOG_ACCEPTED);
+    const size_t base = meiso_display_planes_tracking_route_base(cc);
+    MeisoRuntimeRouteKey key[4];
+    for (unsigned i = 0; i < 4; ++i) {
+        const MeisoRuntimeRouteDescriptor *r = &rt[base + i].route;
+        key[i] = (MeisoRuntimeRouteKey){1, r->endpoint_id, r->endpoint_incarnation, r->resource.id, r->facet};
+    }
+    const MeisoOwnerScope host = {MEISO_OWNER_ROLE_HOST, 4}, edge = {MEISO_OWNER_ROLE_EDGE, 5};
+
+    /* Desired (poses only) and a RUNNING Actual under production epoch 1 */
+    uint8_t profile[16], wire[MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE + 16];
+    MeisoByteView payload;
+    const MeisoDisplayTrackingDesired poses = {false, true};
+    CHECK(meiso_display_tracking_desired_encode(&poses, (MeisoMutableBuffer){profile, 16}) &&
+          meiso_runtime_desired_state_encode(&(MeisoRuntimeDesiredState){true, {profile, 16}}, (MeisoMutableBuffer){wire, sizeof(wire)}, &payload));
+    const MeisoStateOffer desired = {{MEISO_DISPLAY_TRACKING_DESIRED_GENERATION}, {host, 1, payload}};
+    CHECK(meiso_runtime_send_state_offer(hr, key[MEISO_DISPLAY_TRACKING_ROUTE_DESIRED], &desired) == MEISO_RUNTIME_OK);
+    CHECK(deliver(hs, es, er, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    CHECK(meiso_runtime_commit_state_receive(er, event.route, &event.state_offer, MEISO_STATE_RECEIVE_NEW) == MEISO_RUNTIME_OK &&
+          meiso_runtime_send_state_accept(er, event.route, desired.generation, host, 1) == MEISO_RUNTIME_OK);
+    CHECK(deliver(es, hs, hr, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT);
+    const MeisoDisplayTrackingActual applying = {MEISO_DISPLAY_TRACKING_IMU_OFF, MEISO_DISPLAY_TRACKING_POSE_APPLYING};
+    MeisoRuntimeActualState a;
+    memset(&a, 0, sizeof(a));
+    a.observed_desired = (MeisoRuntimeDesiredReference){true, host, 1};
+    a.applied_desired = a.observed_desired;
+    a.apply_result = MEISO_RUNTIME_APPLY_APPLIED; a.availability = MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    a.effective_enabled = true; a.production_status = MEISO_RUNTIME_PRODUCTION_RUNNING; a.production_epoch = 1;
+    a.profile = (MeisoByteView){profile, 16};
+    CHECK(meiso_display_tracking_actual_encode(&applying, (MeisoMutableBuffer){profile, 16}) &&
+          meiso_runtime_actual_state_encode(&a, (MeisoMutableBuffer){wire, sizeof(wire)}, &payload));
+    const MeisoStateOffer actual = {{MEISO_DISPLAY_TRACKING_ACTUAL_GENERATION}, {edge, 1, payload}};
+    CHECK(meiso_runtime_send_state_offer(er, key[MEISO_DISPLAY_TRACKING_ROUTE_ACTUAL], &actual) == MEISO_RUNTIME_OK);
+    CHECK(deliver(es, hs, hr, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    CHECK(meiso_runtime_commit_state_receive(hr, event.route, &event.state_offer, MEISO_STATE_RECEIVE_NEW) == MEISO_RUNTIME_OK &&
+          meiso_runtime_send_state_accept(hr, event.route, actual.generation, edge, 1) == MEISO_RUNTIME_OK);
+    CHECK(deliver(hs, es, er, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT);
+
+    /* poses 1 (a NaN in the position) and 2 (good) */
+    MeisoDisplayTrackingPose p = {5000000000ULL, 1, MEISO_DISPLAY_TRACKING_TRACKING, {0.1f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}, got;
+    uint8_t bytes[MEISO_DISPLAY_TRACKING_POSE_BYTES];
+    unsigned dropped = 0, used = 0;
+    for (uint64_t sequence = 1; sequence <= 2; ++sequence) {
+        CHECK(meiso_display_tracking_pose_encode(&p, (MeisoMutableBuffer){bytes, sizeof(bytes)}));
+        if (sequence == 1) { bytes[16] = 0x7f; bytes[17] = 0xc0; bytes[18] = 0; bytes[19] = 0; }
+        const MeisoStreamSample sample = {{host, MEISO_DISPLAY_TRACKING_POSE_STREAM_EPOCH, sequence}, {4, p.time_ns},
+            {0}, {NULL, 0}, {bytes, sizeof(bytes)}};
+        CHECK(meiso_runtime_send_stream_sample(hr, key[MEISO_DISPLAY_TRACKING_ROUTE_POSE], 1, &sample) == MEISO_RUNTIME_OK);
+        CHECK(deliver(hs, es, er, &status, &event) == 0 && status == MEISO_RUNTIME_OK && event.type == MEISO_RUNTIME_EVENT_STREAM_SAMPLE);
+        if (meiso_display_tracking_pose_decode(event.stream_sample.payload, &got)) ++used;
+        else ++dropped;
+        p.time_ns += 10000000ULL; p.position[0] = 0.2f;
+    }
+    CHECK(dropped == 1 && used == 1 && got.position[0] == 0.2f && got.time_ns == 5010000000ULL);
+    MeisoSessionSnapshot snapshot;
+    CHECK(meiso_session_snapshot(hs, &snapshot) && snapshot.state == MEISO_SESSION_STATE_READY);
+    CHECK(meiso_session_snapshot(es, &snapshot) && snapshot.state == MEISO_SESSION_STATE_READY);
+    return 0;
+}
+
 /* planes-v12.md §10: the tracking endpoint. */
 int main(void)
 {
@@ -191,6 +292,8 @@ int main(void)
     cc.tracking_enabled = true; cc.tracking.max_imu_batch = 0;
     CHECK(!meiso_display_planes_build_catalog(&cc, (MeisoMutableBuffer){cap, sizeof(cap)}, ep, 4, rt, 15));
     CHECK(session_sizing() == 0);
+    cc.tracking.max_imu_batch = 8; cc.camera_enabled = false;
+    CHECK(bad_pose_is_dropped(&cc) == 0);
     printf("display ingress tracking v12: ok\n");
     return 0;
 }
