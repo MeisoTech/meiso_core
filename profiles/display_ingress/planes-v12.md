@@ -262,6 +262,11 @@ IMU 到相机、到头部坐标系的外参是 Host 的标定，不上线。
 
 头部坐标系与世界坐标系就是 §4 的（右手，米，x 右、y 上、看向 −z；头部原点是投影的视点）。
 
+坏记录只丢这一条：一条 IMU 或位姿记录校验不过（长度不对、非有限值、越界、四元数不单位、保留位非零、
+时刻为 0 或不递增、IMU 序号倒退），收方丢掉它并计数，不算 Session 错误，后面的好记录照常用。
+位姿是 VIO 的浮点输出，偶尔一条坏数不该让画面断掉。Runtime 这一层（route、producer、epoch、流序号）
+以及能力、Desired、Actual 出错，仍按原来的规则处理。
+
 Edge 怎样用：
 - 每次合成取最新的一条位姿，从 `time_ns` 推到这一帧预计翻页的时刻，推多久不超过 `max_prediction_ms`：
   `correction=NONE` 时按两个速度匀速外推，`IMU` 时积分本板陀螺。时刻在将来的位姿直接用，不往回推。
@@ -285,4 +290,4 @@ Edge 怎样用：
 - 板上（meiso_edge #2）：三样同屏、换位姿、断线与恢复、实际翻页证据。
 - 跟踪（§10）：能力、Desired、Actual、IMU、位姿的 golden bytes 往返；保留位、越界、非有限值、时间不递增、
   批量超限、`world_epoch`/时刻为 0、没有 IMU 却要 IMU、跟踪与 `tracking` 字段不一致、optional endpoint 乱序，
-  全部拒绝。板上（meiso_host #53）：Host 脚本位姿下 WORLD 平面跟着动、HEAD 平面与 HUD 不动。
+  全部拒绝。经过两端 Runtime：一条坏位姿照常送到、收方丢掉，Session 还在，下一条好位姿照常用。板上（meiso_host #53）：Host 脚本位姿下 WORLD 平面跟着动、HEAD 平面与 HUD 不动。

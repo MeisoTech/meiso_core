@@ -76,7 +76,8 @@ typedef struct {
     float angular[3];                   /* head frame, rad/s */
 } MeisoDisplayTrackingPose;
 
-/* Codecs: inputs and outputs must be disjoint; failure leaves outputs unchanged. */
+/* Codecs: inputs and outputs must be disjoint; failure leaves outputs unchanged. An IMU or pose
+ * record that fails to decode is dropped and counted by its receiver, not a Session error (§10). */
 bool meiso_display_tracking_capability_encode(const MeisoDisplayTrackingCapability *, MeisoMutableBuffer);
 bool meiso_display_tracking_capability_decode(MeisoByteView, MeisoDisplayTrackingCapability *);
 bool meiso_display_tracking_desired_encode(const MeisoDisplayTrackingDesired *, MeisoMutableBuffer);
