@@ -709,6 +709,58 @@ static bool test_fragment_boundary_preemption_latest_and_release(void)
     return true;
 }
 
+/* planes-v12.md §6 (meiso_core #36): a frame arriving after a newer one was published is never
+ * published, so the Edge only ever moves its video forward. */
+static bool test_late_older_frame_is_not_published(void)
+{
+    uint8_t rgba1[32];
+    uint8_t rgba2[32];
+    MediaPair pair;
+    MeisoDisplayIngressMediaFrame frame;
+    MeisoDisplayIngressMediaLatestView latest;
+    MeisoDisplayIngressMediaTransportSnapshot edge_state;
+    OwnedPacket old_packet;
+    OwnedPacket new_packet;
+
+    fill_frame(rgba1, sizeof(rgba1), 3U);
+    fill_frame(rgba2, sizeof(rgba2), 33U);
+    CHECK(initialize_pair(&pair, 4U, 2U, 64U));
+    frame = frame_value(rgba1, sizeof(rgba1), 1U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(
+              pair.host, &frame, NULL
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+    CHECK(capture_packet(pair.host, &old_packet));
+    CHECK(meiso_display_ingress_media_transport_complete_outbound(
+              pair.host, &old_packet.ref
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+    frame = frame_value(rgba2, sizeof(rgba2), 2U, 0U);
+    CHECK(meiso_display_ingress_media_transport_submit(
+              pair.host, &frame, NULL
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+    CHECK(capture_packet(pair.host, &new_packet));
+    CHECK(complete_and_receive(
+        pair.host, pair.edge, &new_packet, NULL,
+        MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_FRAME_PUBLISHED
+    ));
+    CHECK(meiso_display_ingress_media_transport_latest(
+              pair.edge, &latest
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+    CHECK(latest.frame.frame_sequence == 2U);
+    CHECK(meiso_display_ingress_media_transport_release_latest(
+              pair.edge, &latest.ref
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+
+    CHECK(meiso_display_ingress_media_transport_receive_packet(
+              pair.edge, (MeisoByteView){old_packet.bytes, old_packet.size}, NULL
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_SEQUENCE_REPLAY);
+    CHECK(meiso_display_ingress_media_transport_latest(
+              pair.edge, &latest
+          ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_NO_FRAME);
+    CHECK(snapshot(pair.edge, &edge_state));
+    CHECK(edge_state.published_sequence_high_water == 2U);
+    return true;
+}
+
 static bool test_discontinuity_recovery_and_separate_counters(void)
 {
     uint8_t rgba[32];
@@ -1371,6 +1423,7 @@ int main(void)
         !test_memory_init_exact_profile_and_alias_contract() ||
         !test_golden_packet_idempotence_and_exact_refs() ||
         !test_fragment_boundary_preemption_latest_and_release() ||
+        !test_late_older_frame_is_not_published() ||
         !test_discontinuity_recovery_and_separate_counters() ||
         !test_idle_fragment_boundary_preemption() ||
         !test_borrowed_packet_stable_across_latest_replacement() ||

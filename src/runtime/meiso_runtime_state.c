@@ -30,11 +30,40 @@ static void production_snapshot_from_actual(
     value->data_active = meiso_runtime_private_actual_data_active(actual);
 }
 
+/* The Desired an Actual names as observed. Its sender names the last Desired it received. Its receiver
+ * also takes an earlier version of the same owner, below the newest it sent: the Edge published this
+ * Actual before that Desired reached it (runtime.md). Observations never go back. */
+static bool observed_desired_valid(
+    const MeisoRuntimeEndpointSlot *endpoint,
+    const MeisoRuntimeActualState *actual,
+    bool received
+)
+{
+    const MeisoRuntimeDesiredReference observed = actual->observed_desired;
+    const MeisoRuntimeDesiredReference sent = endpoint->desired;
+    const MeisoRuntimeDesiredReference last = endpoint->production.observed_desired;
+
+    if (meiso_runtime_private_desired_reference_equal(observed, sent)) {
+        return true;
+    }
+    if (!received || !sent.present || (observed.present &&
+            (!meiso_owner_scope_equal(observed.owner, sent.owner) ||
+             observed.version >= sent.version))) {
+        return false;
+    }
+    if (!endpoint->production.actual_present || !last.present) {
+        return true;
+    }
+    return observed.present && meiso_owner_scope_equal(observed.owner, last.owner) &&
+        observed.version >= last.version;
+}
+
 static bool production_transition_valid(
     const MeisoRuntime *runtime,
     uint8_t bank,
     size_t endpoint_index,
-    const MeisoRuntimeActualState *actual
+    const MeisoRuntimeActualState *actual,
+    bool received
 )
 {
     const MeisoRuntimeEndpointSlot *endpoint =
@@ -42,7 +71,7 @@ static bool production_transition_valid(
     const bool next_active = meiso_runtime_private_actual_data_active(actual);
     const bool applied_bound = !actual->applied_desired.present ||
         meiso_runtime_private_desired_reference_equal(
-            actual->applied_desired, endpoint->desired
+            actual->applied_desired, actual->observed_desired
         ) || meiso_runtime_private_desired_reference_equal(
             actual->applied_desired,
             endpoint->production.applied_desired
@@ -50,9 +79,7 @@ static bool production_transition_valid(
 
     if (actual->profile.size >
             runtime->max_actual_profile_bytes_per_endpoint ||
-        !meiso_runtime_private_desired_reference_equal(
-            actual->observed_desired, endpoint->desired
-        ) || !applied_bound) {
+        !observed_desired_valid(endpoint, actual, received) || !applied_bound) {
         return false;
     }
     if (!next_active) {
@@ -187,7 +214,7 @@ MeisoRuntimeStatus meiso_runtime_send_state_offer(
             return MEISO_RUNTIME_STATE_INVALID;
         }
         if (!production_transition_valid(
-                runtime, runtime->active_bank, endpoint_index, &actual
+                runtime, runtime->active_bank, endpoint_index, &actual, false
             )) {
             return MEISO_RUNTIME_STATE_INVALID;
         }
@@ -599,7 +626,7 @@ MeisoRuntimeStatus meiso_runtime_commit_state_receive(
     }
     if (receive_status == MEISO_STATE_RECEIVE_NEW) {
         if (!production_transition_valid(
-                runtime, runtime->active_bank, endpoint_index, &actual
+                runtime, runtime->active_bank, endpoint_index, &actual, true
             )) {
             return MEISO_RUNTIME_STATE_INVALID;
         }

@@ -1104,11 +1104,259 @@ static bool test_new_session_requires_catalog(void)
     return true;
 }
 
+static void put_u64(uint8_t *output, uint64_t value)
+{
+    unsigned index;
+
+    for (index = 0U; index < 8U; ++index) {
+        output[index] = (uint8_t)(value >> (56U - 8U * index));
+    }
+}
+
+/* Offsets in a Runtime State offer frame (12 B header, 96 B offer prefix) of an Actual's observed and
+ * applied Desired owner incarnation and version (runtime.md wire). */
+enum {
+    ACTUAL_OBSERVED_INCARNATION = 12 + 96 + 8,
+    ACTUAL_OBSERVED_VERSION = 12 + 96 + 16,
+    ACTUAL_APPLIED_INCARNATION = 12 + 96 + 24,
+    ACTUAL_APPLIED_VERSION = 12 + 96 + 32
+};
+
+/* The Host takes an altered copy of a received Actual frame: offered, then refused at commit. */
+static bool host_refuses_altered_actual(
+    RuntimePair *pair,
+    const MeisoSessionRuntimeMessage *message,
+    size_t offset,
+    uint64_t value
+)
+{
+    uint8_t altered[512];
+    MeisoSessionRuntimeMessage copy = *message;
+    MeisoRuntimeEvent event;
+
+    CHECK(message->payload.size <= sizeof(altered));
+    memmove(altered, message->payload.data, message->payload.size);
+    put_u64(altered + offset, value);
+    put_u64(altered + offset + 16U, value); /* applied as observed: an APPLIED Actual stays well formed */
+    copy.payload = (MeisoByteView){altered, message->payload.size};
+    CHECK(meiso_runtime_receive(pair->host_runtime, &copy, &event) == MEISO_RUNTIME_OK);
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    CHECK(meiso_runtime_commit_state_receive(
+        pair->host_runtime, event.route, &event.state_offer, MEISO_STATE_RECEIVE_NEW
+    ) == MEISO_RUNTIME_STATE_INVALID);
+    return true;
+}
+
+/* The Edge's next Actual, sent: its frame is taken off the Edge Session into message (in pair->transfer). */
+static bool edge_sends_actual(
+    RuntimePair *pair,
+    Resources *resources,
+    uint64_t version,
+    uint64_t observed,
+    uint64_t epoch,
+    uint8_t output[128],
+    MeisoSessionRuntimeMessage *message
+)
+{
+    static const uint8_t profile[] = {0xe1U};
+    MeisoStateOffer offer;
+    MeisoByteView outbound;
+
+    CHECK(publish_actual_with_profile(
+        resources, version, desired_ref(observed), desired_ref(observed),
+        MEISO_RUNTIME_APPLY_APPLIED, MEISO_RUNTIME_AVAILABILITY_PRESENT,
+        true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, epoch, profile, sizeof(profile), output
+    ));
+    CHECK(meiso_state_publisher_next_offer(resources->actual_publisher, &offer));
+    CHECK(meiso_runtime_send_state_offer(
+        pair->edge_runtime, route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), &offer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_session_next_outbound(pair->edge_session, &outbound));
+    CHECK(outbound.size <= sizeof(pair->transfer));
+    memmove(pair->transfer, outbound.data, outbound.size);
+    CHECK(meiso_session_mark_outbound_sent(pair->edge_session) == MEISO_SESSION_OUTBOUND_SENT);
+    CHECK(meiso_session_receive(
+        pair->host_session, (MeisoByteView){pair->transfer, outbound.size}, message
+    ) == MEISO_SESSION_RECEIVE_RUNTIME);
+    return true;
+}
+
+/* The Host commits a received Actual frame (its accept goes out once the Session can send it). */
+static bool host_takes_actual(
+    RuntimePair *pair,
+    Resources *resources,
+    const MeisoSessionRuntimeMessage *message,
+    MeisoRuntimeEvent *event
+)
+{
+    MeisoStateReceiveStatus received;
+
+    CHECK(meiso_runtime_receive(pair->host_runtime, message, event) == MEISO_RUNTIME_OK);
+    CHECK(event->type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    received = meiso_state_replica_receive(
+        resources->actual_replica, event->state_offer.state.owner,
+        event->state_offer.state.version, event->state_offer.state.payload
+    );
+    CHECK(received == MEISO_STATE_RECEIVE_NEW);
+    CHECK(meiso_runtime_commit_state_receive(
+        pair->host_runtime, event->route, &event->state_offer, received
+    ) == MEISO_RUNTIME_OK);
+    return true;
+}
+
+/* The Host's Desired in flight reaches the Edge, which commits and accepts it; then the Host's accept of
+ * the Actual it took (event) and the Edge's accept of the Desired are delivered. */
+static bool settle_crossing(RuntimePair *pair, Resources *resources, const MeisoRuntimeEvent *actual)
+{
+    MeisoRuntimeEvent event;
+    MeisoStateReceiveStatus received;
+
+    CHECK(transfer(pair, pair->host_session, pair->edge_session, pair->edge_runtime, &event, MEISO_RUNTIME_OK));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_OFFER);
+    received = meiso_state_replica_receive(
+        resources->desired_replica, event.state_offer.state.owner,
+        event.state_offer.state.version, event.state_offer.state.payload
+    );
+    CHECK(received == MEISO_STATE_RECEIVE_NEW);
+    CHECK(meiso_runtime_commit_state_receive(
+        pair->edge_runtime, event.route, &event.state_offer, received
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_send_state_accept(
+        pair->edge_runtime, event.route, event.state_offer.generation,
+        event.state_offer.state.owner, event.state_offer.state.version
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_send_state_accept(
+        pair->host_runtime, actual->route, actual->state_offer.generation,
+        actual->state_offer.state.owner, actual->state_offer.state.version
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer(pair, pair->host_session, pair->edge_session, pair->edge_runtime, &event, MEISO_RUNTIME_OK));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT);
+    CHECK(meiso_state_publisher_mark_delivery_accepted(
+        resources->actual_publisher, event.state_accept_generation,
+        event.state_accept_owner, event.state_accept_version
+    ) == MEISO_STATE_ACCEPT_CONFIRMED);
+    CHECK(transfer(pair, pair->edge_session, pair->host_session, pair->host_runtime, &event, MEISO_RUNTIME_OK));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_STATE_ACCEPT);
+    CHECK(meiso_state_publisher_mark_delivery_accepted(
+        resources->desired_publisher, event.state_accept_generation,
+        event.state_accept_owner, event.state_accept_version
+    ) == MEISO_STATE_ACCEPT_CONFIRMED);
+    return true;
+}
+
+/* The sender's rule is unchanged: an Edge names the last Desired it received, never an earlier one. */
+static bool edge_cannot_name(RuntimePair *pair, uint64_t observed)
+{
+    uint8_t bytes[128];
+    MeisoByteView payload;
+    MeisoRuntimeActualState value;
+    MeisoStateOffer offer;
+
+    memset(&value, 0, sizeof(value));
+    value.observed_desired = desired_ref(observed);
+    value.applied_desired = desired_ref(observed);
+    value.apply_result = MEISO_RUNTIME_APPLY_APPLIED;
+    value.availability = MEISO_RUNTIME_AVAILABILITY_PRESENT;
+    value.effective_enabled = true;
+    value.production_status = MEISO_RUNTIME_PRODUCTION_RUNNING;
+    value.reason = MEISO_RUNTIME_PRODUCTION_REASON_NONE;
+    value.production_epoch = 50U;
+    CHECK(meiso_runtime_actual_state_encode(&value, (MeisoMutableBuffer){bytes, sizeof(bytes)}, &payload));
+    memset(&offer, 0, sizeof(offer));
+    offer.generation.value = 1U;
+    offer.state.owner = EDGE_OWNER;
+    offer.state.version = 50U;
+    offer.state.payload = payload;
+    CHECK(meiso_runtime_send_state_offer(
+        pair->edge_runtime, route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), &offer
+    ) == MEISO_RUNTIME_STATE_INVALID);
+    return true;
+}
+
+/* runtime.md, Desired -> actual: the Edge publishes an Actual by itself (a source arrived) while the
+ * Host's next Desired is on its way (meiso_core #36). The Host takes it as the Edge's state under the
+ * Desired it names, the Session goes on and the Actual for the newer Desired follows. An Actual naming
+ * a Desired the Host never sent, another owner's, or one before an observation already taken is
+ * still invalid. */
+static bool test_actual_crossing_a_newer_desired(void)
+{
+    RuntimePair pair;
+    Resources resources;
+    uint8_t desired_bytes[3][64];
+    uint8_t actual_bytes[4][128];
+    const uint8_t rate[] = {10U};
+    const uint8_t faster[] = {20U};
+    const uint8_t fastest[] = {30U};
+    MeisoStateOffer offer;
+    MeisoRuntimeEvent event;
+    MeisoSessionRuntimeMessage message = {0};
+    MeisoRuntimeProductionSnapshot production;
+
+    CHECK(init_pair(&pair, 200U));
+    CHECK(activate(&pair));
+    CHECK(init_resources(&resources));
+    CHECK(publish_desired(&resources, 1U, true, rate, sizeof(rate), desired_bytes[0]));
+    CHECK(deliver_state(
+        &pair, resources.desired_publisher, resources.desired_replica,
+        pair.host_runtime, pair.host_session, pair.edge_runtime, pair.edge_session,
+        route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), false
+    ));
+    CHECK(publish_actual(
+        &resources, 1U, desired_ref(1U), desired_ref(1U), MEISO_RUNTIME_APPLY_APPLIED,
+        MEISO_RUNTIME_AVAILABILITY_PRESENT, true, MEISO_RUNTIME_PRODUCTION_RUNNING,
+        MEISO_RUNTIME_PRODUCTION_REASON_NONE, 10U, actual_bytes[0]
+    ));
+    CHECK(deliver_state(
+        &pair, resources.actual_publisher, resources.actual_replica,
+        pair.edge_runtime, pair.edge_session, pair.host_runtime, pair.host_session,
+        route_key(ACTUAL_ID, MEISO_RUNTIME_FACET_ACTUAL), true
+    ));
+
+    /* Desired 2 leaves the Host; the Edge, still on 1, publishes Actual 2 (epoch 11). */
+    CHECK(publish_desired(&resources, 2U, true, faster, sizeof(faster), desired_bytes[1]));
+    CHECK(meiso_state_publisher_next_offer(resources.desired_publisher, &offer));
+    CHECK(meiso_runtime_send_state_offer(
+        pair.host_runtime, route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), &offer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(edge_sends_actual(&pair, &resources, 2U, 1U, 11U, actual_bytes[1], &message));
+    CHECK(host_refuses_altered_actual(&pair, &message, ACTUAL_OBSERVED_VERSION, 3U));
+    CHECK(host_refuses_altered_actual(&pair, &message, ACTUAL_OBSERVED_INCARNATION, EDGE_OWNER.incarnation));
+    CHECK(host_takes_actual(&pair, &resources, &message, &event));
+    CHECK(meiso_runtime_production_snapshot(pair.host_runtime, ENDPOINT, &production) == MEISO_RUNTIME_OK);
+    CHECK(production.data_active && production.production_epoch == 11U);
+    CHECK(production.observed_desired.version == 1U);
+    CHECK(settle_crossing(&pair, &resources, &event));
+    CHECK(edge_cannot_name(&pair, 1U));
+
+    /* Desired 3 leaves the Host; the Edge's Actual 3 for Desired 2 (epoch 12) crosses it and is taken. */
+    CHECK(publish_desired(&resources, 3U, true, fastest, sizeof(fastest), desired_bytes[2]));
+    CHECK(meiso_state_publisher_next_offer(resources.desired_publisher, &offer));
+    CHECK(meiso_runtime_send_state_offer(
+        pair.host_runtime, route_key(DESIRED_ID, MEISO_RUNTIME_FACET_DESIRED), &offer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(edge_sends_actual(&pair, &resources, 3U, 2U, 12U, actual_bytes[2], &message));
+    CHECK(host_refuses_altered_actual(&pair, &message, ACTUAL_OBSERVED_VERSION, 4U));
+    CHECK(host_takes_actual(&pair, &resources, &message, &event));
+    CHECK(meiso_runtime_production_snapshot(pair.host_runtime, ENDPOINT, &production) == MEISO_RUNTIME_OK);
+    CHECK(production.production_epoch == 12U && production.observed_desired.version == 2U);
+    CHECK(settle_crossing(&pair, &resources, &event));
+
+    /* The Edge's Actual 4 for Desired 3: an altered copy going back to Desired 1 is refused. */
+    CHECK(edge_sends_actual(&pair, &resources, 4U, 3U, 13U, actual_bytes[3], &message));
+    CHECK(host_refuses_altered_actual(&pair, &message, ACTUAL_OBSERVED_VERSION, 1U));
+    CHECK(host_takes_actual(&pair, &resources, &message, &event));
+    CHECK(meiso_runtime_production_snapshot(pair.host_runtime, ENDPOINT, &production) == MEISO_RUNTIME_OK);
+    CHECK(production.production_epoch == 13U && production.observed_desired.version == 3U);
+    return true;
+}
+
 int main(void)
 {
     if (!test_state_stream_integration() ||
         !test_continuous_session_reconfigure() ||
-        !test_new_session_requires_catalog()) {
+        !test_new_session_requires_catalog() ||
+        !test_actual_crossing_a_newer_desired()) {
         return 1;
     }
     (void)printf("runtime session integration tests passed\n");

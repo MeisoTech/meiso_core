@@ -74,6 +74,14 @@ Host 对整个 snapshot `ACCEPT` 或 `REJECT`；子集 endpoint 不可见。Cata
 本地 desired receipt、Core delivery accepted、Edge observed、adapter applied、actual
 accepted、production RUNNING 与首个 sample 是不同进展，不得压成一个成功布尔值。
 
+Edge 也会自己发布 actual（例如等待的来源到齐），这时 Host 较新的 desired 可能正在路上，
+两者交叉。发布方的 actual 总是指向它最后收到的 desired。接收方除了自己最后发出的版本，
+也接受同一 owner 的较早版本：这份 actual 是 Edge 在那一版下的真实状态，不是较新 desired
+的结果，不得据此报告较新 desired 已应用，也不是协议错误；Host 照常发布下一版，不必等 Edge
+追上。观察不能倒退：observed 不得高于接收方发出的最新版本、不得属于别的 owner、不得早于
+已接受的上一份 actual 的 observed；applied 只能是这份 actual 的 observed 或上一份的 applied。
+production epoch 规则不变（meiso_core #36）。
+
 重配置时旧 actual/epoch 可继续 RUNNING 到明确 cut；新 effective 配置必须使用
 新 production epoch。Disable 先停止新生产并有界 drain，再发布 STOPPED。
 不支持的参数必须 REJECTED/DEGRADED 并说明 reason，不得静默替换 format/rate/field。
@@ -156,7 +164,8 @@ admission/apply failure；payload capacity、backpressure 和 protocol error。
 正式实现必须证明：READY 前零 Runtime mutation；原子 catalog；desired/actual
 分层；actual 前零新 epoch data；disable/reconfigure cut；wrong scope 全拒绝；
 wrong data owner/direction 全拒绝；queue/payload 过载有界可观测；Blob 完整验证；
-new Session 不恢复旧对象。
+new Session 不恢复旧对象；与较新 desired 交叉的 actual 被接受，越过发出版本、别的 owner
+或倒退的 observed 被拒。
 
 ## 层级责任
 
