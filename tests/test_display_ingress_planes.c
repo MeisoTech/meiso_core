@@ -78,7 +78,7 @@ int main(void)
     x = m; x.planes[0].orientation[3] = 0.5f; CHECK(!meiso_display_planes_model_bytes(&x));
     x = m; x.planes[0].position[0] = INFINITY; CHECK(!meiso_display_planes_model_bytes(&x));
     x = m; x.planes[0].width_m = 0.0f; CHECK(!meiso_display_planes_model_bytes(&x));
-    x = m; x.planes[0].opacity = 0; CHECK(!meiso_display_planes_model_bytes(&x));
+    x = m; x.planes[0].opacity = 0; CHECK(meiso_display_planes_model_bytes(&x)); /* hidden (meiso_host #71) */
     x = m; x.planes[0].app = 2; CHECK(!meiso_display_planes_model_bytes(&x));
     x = m; x.planes[0].app = MEISO_DISPLAY_PLANES_NO_APP; CHECK(meiso_display_planes_model_bytes(&x));
     x = m; x.focused_app = 2; CHECK(!meiso_display_planes_model_bytes(&x));

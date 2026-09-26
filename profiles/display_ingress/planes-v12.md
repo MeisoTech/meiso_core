@@ -7,6 +7,8 @@
 > 本页写明它并规定 Host 能据此推出什么；bytes 与版本号不变。
 > 2026-09-26 加可选的输入 endpoint（§11，meiso_host #66）：按键上行、准星下的平面、本地锁屏。只加不改，
 > 没有它的 v12 Catalog 照旧合法。
+> 同日（meiso_host #71）：Edge 释放平面模型不再引用的图（§7）；`opacity` 为 0 表示隐藏（§4、§5）。bytes 不变；
+> 早于此的 Edge 不释放图，并按原来的校验拒收含 `opacity` 0 的模型。
 
 ## 1. 解决什么
 
@@ -111,7 +113,7 @@ APP 表，每项 40 B，顺序即下标：
 4       app                     u8   APP 表下标；0xFF 表示属于 Host 系统
 5       anchor                  u8   1 = HEAD（跟头）；2 = WORLD（固定在空间）
 6       source                  u8   1 = STREAM；2 = IMAGE
-7       opacity                 u8   1..255，255 为不透明
+7       opacity                 u8   0..255，255 为不透明；0 为隐藏（§5）
 8..23   source_x/y/w/h          4×u32  取样矩形（源像素）；w、h ≥ 1
 24..55  image                   32 B   IMAGE：图的 SHA-256；STREAM：全零
 56..67  position x/y/z          3×f32  米，|分量| ≤ 1000
@@ -140,6 +142,8 @@ WORLD 平面在 Host 的世界坐标系里（§5）。平面中心在 `position`
 - 由远到近画：按平面中心到视图原点的距离，距离相同按表中顺序。
 - Edge 本地 HUD 画在所有平面之上，平面永远不遮挡它。有输入 endpoint 且 `pointer=HEAD_RAY` 时，
   准星与准星下平面的高亮也是 Edge 本地界面，画在平面之上（§11）。
+- `opacity` 为 0 的平面隐藏：不画，既不算 `drawn` 也不算 `waiting`（§6），也不会是准星下的平面（§11）。
+  它引用的图照样算被模型引用，Edge 留着（§7），所以再显示只需一个新模型，不用重送图。
 - 本地锁屏中（§11）什么都不画，整屏黑。
 - `tracking=NONE`（0DoF）：头部位姿恒为单位，WORLD 平面看起来与 HEAD 相同。
 - `tracking=POSE`：WORLD 平面按显示时刻的头部位姿变换（§10）；HEAD 平面和 HUD 不受影响。
@@ -431,4 +435,5 @@ stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切�
   - Blob 存储能释放一张已发布的图，释放后查不到，位置给下一张，同一张图能再发布。
   - 两端：换图次数超过 `max_images`，每次都不被拒；不再引用的图被释放；再用一张已释放的图，Host 重新送，
     平面照常画出。
-  - 板上（meiso_host #71）：系统面板反复更新几十次，每次都上屏，Session 不重建。
+  - 隐藏（`opacity` 0）的平面不画、不是准星下的平面，它的图不释放；再显示不重送图。
+  - 板上（meiso_host #71）：系统面板反复更新几十次，每次都上屏，Session 不重建；收起再打开不重送图。

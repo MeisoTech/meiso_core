@@ -147,7 +147,7 @@ static bool plane_valid(const MeisoDisplayPlane *v, uint8_t app_count)
     if (!v->plane_id || (v->app != MEISO_DISPLAY_PLANES_NO_APP && v->app >= app_count) ||
         (v->anchor != MEISO_DISPLAY_PLANES_ANCHOR_HEAD && v->anchor != MEISO_DISPLAY_PLANES_ANCHOR_WORLD) ||
         (v->source != MEISO_DISPLAY_PLANES_SOURCE_STREAM && v->source != MEISO_DISPLAY_PLANES_SOURCE_IMAGE) ||
-        !v->opacity || !dimension(v->source_width) || !dimension(v->source_height) ||
+        !dimension(v->source_width) || !dimension(v->source_height) ||
         v->source_x > 4096 - v->source_width || v->source_y > 4096 - v->source_height) return false;
     if (v->source == MEISO_DISPLAY_PLANES_SOURCE_STREAM ? !zero(v->image_sha256, 32) : zero(v->image_sha256, 32))
         return false;
