@@ -345,8 +345,9 @@ Edge 才能报 Actual。Actual 后缀 16 B：`0 keys_state u8`（0 OFF；1 RUNNI
 其余全零。锁屏与 Desired 无关，Desired 为 0 时也照报。
 
 线上编号：Desired 的 delivery generation 为 17，Actual 为 18。按键流用 Actual 的 production epoch，
-stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切换时换，每换一次 production epoch 加一。
-换之前发出、还在路上的事件到 Host 时按 Runtime 规则被拒（同 §10），Host 丢掉，不算 Session 错误。
+stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切换时换，每换一次 production epoch 加一，
+之后的事件用新 epoch 发。按键流与 Actual 同属 Edge、走同一条有序连接，换之前发出的事件先于新 Actual 到，
+照常被收下。锁屏时还没发出的事件丢掉：屏已经黑了，之后再执行只会让人意外。
 
 按键事件（Edge → Host，24 B）：
 
@@ -401,5 +402,6 @@ stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切�
   - 能力、Desired、Actual、按键事件的 golden bytes 往返。
   - 这些都拒收：保留位非零、没有键或第 0 位/第 8 位以上的键、事件的键不在能力里、action 不是 1/2、target 为 0 而 generation 非 0、时刻为 0。
   - 注册表协商：对端 19 时 Catalog 不能有输入 endpoint，23 时可以；输入 endpoint 排在跟踪之后，乱序拒绝。
-  - 经过两端 Runtime：按键事件按序到 Host；锁屏切换换 production epoch，旧 epoch 的事件被拒而 Session 还在。
+  - 经过两端 Runtime：按键事件按序到 Host；锁屏、解锁各换一次 production epoch，之后的事件用新 epoch 照常到；
+    一条坏事件照常送到、Host 丢掉，Session 还在。
   - 准星求交：给定位姿与模型，求出的平面与期望一致（最近的一块、背面与没画的不算）。

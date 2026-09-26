@@ -50,6 +50,24 @@ size_t meiso_display_planes_tracking_route_base(const MeisoDisplayPlanesCatalogC
     return c ? 8U + 3U * c->camera_enabled : 0;
 }
 
+/* Input endpoint (planes-v12.md §11). */
+static const MeisoSchemaRef input_capability_schema = {{DISP_SCH, UINT64_C(0x494e505f4341505f)}, 1}; /* INP_CAP_ */
+static const uint64_t input_resource_suffix[3] = {
+    UINT64_C(0x494e505f4445535f), /* INP_DES_ */
+    UINT64_C(0x494e505f4143545f), /* INP_ACT_ */
+    UINT64_C(0x494e505f4b45595f)  /* INP_KEY_ */
+};
+static const uint64_t input_schema_suffix[3] = {
+    UINT64_C(0x494e505f44455349), /* INP_DESI */
+    UINT64_C(0x494e505f53544154), /* INP_STAT */
+    UINT64_C(0x494e505f4b45595f)  /* INP_KEY_ */
+};
+
+size_t meiso_display_planes_input_route_base(const MeisoDisplayPlanesCatalogConfig *c)
+{
+    return c ? 8U + 3U * c->camera_enabled + 4U * c->tracking_enabled : 0;
+}
+
 static void putf(uint8_t *b, float v) { uint32_t u; memcpy(&u, &v, 4); put32(b, u); }
 static float getf(const uint8_t *b) { uint32_t u = get32(b); float v; memcpy(&v, &u, 4); return v; }
 static void put16(uint8_t *b, uint16_t v) { b[0] = (uint8_t)(v >> 8); b[1] = (uint8_t)v; }
@@ -338,19 +356,29 @@ bool meiso_display_planes_configure_session(MeisoSessionConfig *out)
     *out = c; return true;
 }
 
-bool meiso_display_planes_session_allows_tracking(const MeisoSession *session)
+static uint32_t negotiated_registry(const MeisoSession *session)
 {
     MeisoSessionSnapshot s;
-    return session && meiso_session_snapshot(session, &s) && s.state == MEISO_SESSION_STATE_READY &&
-        s.negotiated_limits.max_registry_entries >= MEISO_DISPLAY_PLANES_MAX_ENDPOINTS + MEISO_DISPLAY_PLANES_MAX_ROUTES;
+    return session && meiso_session_snapshot(session, &s) && s.state == MEISO_SESSION_STATE_READY ?
+        s.negotiated_limits.max_registry_entries : 0;
+}
+
+bool meiso_display_planes_session_allows_tracking(const MeisoSession *session)
+{
+    return negotiated_registry(session) >= MEISO_DISPLAY_PLANES_TRACKING_REGISTRY;
+}
+
+bool meiso_display_planes_session_allows_input(const MeisoSession *session)
+{
+    return negotiated_registry(session) >= MEISO_DISPLAY_PLANES_INPUT_REGISTRY;
 }
 
 bool meiso_display_planes_configure_runtime(MeisoRuntimeV4Config *out, MeisoSession *session, uint32_t max_image_bytes)
 {
     if (!out || !session || !max_image_bytes || max_image_bytes > MEISO_DISPLAY_PLANES_MAX_IMAGE_BYTES) return false;
+    const bool input = meiso_display_planes_session_allows_input(session);
     const bool tracking = meiso_display_planes_session_allows_tracking(session);
-    const uint32_t endpoints = tracking ? MEISO_DISPLAY_PLANES_MAX_ENDPOINTS : MEISO_DISPLAY_PLANES_MAX_ENDPOINTS - 1U;
-    const uint32_t routes = tracking ? MEISO_DISPLAY_PLANES_MAX_ROUTES : MEISO_DISPLAY_PLANES_MAX_ROUTES - 4U;
+    const uint32_t endpoints = 3U + tracking + input, routes = 11U + 4U * tracking + 3U * input;
     MeisoRuntimeV4Config c = {0};
     c.base.session = session; c.base.max_endpoints = endpoints;
     c.base.max_endpoint_history = 2 * endpoints; c.base.max_routes = routes;
@@ -408,6 +436,28 @@ static MeisoRuntimeV4RouteDescriptor tracking_route(unsigned i, uint64_t incarna
     return v;
 }
 
+static MeisoRuntimeV4RouteDescriptor input_route(unsigned i, uint64_t incarnation)
+{
+    static const MeisoResourceKind kinds[3] = {MEISO_RESOURCE_KIND_STATE, MEISO_RESOURCE_KIND_STATE,
+        MEISO_RESOURCE_KIND_STREAM};
+    static const MeisoRuntimeFacet facets[3] = {MEISO_RUNTIME_FACET_DESIRED, MEISO_RUNTIME_FACET_ACTUAL,
+        MEISO_RUNTIME_FACET_DATA};
+    static const MeisoOwnerRole owners[3] = {MEISO_OWNER_ROLE_HOST, MEISO_OWNER_ROLE_EDGE, MEISO_OWNER_ROLE_EDGE};
+    const uint32_t sizes[3] = {MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE + MEISO_DISPLAY_INPUT_DESIRED_BYTES,
+        MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE + MEISO_DISPLAY_INPUT_ACTUAL_BYTES, MEISO_DISPLAY_INPUT_KEY_BYTES};
+    MeisoRuntimeV4RouteDescriptor v;
+    memset(&v, 0, sizeof(v));
+    v.route.endpoint_id = *meiso_display_input_endpoint(); v.route.endpoint_incarnation = incarnation;
+    v.route.resource.id = (MeisoResourceId){DISPLAY_, input_resource_suffix[i]};
+    v.route.resource.schema = (MeisoSchemaRef){{DISP_SCH, input_schema_suffix[i]}, 1};
+    v.route.resource.kind = kinds[i];
+    v.route.resource.owner = owners[i];
+    v.route.resource.max_payload_size = sizes[i];
+    v.route.facet = facets[i];
+    v.delivery = MEISO_RUNTIME_DELIVERY_INLINE;
+    return v;
+}
+
 bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *c, MeisoMutableBuffer storage,
     MeisoRuntimeEndpointDescriptor *ep, size_t ec, MeisoRuntimeV4RouteDescriptor *rt, size_t rc)
 {
@@ -416,9 +466,10 @@ bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *c
     /* An Edge that takes the Host's head pose says so in its planes capability, and only then. */
     if (c->planes.tracking != (c->tracking_enabled ? MEISO_DISPLAY_PLANES_TRACKING_POSE : MEISO_DISPLAY_PLANES_TRACKING_NONE))
         return false;
-    const size_t endpoints = 2U + c->camera_enabled + c->tracking_enabled;
-    const size_t routes = 8U + 3U * c->camera_enabled + 4U * c->tracking_enabled;
-    const size_t camera_bytes = 64U * c->camera_enabled, bytes = 32U + 64U + camera_bytes + 32U * c->tracking_enabled;
+    const size_t endpoints = 2U + c->camera_enabled + c->tracking_enabled + c->input_enabled;
+    const size_t routes = 8U + 3U * c->camera_enabled + 4U * c->tracking_enabled + 3U * c->input_enabled;
+    const size_t camera_bytes = 64U * c->camera_enabled, input_at = 96U + camera_bytes + 32U * c->tracking_enabled;
+    const size_t bytes = input_at + 16U * c->input_enabled;
     if (ec < endpoints || rc < routes || storage.capacity < bytes) return false;
     const void *p[] = {c, ep, rt, storage.data};
     const size_t n[] = {sizeof(*c), endpoints * sizeof(*ep), routes * sizeof(*rt), bytes};
@@ -448,6 +499,13 @@ bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *c
             tracking_capability_schema, {storage.data + at, 32}};
         for (unsigned i = 0; i < 4; ++i) r[base + i] = tracking_route(i, c->video.endpoint_incarnation);
     }
+    if (c->input_enabled) {
+        const size_t index = 2U + c->camera_enabled + c->tracking_enabled, base = meiso_display_planes_input_route_base(c);
+        if (!meiso_display_input_capability_encode(&c->input, (MeisoMutableBuffer){cap + input_at, 16})) return false;
+        e[index] = (MeisoRuntimeEndpointDescriptor){*meiso_display_input_endpoint(), c->video.endpoint_incarnation,
+            input_capability_schema, {storage.data + input_at, 16}};
+        for (unsigned i = 0; i < 3; ++i) r[base + i] = input_route(i, c->video.endpoint_incarnation);
+    }
     memcpy(storage.data, cap, bytes); memcpy(ep, e, endpoints * sizeof(*ep)); memcpy(rt, r, routes * sizeof(*rt));
     return true;
 }
@@ -465,20 +523,26 @@ bool meiso_display_planes_validate_catalog(const MeisoRuntimeEndpointDescriptor 
     c.video.endpoint_incarnation = ep[0].incarnation; c.video.capability = video;
     if (!meiso_endpoint_id_equal(ep[1].id, endpoint) ||
         !meiso_display_planes_capability_decode(ep[1].capability, &c.planes)) return false;
-    /* Optional endpoints in order: camera, then tracking. */
+    /* Optional endpoints in order: camera, tracking, input; the rebuild below checks each one's id. */
     size_t next = 2;
-    if (next < ec && !meiso_endpoint_id_equal(ep[next].id, *meiso_display_tracking_endpoint())) {
+    const MeisoEndpointId *tracking = meiso_display_tracking_endpoint(), *input = meiso_display_input_endpoint();
+    if (next < ec && !meiso_endpoint_id_equal(ep[next].id, *tracking) && !meiso_endpoint_id_equal(ep[next].id, *input)) {
         c.camera_enabled = true;
         if (meiso_composition_media_capability_decode(ep[next].capability, &c.camera) != MEISO_COMPOSITION_PROFILE_OK) return false;
         ++next;
     }
-    if (next < ec) {
+    if (next < ec && meiso_endpoint_id_equal(ep[next].id, *tracking)) {
         c.tracking_enabled = true;
-        if (!meiso_endpoint_id_equal(ep[next].id, *meiso_display_tracking_endpoint()) ||
-            !meiso_display_tracking_capability_decode(ep[next].capability, &c.tracking)) return false;
+        if (!meiso_display_tracking_capability_decode(ep[next].capability, &c.tracking)) return false;
         ++next;
     }
-    if (next != ec || rc != 8U + 3U * c.camera_enabled + 4U * c.tracking_enabled) return false;
+    if (next < ec) {
+        c.input_enabled = true;
+        if (!meiso_endpoint_id_equal(ep[next].id, *input) ||
+            !meiso_display_input_capability_decode(ep[next].capability, &c.input)) return false;
+        ++next;
+    }
+    if (next != ec || rc != 8U + 3U * c.camera_enabled + 4U * c.tracking_enabled + 3U * c.input_enabled) return false;
     uint8_t cap[MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES];
     MeisoRuntimeEndpointDescriptor e[MEISO_DISPLAY_PLANES_MAX_ENDPOINTS];
     MeisoRuntimeV4RouteDescriptor r[MEISO_DISPLAY_PLANES_MAX_ROUTES];
