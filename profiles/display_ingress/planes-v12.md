@@ -9,7 +9,7 @@
 > 没有它的 v12 Catalog 照旧合法。
 > 同日（meiso_host #71）：Edge 释放平面模型不再引用的图（§7）；`opacity` 为 0 表示隐藏（§4、§5）。bytes 不变；
 > 早于此的 Edge 不释放图，并按原来的校验拒收含 `opacity` 0 的模型（Host 这时改用撤平面，§7）。
-> 同日（草案，meiso_host #73）：系统平面（`app` 为 NO_APP）画在 APP 平面之后，准星先取系统平面（§5、§11）。
+> 同日（meiso_host #73）：系统平面（`app` 为 NO_APP）画在 APP 平面之后，准星先取系统平面（§5、§11）。
 > bytes 不变；早于此的 Edge 只按距离画。
 
 ## 1. 解决什么
