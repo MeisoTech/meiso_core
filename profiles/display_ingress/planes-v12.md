@@ -5,6 +5,8 @@
 > 同日加可选的跟踪 endpoint（§10，meiso_host #53）：只加不改，没有它的 v12 Catalog 照旧合法。
 > 2026-09-25 写明视频呈现顺序（§6）与观察中断（§2）（meiso_core #36）：现有 Edge 已经这样做，
 > 本页写明它并规定 Host 能据此推出什么；bytes 与版本号不变。
+> 2026-09-26 加可选的输入 endpoint（§11，meiso_host #66）：按键上行、准星下的平面、本地锁屏。只加不改，
+> 没有它的 v12 Catalog 照旧合法。
 
 ## 1. 解决什么
 
@@ -19,7 +21,7 @@ Loop 1 验收后 v12 是唯一往前走的显示路径：v9/v10 不再加功能�
 
 ## 2. Resource Graph
 
-一个 Catalog 最多四个 endpoint，顺序固定：
+一个 Catalog 最多五个 endpoint，顺序固定：
 
 | endpoint | route | owner / kind / facet | delivery | schema | 含义 |
 |---|---|---|---|---|---|
@@ -30,8 +32,9 @@ Loop 1 验收后 v12 是唯一往前走的显示路径：v9/v10 不再加功能�
 | | `DISPLAY_/PLN_IMG_` | Host / Blob / IMMUTABLE | inline | `DISP_SCH/PLN_JPEG:v1` | 静态图，内容寻址（SHA-256） |
 | 相机（可选） | 3 条，与 v9 相同 | — | — | — | 不变 |
 | 跟踪（可选）`DISPLAY_/TRCK_END` | 4 条，见 §10 | — | — | — | IMU 上行、头部位姿下行 |
+| 输入（可选）`DISPLAY_/INPT_END` | 3 条，见 §11 | — | — | — | 按键上行 |
 
-显示与平面两个 endpoint 必选，相机、跟踪可选，出现时按上表的顺序。平面 endpoint 的 capability 是 `DISP_SCH/PLN_CAP_:v1`（64 B）。
+显示与平面两个 endpoint 必选，相机、跟踪、输入可选，出现时按上表的顺序。平面 endpoint 的 capability 是 `DISP_SCH/PLN_CAP_:v1`（64 B）。
 所有 endpoint 共用本次设备 incarnation。缺项、多项、乱序、schema 或 delivery 不符，整个 Catalog 拒绝。
 
 显示 endpoint 的 Desired 仍给出串流宽高与帧率；这个宽高就是串流纹理的尺寸。v9 的输出几何与
@@ -135,7 +138,9 @@ WORLD 平面在 Host 的世界坐标系里（§5）。平面中心在 `position`
   以一个 3×3 透视矩阵把取样矩形贴上去（双线性取样，按 `opacity` 做直 alpha 混合）。
 - 背面朝向视图的平面不画；任一角在近裁剪面（0.05 m）之内或之后的平面，本版不画。
 - 由远到近画：按平面中心到视图原点的距离，距离相同按表中顺序。
-- Edge 本地 HUD 画在所有平面之上，平面永远不遮挡它。
+- Edge 本地 HUD 画在所有平面之上，平面永远不遮挡它。有输入 endpoint 且 `pointer=HEAD_RAY` 时，
+  准星与准星下平面的高亮也是 Edge 本地界面，画在平面之上（§11）。
+- 本地锁屏中（§11）什么都不画，整屏黑。
 - `tracking=NONE`（0DoF）：头部位姿恒为单位，WORLD 平面看起来与 HEAD 相同。
 - `tracking=POSE`：WORLD 平面按显示时刻的头部位姿变换（§10）；HEAD 平面和 HUD 不受影响。
   `ROTATION` 保留不用（S-025 不做 3DoF）。
@@ -208,9 +213,10 @@ TCP 的重传间隔逐次翻倍，卡 S 秒后控制连接可能要到开始卡�
 | 模型 | ≤ 1888 B/次，≤ `max_updates_per_second` 次/秒 |
 | 静态图 | ≤ `max_image_bytes`/张，4096 B 一块 Blob chunk |
 | 串流 | 与 v2 相同：独立帧 H.264，大小与帧率由显示 Desired 和 AU 上限决定 |
-| Runtime | 4 endpoint、15 route（Session registry 19）、capability 192 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §10 时 Session 协商成 14，Runtime 按 3 endpoint、11 route 配，Edge 这个 Session 不放跟踪 endpoint |
+| Runtime | 5 endpoint、18 route（Session registry 23）、capability 208 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §11 时 Session 协商成 19，Runtime 按 4 endpoint、15 route 配，Edge 不放输入 endpoint；对端早于 §10 时协商成 14，按 3 endpoint、11 route 配，跟踪与输入都不放 |
 | IMU（§10） | 200 Hz × 32 B = 6.4 KB/s；每批 8 个时约 25 条/秒 |
 | 位姿（§10） | Host 自定，建议跟相机帧（约 30 Hz），≤ 200 Hz；72 B/条 |
+| 按键（§11） | 人按键的速度，24 B/条；积压最多 32 条 |
 
 ## 10. 跟踪：IMU 上行、头部位姿下行（meiso_host #53）
 
@@ -294,14 +300,94 @@ Edge 怎样用：
 - `pose_enabled=0` 或还没收到位姿：与 0DoF 相同。
 - 同一世界里时刻不晚于已有位姿的记录丢弃。IMU 队列满了丢最旧的（Host 看跳号），位姿只留最新的。
 
-## 11. 不在本版
+## 11. 输入：按键上行（meiso_host #66）
+
+S-025：交互参考 VR，视野中心一个准星，看向面板再按键，选中或抓起。S-026：锁屏、选连哪台 Host 是眼镜本地的界面。
+S-030：APP 只经 Host SDK 拿输入。S-033：Claire 键只归系统。控制板只报原始的按下、松开：去抖在 Edge，
+长按、双击等手势由 Host 从按下、松开的时刻判断。
+
+分工：
+- **Edge 本地，不上线**：
+  - 锁屏：拨下后 Edge 立即整屏黑，平面、HUD、准星都不画，也不上送按键；拨回恢复。不需要 Host，没有 Session 时也一样。
+  - 选连哪台 Host：本版不做界面，只定下它归 Edge。
+  - 准星，和准星下那块平面的高亮。
+  - 这些键不上线，本页也不给它们编号。
+- **上送 Host**：其余按键，每条带上按下那一刻准星下的平面。焦点、抓起、拖动、摆正由 Host 决定，结果是新的平面模型（§4）。
+- **只归系统**：`SYSTEM` 键（Claire，S-033）。Host 不得把它交给任何 APP。其余键交给哪个 APP 是 Host 的策略
+  （参考实现：五向键只给焦点 APP）。
+
+| route | owner / kind / facet | delivery | schema | 含义 |
+|---|---|---|---|---|
+| `DISPLAY_/INP_DES_` | Host / State / DESIRED | inline | `DISP_SCH/INP_DESI:v1` | 要不要按键 |
+| `DISPLAY_/INP_ACT_` | Edge / State / ACTUAL | inline | `DISP_SCH/INP_STAT:v1` | 上送状态、是否锁屏 |
+| `DISPLAY_/INP_KEY_` | Edge / Stream / DATA | inline | `DISP_SCH/INP_KEY_:v1` | 按键事件 |
+
+能力（Edge → Host，`DISP_SCH/INP_CAP_:v1`，16 B，大端）：
+
+```text
+0..3    keys       u32  眼镜有的键：第 k 位对应键码 k（下表）；至少一个，第 0 位与第 8..31 位为 0
+4       pointer    u8   0 = NONE；1 = HEAD_RAY：Edge 画准星，事件里带准星下的平面
+5..15   reserved   全零
+```
+
+| 键码 | 名字 | 控制板上 |
+|---|---|---|
+| 1 | UP | 五向键上 |
+| 2 | DOWN | 五向键下 |
+| 3 | LEFT | 五向键左 |
+| 4 | RIGHT | 五向键右 |
+| 5 | SELECT | 五向键按下（"确认"） |
+| 6 | BACK | 返回 |
+| 7 | SYSTEM | Claire 键，只归系统 |
+
+Desired 后缀 16 B：`0 keys_enabled u8 0/1`，其余全零。有输入 endpoint 时 Host 必须发这个 Desired（可以为 0），
+Edge 才能报 Actual。Actual 后缀 16 B：`0 keys_state u8`（0 OFF；1 RUNNING：上送按键）、`1 locked u8 0/1`、
+其余全零。锁屏与 Desired 无关，Desired 为 0 时也照报。
+
+线上编号：Desired 的 delivery generation 为 17，Actual 为 18。按键流用 Actual 的 production epoch，
+stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切换时换，每换一次 production epoch 加一。
+换之前发出、还在路上的事件到 Host 时按 Runtime 规则被拒（同 §10），Host 丢掉，不算 Session 错误。
+
+按键事件（Edge → Host，24 B）：
+
+```text
+0..7    time_ns            u64  Edge 时钟（clock epoch 4）：这次变化的时刻，取去抖前的第一次跳变
+8       key                u8   键码，必须在 capability 里
+9       action             u8   1 = PRESS；2 = RELEASE
+10..11  reserved           全零
+12..15  target_plane       u32  这一刻准星下的平面 plane_id；0 = 没有（或 pointer=NONE）
+16..23  target_generation  u64  target 所在模型的 generation；target 为 0 时为 0
+```
+
+- **交替**：每个键的事件 PRESS、RELEASE 交替。RUNNING 之前就按住的键，松开时不报，下次按下才报。
+- **准星下的平面**：
+  - 取最近一次合成所用的头部位姿，从头部原点沿 −z（正前方）打一条射线，与这一帧画了的平面的矩形求交，取最近的一块。
+  - HEAD 与 WORLD 平面都算，HUD 不算。
+  - Host 按这个 plane_id 行动，不用自己的位姿重算，因为用户看见的是 Edge 画的那一帧。
+- **顺序与积压**：
+  - 事件按发生顺序发，不合并、不重排。
+  - 积压（如卡顿中）超过 32 条时丢最旧的。
+  - Host 收到某键的 PRESS 而它认为这个键已按住时，按"先松开再按下"处理；收到没按住的键的 RELEASE，忽略。
+  - 按下时刻太旧的事件（如卡顿后才到）还执行不执行，由 Host 决定。
+- **坏记录**只丢这一条，同 §10。
+- **锁屏中没有呈现证据**：锁屏时 Edge 不画平面，视频与模型都没有呈现证据。
+  - Host 看到 `locked=1` 应暂停送视频帧；已送出的帧按 §2 的观察中断处理，不停视频。
+  - 解锁后 Edge 恢复画面，Host 恢复送帧。
+- **旧端**：
+  - 对端早于本节时，Session 注册表协商成 19 或更小，Edge 不放输入 endpoint。
+  - 这时准星不画，本地锁屏照样能用。
+  - Host 不知道锁屏，锁得久了会按 §2 与部署的上限隔离视频、重建会话。
+
+## 12. 不在本版
 
 - 深度网格。S-025 说深度网格场景就是大量小平面，但现有稀疏网格有 30×34 到 120×135 个顶点，
   一格一条 96 B 的平面记录走不通。以后作为"带深度网格的平面"另加；16 块的上限只管普通面板，
   不为深度网格放大。
-- 按键等输入上行。
+- 准星在面板上的落点（面板内的指点、点击位置）。本版只报准星下是哪块面板。
+- 选连哪台 Host 的界面：归 Edge 本地（§11），本版不做。
+- IMU 上行改走 UDP 以扛卡顿（meiso_core #36 验收时留下）。
 
-## 12. 验收
+## 13. 验收
 
 - 呈现顺序（§6）：媒体接收在较新的帧发布后，迟到的旧帧不再发布（`SEQUENCE_REPLAY`）。
 - 编解码：golden bytes 往返；保留位、越界数值、非有限浮点、非单位四元数、重复 id、
@@ -311,3 +397,9 @@ Edge 怎样用：
 - 跟踪（§10）：能力、Desired、Actual、IMU、位姿的 golden bytes 往返；保留位、越界、非有限值、时间不递增、
   批量超限、`world_epoch`/时刻为 0、没有 IMU 却要 IMU、跟踪与 `tracking` 字段不一致、optional endpoint 乱序，
   全部拒绝。经过两端 Runtime：一条坏位姿照常送到、收方丢掉，Session 还在，下一条好位姿照常用。板上（meiso_host #53）：Host 脚本位姿下 WORLD 平面跟着动、HEAD 平面与 HUD 不动。
+- 输入（§11）：
+  - 能力、Desired、Actual、按键事件的 golden bytes 往返。
+  - 这些都拒收：保留位非零、没有键或第 0 位/第 8 位以上的键、事件的键不在能力里、action 不是 1/2、target 为 0 而 generation 非 0、时刻为 0。
+  - 注册表协商：对端 19 时 Catalog 不能有输入 endpoint，23 时可以；输入 endpoint 排在跟踪之后，乱序拒绝。
+  - 经过两端 Runtime：按键事件按序到 Host；锁屏切换换 production epoch，旧 epoch 的事件被拒而 Session 还在。
+  - 准星求交：给定位姿与模型，求出的平面与期望一致（最近的一块、背面与没画的不算）。
