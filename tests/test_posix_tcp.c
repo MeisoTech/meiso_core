@@ -568,6 +568,41 @@ static bool write_until_status(
     return false;
 }
 
+/* Waits until the kernel has applied the peer's reset to fd, and takes the
+ * pending ECONNRESET off the socket. Loopback may apply a reset after close()
+ * returns (macOS does), and while the error is pending a send reports it
+ * instead of taking the EPIPE path that raises SIGPIPE. */
+static bool take_peer_reset(int fd)
+{
+    struct timespec deadline;
+
+    if (!make_deadline(&deadline)) {
+        return false;
+    }
+    while (!deadline_expired(&deadline)) {
+        struct pollfd poll_fd = {fd, POLLIN, 0};
+        int error_number = 0;
+        socklen_t size = (socklen_t)sizeof(error_number);
+
+        if (getsockopt(
+                fd, SOL_SOCKET, SO_ERROR, &error_number, &size
+            ) != 0) {
+            return false;
+        }
+        if (error_number == ECONNRESET) {
+            return true;
+        }
+        if (error_number != 0) {
+            return false;
+        }
+        if (poll(&poll_fd, (nfds_t)1U, TEST_POLL_TIMEOUT_MS) < 0 &&
+            errno != EINTR) {
+            return false;
+        }
+    }
+    return false;
+}
+
 static bool test_init_and_read_would_block(void)
 {
     SessionArena session_arena;
@@ -1076,6 +1111,7 @@ static bool test_peer_reset_does_not_raise_sigpipe(void)
     MeisoPosixTcp *adapter;
     MeisoSessionSnapshot snapshot;
     struct linger reset = {1, 0};
+    int adapter_error = 0;
     int client = -1;
     int server = -1;
 
@@ -1089,9 +1125,12 @@ static bool test_peer_reset_does_not_raise_sigpipe(void)
         server, SOL_SOCKET, SO_LINGER, &reset, (socklen_t)sizeof(reset)
     ) == 0);
     close_fd(&server);
+    CHECK(take_peer_reset(client));
     CHECK(write_until_status(
         adapter, client, MEISO_POSIX_TCP_WRITE_TRANSPORT_LOST
     ));
+    CHECK(meiso_posix_tcp_last_error(adapter, &adapter_error));
+    CHECK(adapter_error == EPIPE);
     CHECK(meiso_session_snapshot(session, &snapshot));
     CHECK(snapshot.state == MEISO_SESSION_STATE_FAILED);
     CHECK(snapshot.failure == MEISO_SESSION_FAILURE_TRANSPORT_LOST);
