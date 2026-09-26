@@ -19,7 +19,7 @@ static int handshake(bool old_peer, MeisoSession **host, MeisoSession **edge)
         cfg.local_peer_id = (MeisoPeerId){i ? 2 : 1, 3}; cfg.expected_peer_id = (MeisoPeerId){i ? 1 : 2, 3};
         cfg.local_incarnation = 4U + (uint64_t)i; cfg.local_nonce = (MeisoSessionNonce){6U + (uint64_t)i, 8};
         cfg.protocol = (MeisoProtocolVersion){1, 0};
-        CHECK(meiso_display_planes_configure_session(&cfg) && cfg.limits.max_registry_entries == 19);
+        CHECK(meiso_display_planes_configure_session(&cfg) && cfg.limits.max_registry_entries == MEISO_DISPLAY_PLANES_INPUT_REGISTRY);
         if (old_peer && i) cfg.limits.max_registry_entries = 14;
         CHECK(meiso_session_init(session_memory[i].bytes, sizeof(session_memory[i].bytes), &cfg, &s[i]) == MEISO_SESSION_INIT_OK);
         CHECK(meiso_session_start(s[i]) == MEISO_SESSION_START_STARTED);
@@ -53,7 +53,7 @@ static int session_sizing(void)
         MeisoRuntimeV4Config rc;
         MeisoRuntime *runtime;
         CHECK(meiso_display_planes_configure_runtime(&rc, host, 65536));
-        CHECK(rc.base.max_endpoints == (old_peer ? 3U : 4U) && rc.base.max_routes == (old_peer ? 11U : 15U));
+        CHECK(rc.base.max_endpoints == (old_peer ? 3U : 5U) && rc.base.max_routes == (old_peer ? 11U : 18U)); /* with input (§11) */
         CHECK(meiso_runtime_v4_init(runtime_memory.bytes, sizeof(runtime_memory.bytes), &rc, &runtime) == MEISO_RUNTIME_INIT_OK);
     }
     return 0;

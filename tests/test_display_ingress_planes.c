@@ -164,7 +164,7 @@ int main(void)
     memset(&sc, 0, sizeof(sc));
     sc.local_role = MEISO_SESSION_ROLE_EDGE; sc.local_peer_id = (MeisoPeerId){11, 12}; sc.expected_peer_id = (MeisoPeerId){21, 22};
     sc.local_incarnation = 1; sc.local_nonce = (MeisoSessionNonce){3, 4}; sc.protocol = (MeisoProtocolVersion){1, 0};
-    CHECK(meiso_display_planes_configure_session(&sc) && sc.profile.version == 12 && sc.limits.max_registry_entries == 19);
+    CHECK(meiso_display_planes_configure_session(&sc) && sc.profile.version == 12 && sc.limits.max_registry_entries == 23); /* with input (§11) */
     printf("display ingress planes v12: ok\n");
     return 0;
 }
