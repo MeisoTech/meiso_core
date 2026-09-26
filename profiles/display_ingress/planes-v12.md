@@ -69,7 +69,7 @@ STREAM 平面不再画、计为等待；等一帧不含它们的画面真实翻�
 8       view_layout             u8   1 = MONO（一个视图覆盖整块输出）；2 = SIDE_BY_SIDE（左右两半各一眼）
 9       tracking                u8   0 = NONE；1 = ROTATION（保留，不用）；2 = POSE。有跟踪 endpoint 时为 POSE，没有时为 NONE
 10      max_planes              u8   1..16
-11      max_images              u8   1..8，每个 Session 最多几张不同的静态图
+11      max_images              u8   1..8，Edge 同时持有的不同静态图最多几张（§7）
 12..15  max_image_bytes         u32  1..1048576，一张图（JPEG）的字节上限，也是图 Blob 路由的 payload 上限
 16..17  max_image_width         u16  1..4096
 18..19  max_image_height        u16  1..4096
@@ -193,8 +193,19 @@ Actual 后缀 16 B：
 - 图是基线 JPEG（SOF0，8 位，1 或 3 分量），字节数 ≤ `max_image_bytes`，宽高 ≤ 能力上限。
   ContentId 是字节的 SHA-256。用 Runtime 的 Host→Edge Blob 搬运（BEGIN/READY/CHUNK/COMMIT/RESULT）。
 - 模型与图的先后不限：模型先到时 IMAGE 平面记为等待，图到后开始画并更新 Actual 与证据。
-- 同一 Session 内同一张图只需送一次；每个 Session 最多 `max_images` 张不同的图，超过时 Edge 以
-  CAPACITY 拒绝。图属于 Session：新 Session 需重新送图。
+- Edge 持有的图（meiso_host #71）：
+  - 持有：最近应用的平面模型引用的图，加上在它之后收到的图。
+  - 释放：每应用一个平面模型，Edge 释放它不引用的图，图 Blob 和解码结果一起放掉，腾出位置给后来的图。
+    §6 里观察到但不能用（REJECTED）的模型不释放，Edge 还在画旧模型。
+  - 上限：同时持有的不同图超过 `max_images` 时，Edge 以 CAPACITY 拒绝新图。
+- Host 按发送的先后记账：
+  - 发出平面模型 G 之后，Edge 持有的是 G 引用、原来就持有的图，加上 G 之后送出的图。
+  - G 引用而 Edge 不再持有的图，Host 在 G 之后送；同一张图再送是合法的。
+  - 所以一个模型引用的图不超过 `max_images`（§4），就总放得下。换图不需要新 Session，
+    比如系统面板每次更新一张（meiso_host #71）。
+- 图属于 Session：新 Session 需重新送图。
+- 旧端：早于本条的 Edge 不释放图。这时一个 Session 累计送到 `max_images` 张不同的图以后，
+  再送新图会被 CAPACITY 拒绝，引用它的平面一直等待，已有的图照常画。
 
 ## 8. 断线
 
@@ -416,3 +427,8 @@ stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切�
     一条坏事件照常送到、Host 丢掉，Session 还在。
   - 准星求交：给定位姿与模型，求出的平面与期望一致（最近的一块、背面与没画的不算）。
   - 板上（meiso_host #66）：锁屏 5 分钟再解锁，量面板回来要多久；全程会话不重建。
+- 静态图（§7）：
+  - Blob 存储能释放一张已发布的图，释放后查不到，位置给下一张，同一张图能再发布。
+  - 两端：换图次数超过 `max_images`，每次都不被拒；不再引用的图被释放；再用一张已释放的图，Host 重新送，
+    平面照常画出。
+  - 板上（meiso_host #71）：系统面板反复更新几十次，每次都上屏，Session 不重建。

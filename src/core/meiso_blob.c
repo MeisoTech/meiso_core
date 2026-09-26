@@ -604,6 +604,39 @@ bool meiso_blob_store_lookup(
     return true;
 }
 
+MeisoBlobReleaseStatus meiso_blob_store_release(
+    MeisoBlobStore *store,
+    const MeisoContentId *content_id
+)
+{
+    MeisoContentId canonical_id;
+    uint32_t index;
+
+    if (!store_valid(store)) {
+        return MEISO_BLOB_RELEASE_INVALID;
+    }
+    if (store->verifier_active) {
+        record_reentrant_rejection(store);
+        return MEISO_BLOB_RELEASE_REENTRANT;
+    }
+    if (!meiso_content_id_valid(content_id)) {
+        meiso_increment_saturated(&store->stats.invalid_content_ids);
+        return MEISO_BLOB_RELEASE_INVALID_CONTENT_ID;
+    }
+    canonicalize_content_id(content_id, &canonical_id);
+    for (index = 0U; index < store->config.published_slot_count; ++index) {
+        MeisoBlobSlot *slot = slot_at(store, index);
+        if (slot->occupied &&
+            meiso_content_id_equal(&slot->content_id, &canonical_id)) {
+            memset(slot, 0, sizeof(*slot));
+            store->published_count -= 1U;
+            meiso_increment_saturated(&store->stats.releases);
+            return MEISO_BLOB_RELEASED;
+        }
+    }
+    return MEISO_BLOB_RELEASE_NOT_PUBLISHED;
+}
+
 size_t meiso_blob_store_count(const MeisoBlobStore *store)
 {
     if (!store_valid(store)) {

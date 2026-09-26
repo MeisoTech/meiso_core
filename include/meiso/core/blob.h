@@ -59,6 +59,7 @@ typedef struct {
     uint64_t transfer_aborts;
     uint64_t shutdown_aborts;
     uint64_t reentrant_rejections;
+    uint64_t releases;
 } MeisoBlobStats;
 
 typedef uint8_t MeisoBlobInitStatus;
@@ -103,6 +104,15 @@ enum {
     MEISO_BLOB_ABORT_REENTRANT = 2,
     MEISO_BLOB_ABORT_INVALID_REASON = 3,
     MEISO_BLOB_ABORT_INVALID = 4
+};
+
+typedef uint8_t MeisoBlobReleaseStatus;
+enum {
+    MEISO_BLOB_RELEASED = 0,
+    MEISO_BLOB_RELEASE_NOT_PUBLISHED = 1,
+    MEISO_BLOB_RELEASE_REENTRANT = 2,
+    MEISO_BLOB_RELEASE_INVALID_CONTENT_ID = 3,
+    MEISO_BLOB_RELEASE_INVALID = 4
 };
 
 size_t meiso_blob_alignment_required(void);
@@ -150,13 +160,23 @@ MeisoBlobAbortStatus meiso_blob_store_abort_staging(
     MeisoBlobAbortReason reason
 );
 /*
- * A successful lookup borrows immutable published storage for the lifetime
- * of this store's arena. v0 never releases or evicts a published slot.
+ * A successful lookup borrows immutable published storage until that content
+ * is released (meiso_blob_store_release) or the store's arena ends. The store
+ * never evicts on its own.
  */
 bool meiso_blob_store_lookup(
     const MeisoBlobStore *store,
     const MeisoContentId *content_id,
     MeisoBlobView *out_view
+);
+/*
+ * Releases one published content: it no longer resolves, its slot takes a
+ * later publication, and borrows from earlier lookups of it end. A staging
+ * candidate is not affected, and the same content may be published again.
+ */
+MeisoBlobReleaseStatus meiso_blob_store_release(
+    MeisoBlobStore *store,
+    const MeisoContentId *content_id
 );
 size_t meiso_blob_store_count(const MeisoBlobStore *store);
 bool meiso_blob_store_stats(

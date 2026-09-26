@@ -35,6 +35,7 @@ typedef struct {
     MeisoBlobStageStatus stage_status;
     MeisoBlobCommitStatus commit_status;
     MeisoBlobAbortStatus abort_status;
+    MeisoBlobReleaseStatus release_status;
     bool staging_visible;
     size_t calls;
 } ReentrantContext;
@@ -151,6 +152,9 @@ static bool verify_reentrant(
     );
     reentrant->staging_visible = meiso_blob_store_staging_buffer(
         reentrant->store, &buffer
+    );
+    reentrant->release_status = meiso_blob_store_release(
+        reentrant->store, &reentrant->content_id
     );
     reentrant->commit_status = meiso_blob_store_commit_verified(
         reentrant->store, staged_content.size, verify_always, NULL
@@ -491,6 +495,68 @@ static bool test_duplicate_conflict_capacity_and_abort(void)
     return true;
 }
 
+static bool publish(MeisoBlobStore *store, const MeisoContentId *id,
+                    const uint8_t *bytes, size_t size, MeisoBlobCommitStatus want)
+{
+    MeisoMutableBuffer staging;
+    size_t calls = 0U;
+
+    CHECK(meiso_blob_store_stage_begin(store, id, size) == MEISO_BLOB_STAGE_STARTED);
+    CHECK(meiso_blob_store_staging_buffer(store, &staging));
+    memmove(staging.data, bytes, size);
+    CHECK(meiso_blob_store_commit_verified(store, size, verify_always, &calls) == want);
+    return true;
+}
+
+/* A released content frees its slot for another, and may come back itself. */
+static bool test_release_frees_a_slot(void)
+{
+    MEISO_TEST_ARENA_STORAGE TestArena arena;
+    MeisoResourceDescriptor descriptor = blob_descriptor(4U);
+    MeisoBlobConfig config = {2U};
+    MeisoBlobStore *store;
+    MeisoContentId a = content_id(61U), b = content_id(62U), c = content_id(63U);
+    const uint8_t first[] = {'a', 'a'}, second[] = {'b', 'b'}, third[] = {'c', 'c', 'c'};
+    MeisoBlobView view;
+    MeisoBlobStats stats;
+    MeisoContentId invalid;
+
+    CHECK(init_store(&arena, &descriptor, &config, &store));
+    CHECK(publish(store, &a, first, sizeof(first), MEISO_BLOB_COMMIT_PUBLISHED));
+    CHECK(publish(store, &b, second, sizeof(second), MEISO_BLOB_COMMIT_PUBLISHED));
+    CHECK(publish(store, &c, third, sizeof(third), MEISO_BLOB_COMMIT_CAPACITY));
+    CHECK(meiso_blob_store_abort_staging(store, MEISO_BLOB_ABORT_CALLER_REQUEST) == MEISO_BLOB_ABORTED);
+
+    CHECK(meiso_blob_store_release(store, &a) == MEISO_BLOB_RELEASED);
+    CHECK(!meiso_blob_store_lookup(store, &a, &view));
+    CHECK(meiso_blob_store_count(store) == 1U);
+    CHECK(meiso_blob_store_release(store, &a) == MEISO_BLOB_RELEASE_NOT_PUBLISHED);
+    CHECK(meiso_blob_store_lookup(store, &b, &view));
+    CHECK(memcmp(view.content.data, second, sizeof(second)) == 0);
+
+    CHECK(publish(store, &c, third, sizeof(third), MEISO_BLOB_COMMIT_PUBLISHED));
+    CHECK(meiso_blob_store_lookup(store, &c, &view));
+    CHECK(view.content.size == sizeof(third) && memcmp(view.content.data, third, sizeof(third)) == 0);
+    CHECK(meiso_blob_store_count(store) == 2U);
+    CHECK(publish(store, &a, first, sizeof(first), MEISO_BLOB_COMMIT_CAPACITY));
+    CHECK(meiso_blob_store_abort_staging(store, MEISO_BLOB_ABORT_CALLER_REQUEST) == MEISO_BLOB_ABORTED);
+
+    /* A staging candidate is not a publication: releasing its identity leaves it staged. */
+    CHECK(meiso_blob_store_release(store, &b) == MEISO_BLOB_RELEASED);
+    CHECK(meiso_blob_store_stage_begin(store, &a, sizeof(first)) == MEISO_BLOB_STAGE_STARTED);
+    CHECK(meiso_blob_store_release(store, &a) == MEISO_BLOB_RELEASE_NOT_PUBLISHED);
+    CHECK(meiso_blob_store_abort_staging(store, MEISO_BLOB_ABORT_CALLER_REQUEST) == MEISO_BLOB_ABORTED);
+    CHECK(publish(store, &a, first, sizeof(first), MEISO_BLOB_COMMIT_PUBLISHED));
+    CHECK(meiso_blob_store_lookup(store, &a, &view) && memcmp(view.content.data, first, sizeof(first)) == 0);
+
+    memset(&invalid, 0, sizeof(invalid));
+    CHECK(meiso_blob_store_release(store, &invalid) == MEISO_BLOB_RELEASE_INVALID_CONTENT_ID);
+    CHECK(meiso_blob_store_release(NULL, &a) == MEISO_BLOB_RELEASE_INVALID);
+    CHECK(meiso_blob_store_stats(store, &stats));
+    CHECK(stats.releases == 2U && stats.publications == 4U);
+    return true;
+}
+
 static bool test_invalid_inputs_and_busy_staging(void)
 {
     MEISO_TEST_ARENA_STORAGE TestArena arena;
@@ -630,11 +696,13 @@ static bool test_verifier_reentrancy_guard(void)
     CHECK(reentrant.stage_status == MEISO_BLOB_STAGE_REENTRANT);
     CHECK(reentrant.commit_status == MEISO_BLOB_COMMIT_REENTRANT);
     CHECK(reentrant.abort_status == MEISO_BLOB_ABORT_REENTRANT);
+    CHECK(reentrant.release_status == MEISO_BLOB_RELEASE_REENTRANT);
     CHECK(!reentrant.staging_visible);
     CHECK(meiso_blob_store_lookup(store, &id, &view));
     CHECK(memcmp(view.content.data, content, sizeof(content)) == 0);
     CHECK(meiso_blob_store_stats(store, &stats));
-    CHECK(stats.reentrant_rejections == 4U);
+    CHECK(stats.reentrant_rejections == 5U);
+    CHECK(stats.releases == 0U);
     return true;
 }
 
@@ -669,7 +737,7 @@ static bool test_failed_reentrant_verifier_retains_staging(void)
     CHECK(meiso_blob_store_count(store) == 0U);
     CHECK(meiso_blob_store_stats(store, &stats));
     CHECK(stats.integrity_failures == 1U);
-    CHECK(stats.reentrant_rejections == 4U);
+    CHECK(stats.reentrant_rejections == 5U);
     return true;
 }
 
@@ -757,6 +825,7 @@ int main(void)
     if (!test_memory_and_init_contract() ||
         !test_incomplete_integrity_and_atomic_publish() ||
         !test_duplicate_conflict_capacity_and_abort() ||
+        !test_release_frees_a_slot() ||
         !test_invalid_inputs_and_busy_staging() ||
         !test_zero_length_and_canonical_identity() ||
         !test_verifier_reentrancy_guard() ||
