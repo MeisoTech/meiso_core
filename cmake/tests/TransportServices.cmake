@@ -116,6 +116,16 @@ if(TARGET meiso_posix_tcp_adapter)
     endif()
 endif()
 
+if(TARGET meiso_windows_tcp_adapter)
+    meiso_add_c_test(meiso_wifi_runtime_tcp_test tests/test_wifi_runtime_tcp.c
+        integration meiso_windows_tcp_adapter meiso_wifi_telemetry_profile)
+    add_executable(meiso_windows_udp_test tests/test_windows_udp.c tests/windows_udp_test_adapter.c)
+    target_link_libraries(meiso_windows_udp_test PRIVATE meiso_display_ingress_media_transport ws2_32)
+    meiso_enable_warnings(meiso_windows_udp_test)
+    meiso_register_target_test(meiso_windows_udp_test "adapter")
+    set_tests_properties(meiso_windows_udp_test meiso_wifi_runtime_tcp_test PROPERTIES TIMEOUT 30)
+endif()
+
 if(TARGET meiso_four_kind_lab)
     add_executable(
         meiso_four_kind_lab_internal_test

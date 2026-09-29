@@ -35,6 +35,7 @@ IP、port、TCP、NDJSON 与 CMFB 都是 bootstrap/adapter 边界，不是 peer 
 | `integrations/host/` | Host Runtime 与 Remote Edge backend |
 | `simulation/` | deterministic simulator 与 trace |
 | `adapters/posix/` | POSIX Session/media transport |
+| `adapters/windows/` | Winsock Session TCP 与 Display Ingress DIFR UDP；见 [Windows 适配](windows-adapters.md) |
 | [meiso_edge](https://github.com/MeisoTech/meiso_edge) | K230D Runtime、Linux adapter、Display Ingress 服务进程与桌面 Edge（原 `targets/k230d-linux/`、`applications/display_ingress/`，路径不变） |
 | `applications/host/`, `devtools/` | 历史 Composition 入口与明确的开发/诊断工具；不等于当前 Host SDK |
 
@@ -51,6 +52,7 @@ Package 名为 `MeisoGlass 0.1.0`，imported target namespace 为 `Meiso::`。
 | `Profiles` | Wi-Fi、Device、Composition schema/profile/media、Display Ingress | 当前typed contract与CameraMedia依赖 |
 | `Client`（历史） | `Meiso::CompositionEdge` | portable opaque Edge facade |
 | `Posix` | POSIX Session/media adapters | UNIX transport adapter |
+| `Windows` | `WindowsTcpAdapter`、`DisplayIngressMediaWindowsUdpAdapter` | Windows 原生有界网络适配 |
 | `Composition`（历史） | SceneStore、Coordinator、两个 renderer | portable composition implementation |
 | `Simulation`（历史） | Edge simulator、trace | deterministic local backend |
 | `Control`（历史） | `Meiso::CompositionControlSession` | connected control fd integration |
@@ -203,6 +205,7 @@ ctest --test-dir build-windows --output-on-failure
 这条路径保持 `/W4 /WX`，验证默认 Core/Runtime/Profile、conformance 和可迁移安装包。
 MSVC 对合法 C11 flexible array 的 C4200 仅在相关私有结构声明处局部处理；
 Runtime v4 测试因嵌套的大型 arena 使用 4 MiB 栈，仅影响该测试可执行文件。
+Windows 还验证原生 TCP/UDP 与其安装接口，见 [适配边界](windows-adapters.md)。
 POSIX 网络适配与历史 Composition 不在这条 Windows 验证范围内。
 
 ## 8. 当前非目标与阻断

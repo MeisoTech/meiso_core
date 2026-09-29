@@ -62,3 +62,23 @@ if(UNIX)
 endif()
 
 # The K230D Linux adapters (Wi-Fi, device telemetry, V4L2 camera) moved to meiso_edge.
+
+if(WIN32)
+    add_library(meiso_windows_tcp_adapter adapters/windows/meiso_windows_tcp.c)
+    meiso_configure_public_target(meiso_windows_tcp_adapter WindowsTcpAdapter)
+    target_link_libraries(meiso_windows_tcp_adapter PUBLIC meiso_core_session ws2_32)
+    meiso_enable_warnings(meiso_windows_tcp_adapter)
+    meiso_set_target_folder(meiso_windows_tcp_adapter "Meiso/Adapters")
+    add_library(Meiso::WindowsTcpAdapter ALIAS meiso_windows_tcp_adapter)
+
+    add_library(meiso_display_ingress_media_windows_udp_adapter
+        adapters/windows/display_ingress_media_windows_udp.c)
+    meiso_configure_public_target(meiso_display_ingress_media_windows_udp_adapter
+        DisplayIngressMediaWindowsUdpAdapter)
+    target_link_libraries(meiso_display_ingress_media_windows_udp_adapter
+        PUBLIC meiso_display_ingress_media_transport ws2_32)
+    meiso_enable_warnings(meiso_display_ingress_media_windows_udp_adapter)
+    meiso_set_target_folder(meiso_display_ingress_media_windows_udp_adapter "Meiso/Adapters")
+    add_library(Meiso::DisplayIngressMediaWindowsUdpAdapter
+        ALIAS meiso_display_ingress_media_windows_udp_adapter)
+endif()

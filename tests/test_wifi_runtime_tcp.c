@@ -1,22 +1,72 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include <meiso/adapters/posix/tcp.h>
 #include <meiso/runtime/runtime.h>
 #include <meiso/profiles/wifi_telemetry.h>
-
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#include <meiso/adapters/windows/tcp.h>
+typedef SOCKET TestSocket;
+typedef int socklen_t;
+typedef ULONG nfds_t;
+typedef MeisoWindowsTcp TestTcp;
+typedef MeisoWindowsTcpConfig TestTcpConfig;
+typedef MeisoWindowsTcpReadStatus TestTcpReadStatus;
+typedef MeisoWindowsTcpWriteStatus TestTcpWriteStatus;
+#define TCP_API(name) meiso_windows_tcp_##name
+#define TCP_STATUS(name) MEISO_WINDOWS_TCP_##name
+#define BAD_SOCKET INVALID_SOCKET
+#define poll WSAPoll
+#define close closesocket
+#define SOCKET_ERR() WSAGetLastError()
+#define ERR_INTR WSAEINTR
+#define ERR_AGAIN WSAEWOULDBLOCK
+#define ERR_WOULD_BLOCK WSAEWOULDBLOCK
+#define ERR_CONNECT_PENDING WSAEWOULDBLOCK
+#define ERR_RESET WSAECONNRESET
+#else
+#include <meiso/adapters/posix/tcp.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
+typedef int TestSocket;
+typedef MeisoPosixTcp TestTcp;
+typedef MeisoPosixTcpConfig TestTcpConfig;
+typedef MeisoPosixTcpReadStatus TestTcpReadStatus;
+typedef MeisoPosixTcpWriteStatus TestTcpWriteStatus;
+#define TCP_API(name) meiso_posix_tcp_##name
+#define TCP_STATUS(name) MEISO_POSIX_TCP_##name
+#define BAD_SOCKET (-1)
+#define SOCKET_ERR() errno
+#define ERR_INTR EINTR
+#define ERR_AGAIN EAGAIN
+#define ERR_WOULD_BLOCK EWOULDBLOCK
+#define ERR_CONNECT_PENDING EINPROGRESS
+#define ERR_RESET ECONNRESET
+#endif
+
+static int test_monotonic_time(struct timespec *value)
+{
+#ifdef _WIN32
+    const ULONGLONG milliseconds = GetTickCount64();
+    value->tv_sec = (time_t)(milliseconds / 1000U);
+    value->tv_nsec = (long)(milliseconds % 1000U) * 1000000L;
+    return 0;
+#else
+    return clock_gettime(CLOCK_MONOTONIC, value);
+#endif
+}
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -52,32 +102,32 @@ static const MeisoOwnerScope HOST_OWNER = {MEISO_OWNER_ROLE_HOST, 101U};
 static const MeisoOwnerScope EDGE_OWNER = {MEISO_OWNER_ROLE_EDGE, 201U};
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[TEST_SESSION_ARENA_BYTES];
 } SessionArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[TEST_ADAPTER_ARENA_BYTES];
 } AdapterArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[TEST_RUNTIME_ARENA_BYTES];
 } RuntimeArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[TEST_RESOURCE_ARENA_BYTES];
 } ResourceArena;
 
 typedef struct {
-    int fd;
+    TestSocket fd;
     SessionArena session_arena;
     AdapterArena adapter_arena;
     RuntimeArena runtime_arena;
     MeisoSession *session;
-    MeisoPosixTcp *adapter;
+    TestTcp *adapter;
     MeisoRuntime *runtime;
 } Peer;
 
@@ -99,24 +149,29 @@ typedef struct {
     MeisoStream *stream;
 } Resources;
 
-static bool set_nonblocking(int fd)
+static bool set_nonblocking(TestSocket fd)
 {
+#ifdef _WIN32
+    u_long enabled = 1;
+    return ioctlsocket(fd, FIONBIO, &enabled) == 0;
+#else
     const int flags = fcntl(fd, F_GETFL);
 
     return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
 }
 
-static void close_fd(int *fd)
+static void close_fd(TestSocket *fd)
 {
-    if (*fd >= 0) {
+    if (*fd != BAD_SOCKET) {
         (void)close(*fd);
-        *fd = -1;
+        *fd = BAD_SOCKET;
     }
 }
 
 static bool make_deadline(struct timespec *out_deadline)
 {
-    if (clock_gettime(CLOCK_MONOTONIC, out_deadline) != 0) {
+    if (test_monotonic_time(out_deadline) != 0) {
         return false;
     }
     out_deadline->tv_sec += TEST_DEADLINE_MS / 1000;
@@ -136,7 +191,7 @@ static int remaining_poll_ms(const struct timespec *deadline)
     int64_t nanoseconds;
     int64_t milliseconds;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    if (test_monotonic_time(&now) != 0) {
         return 0;
     }
     seconds = (int64_t)deadline->tv_sec - (int64_t)now.tv_sec;
@@ -155,7 +210,7 @@ static int remaining_poll_ms(const struct timespec *deadline)
 }
 
 static bool wait_fd(
-    int fd,
+    TestSocket fd,
     short events,
     const struct timespec *deadline
 )
@@ -170,7 +225,7 @@ static bool wait_fd(
             return (item.revents & POLLNVAL) == 0 &&
                 (item.revents & (events | POLLERR | POLLHUP)) != 0;
         }
-        if (result < 0 && errno != EINTR) {
+        if (result < 0 && SOCKET_ERR() != ERR_INTR) {
             return false;
         }
         item.revents = 0;
@@ -178,27 +233,27 @@ static bool wait_fd(
     return false;
 }
 
-static bool make_tcp_pair(int *out_client, int *out_server)
+static bool make_tcp_pair(TestSocket *out_client, TestSocket *out_server)
 {
     struct sockaddr_in address;
     struct timespec deadline;
     socklen_t address_size = (socklen_t)sizeof(address);
-    int listener = -1;
-    int client = -1;
-    int server = -1;
+    TestSocket listener = BAD_SOCKET;
+    TestSocket client = BAD_SOCKET;
+    TestSocket server = BAD_SOCKET;
     int enabled = 1;
     int connect_error = 0;
     socklen_t connect_error_size = (socklen_t)sizeof(connect_error);
 
-    *out_client = -1;
-    *out_server = -1;
+    *out_client = BAD_SOCKET;
+    *out_server = BAD_SOCKET;
     if (!make_deadline(&deadline)) {
         return false;
     }
     listener = socket(AF_INET, SOCK_STREAM, 0);
-    if (listener < 0 || setsockopt(
+    if (listener == BAD_SOCKET || setsockopt(
             listener, SOL_SOCKET, SO_REUSEADDR,
-            &enabled, (socklen_t)sizeof(enabled)
+            (const char *)&enabled, (socklen_t)sizeof(enabled)
         ) != 0) {
         goto fail;
     }
@@ -217,33 +272,33 @@ static bool make_tcp_pair(int *out_client, int *out_server)
         goto fail;
     }
     client = socket(AF_INET, SOCK_STREAM, 0);
-    if (client < 0 || !set_nonblocking(client)) {
+    if (client == BAD_SOCKET || !set_nonblocking(client)) {
         goto fail;
     }
     if (connect(
             client, (const struct sockaddr *)(const void *)&address,
             address_size
         ) != 0) {
-        if (errno != EINPROGRESS || !wait_fd(client, POLLOUT, &deadline) ||
+        if (SOCKET_ERR() != ERR_CONNECT_PENDING || !wait_fd(client, POLLOUT, &deadline) ||
             getsockopt(
                 client, SOL_SOCKET, SO_ERROR,
-                &connect_error, &connect_error_size
+                (char *)&connect_error, &connect_error_size
             ) != 0 || connect_error != 0) {
             goto fail;
         }
     }
-    while (server < 0 && remaining_poll_ms(&deadline) > 0) {
+    while (server == BAD_SOCKET && remaining_poll_ms(&deadline) > 0) {
         server = accept(listener, NULL, NULL);
-        if (server < 0 && errno != EINTR && errno != EAGAIN &&
-            errno != EWOULDBLOCK) {
+        if (server == BAD_SOCKET && SOCKET_ERR() != ERR_INTR && SOCKET_ERR() != ERR_AGAIN &&
+            SOCKET_ERR() != ERR_WOULD_BLOCK) {
             goto fail;
         }
-        if (server < 0 && errno != EINTR &&
+        if (server == BAD_SOCKET && SOCKET_ERR() != ERR_INTR &&
             !wait_fd(listener, POLLIN, &deadline)) {
             goto fail;
         }
     }
-    if (server < 0 || !set_nonblocking(server)) {
+    if (server == BAD_SOCKET || !set_nonblocking(server)) {
         goto fail;
     }
     close_fd(&listener);
@@ -303,21 +358,21 @@ static bool initialize_session(
 
 static bool initialize_adapter(Peer *peer)
 {
-    const MeisoPosixTcpConfig config = {
+    const TestTcpConfig config = {
         peer->fd,
         peer->session,
         TEST_MAX_FRAME_BYTES,
         TEST_IO_BYTES_PER_STEP
     };
-    const size_t required = meiso_posix_tcp_memory_required(&config);
+    const size_t required = TCP_API(memory_required)(&config);
 
     CHECK(required != 0U && required <= sizeof(peer->adapter_arena.bytes));
-    CHECK(meiso_posix_tcp_init(
+    CHECK(TCP_API(init)(
         peer->adapter_arena.bytes,
         required,
         &config,
         &peer->adapter
-    ) == MEISO_POSIX_TCP_INIT_OK);
+    ) == TCP_STATUS(INIT_OK));
     return true;
 }
 
@@ -341,10 +396,10 @@ static bool wait_pair(Pair *pair, const struct timespec *deadline)
     memset(items, 0, sizeof(items));
     for (index = 0U; index < 2U; ++index) {
         items[index].fd = peers[index]->fd;
-        if (meiso_posix_tcp_wants_read(peers[index]->adapter)) {
+        if (TCP_API(wants_read)(peers[index]->adapter)) {
             items[index].events = (short)(items[index].events | POLLIN);
         }
-        if (meiso_posix_tcp_wants_write(peers[index]->adapter)) {
+        if (TCP_API(wants_write)(peers[index]->adapter)) {
             items[index].events = (short)(items[index].events | POLLOUT);
         }
     }
@@ -361,7 +416,7 @@ static bool wait_pair(Pair *pair, const struct timespec *deadline)
                     return true;
                 }
             }
-        } else if (result < 0 && errno != EINTR) {
+        } else if (result < 0 && SOCKET_ERR() != ERR_INTR) {
             return false;
         }
         for (index = 0U; index < 2U; ++index) {
@@ -384,32 +439,32 @@ static bool drive_ready(Pair *pair)
         for (index = 0U; index < 2U; ++index) {
             MeisoSessionRuntimeMessage runtime_message;
 
-            if (meiso_posix_tcp_wants_write(peers[index]->adapter)) {
-                const MeisoPosixTcpWriteStatus status =
-                    meiso_posix_tcp_on_writable(peers[index]->adapter);
+            if (TCP_API(wants_write)(peers[index]->adapter)) {
+                const TestTcpWriteStatus status =
+                    TCP_API(on_writable)(peers[index]->adapter);
 
-                CHECK(status == MEISO_POSIX_TCP_WRITE_PROGRESS ||
-                      status == MEISO_POSIX_TCP_WRITE_WOULD_BLOCK ||
-                      status == MEISO_POSIX_TCP_WRITE_INTERRUPTED ||
-                      status == MEISO_POSIX_TCP_WRITE_FRAME_SENT ||
-                      status == MEISO_POSIX_TCP_WRITE_IDLE);
+                CHECK(status == TCP_STATUS(WRITE_PROGRESS) ||
+                      status == TCP_STATUS(WRITE_WOULD_BLOCK) ||
+                      status == TCP_STATUS(WRITE_INTERRUPTED) ||
+                      status == TCP_STATUS(WRITE_FRAME_SENT) ||
+                      status == TCP_STATUS(WRITE_IDLE));
                 advanced = advanced ||
-                    status == MEISO_POSIX_TCP_WRITE_PROGRESS ||
-                    status == MEISO_POSIX_TCP_WRITE_FRAME_SENT;
+                    status == TCP_STATUS(WRITE_PROGRESS) ||
+                    status == TCP_STATUS(WRITE_FRAME_SENT);
             }
-            if (meiso_posix_tcp_wants_read(peers[index]->adapter)) {
-                const MeisoPosixTcpReadStatus status =
-                    meiso_posix_tcp_on_readable(
+            if (TCP_API(wants_read)(peers[index]->adapter)) {
+                const TestTcpReadStatus status =
+                    TCP_API(on_readable)(
                         peers[index]->adapter, &runtime_message
                     );
 
-                CHECK(status == MEISO_POSIX_TCP_READ_PROGRESS ||
-                      status == MEISO_POSIX_TCP_READ_WOULD_BLOCK ||
-                      status == MEISO_POSIX_TCP_READ_INTERRUPTED ||
-                      status == MEISO_POSIX_TCP_READ_SESSION_PROGRESS);
+                CHECK(status == TCP_STATUS(READ_PROGRESS) ||
+                      status == TCP_STATUS(READ_WOULD_BLOCK) ||
+                      status == TCP_STATUS(READ_INTERRUPTED) ||
+                      status == TCP_STATUS(READ_SESSION_PROGRESS));
                 advanced = advanced ||
-                    status == MEISO_POSIX_TCP_READ_PROGRESS ||
-                    status == MEISO_POSIX_TCP_READ_SESSION_PROGRESS;
+                    status == TCP_STATUS(READ_PROGRESS) ||
+                    status == TCP_STATUS(READ_SESSION_PROGRESS);
             }
         }
         if (session_ready(pair->host.session) &&
@@ -453,8 +508,8 @@ static bool initialize_pair(Pair *pair, uint64_t nonce_salt)
     );
 
     memset(pair, 0, sizeof(*pair));
-    pair->host.fd = -1;
-    pair->edge.fd = -1;
+    pair->host.fd = BAD_SOCKET;
+    pair->edge.fd = BAD_SOCKET;
     CHECK(make_tcp_pair(&pair->host.fd, &pair->edge.fd));
     CHECK(initialize_session(
         &pair->host.session_arena, &host_config, &pair->host.session
@@ -486,16 +541,16 @@ static bool write_frame(Peer *peer)
 
     CHECK(make_deadline(&deadline));
     while (remaining_poll_ms(&deadline) > 0) {
-        const MeisoPosixTcpWriteStatus status =
-            meiso_posix_tcp_on_writable(peer->adapter);
+        const TestTcpWriteStatus status =
+            TCP_API(on_writable)(peer->adapter);
 
-        if (status == MEISO_POSIX_TCP_WRITE_FRAME_SENT) {
+        if (status == TCP_STATUS(WRITE_FRAME_SENT)) {
             return true;
         }
-        CHECK(status == MEISO_POSIX_TCP_WRITE_PROGRESS ||
-              status == MEISO_POSIX_TCP_WRITE_WOULD_BLOCK ||
-              status == MEISO_POSIX_TCP_WRITE_INTERRUPTED);
-        if (status != MEISO_POSIX_TCP_WRITE_PROGRESS) {
+        CHECK(status == TCP_STATUS(WRITE_PROGRESS) ||
+              status == TCP_STATUS(WRITE_WOULD_BLOCK) ||
+              status == TCP_STATUS(WRITE_INTERRUPTED));
+        if (status != TCP_STATUS(WRITE_PROGRESS)) {
             CHECK(wait_fd(peer->fd, POLLOUT, &deadline));
         }
     }
@@ -511,19 +566,19 @@ static bool read_runtime(
 
     CHECK(make_deadline(&deadline));
     while (remaining_poll_ms(&deadline) > 0) {
-        const MeisoPosixTcpReadStatus status = meiso_posix_tcp_on_readable(
+        const TestTcpReadStatus status = TCP_API(on_readable)(
             peer->adapter, out_message
         );
 
-        if (status == MEISO_POSIX_TCP_READ_RUNTIME) {
+        if (status == TCP_STATUS(READ_RUNTIME)) {
             return true;
         }
-        CHECK(status == MEISO_POSIX_TCP_READ_PROGRESS ||
-              status == MEISO_POSIX_TCP_READ_WOULD_BLOCK ||
-              status == MEISO_POSIX_TCP_READ_INTERRUPTED ||
-              status == MEISO_POSIX_TCP_READ_SESSION_PROGRESS);
-        if (status != MEISO_POSIX_TCP_READ_PROGRESS &&
-            status != MEISO_POSIX_TCP_READ_SESSION_PROGRESS) {
+        CHECK(status == TCP_STATUS(READ_PROGRESS) ||
+              status == TCP_STATUS(READ_WOULD_BLOCK) ||
+              status == TCP_STATUS(READ_INTERRUPTED) ||
+              status == TCP_STATUS(READ_SESSION_PROGRESS));
+        if (status != TCP_STATUS(READ_PROGRESS) &&
+            status != TCP_STATUS(READ_SESSION_PROGRESS)) {
             CHECK(wait_fd(peer->fd, POLLIN, &deadline));
         }
     }
@@ -537,17 +592,17 @@ static bool read_transport_lost(Peer *peer)
 
     CHECK(make_deadline(&deadline));
     while (remaining_poll_ms(&deadline) > 0) {
-        const MeisoPosixTcpReadStatus status = meiso_posix_tcp_on_readable(
+        const TestTcpReadStatus status = TCP_API(on_readable)(
             peer->adapter, &message
         );
 
-        if (status == MEISO_POSIX_TCP_READ_TRANSPORT_LOST) {
+        if (status == TCP_STATUS(READ_TRANSPORT_LOST)) {
             return true;
         }
-        CHECK(status == MEISO_POSIX_TCP_READ_PROGRESS ||
-              status == MEISO_POSIX_TCP_READ_WOULD_BLOCK ||
-              status == MEISO_POSIX_TCP_READ_INTERRUPTED);
-        if (status != MEISO_POSIX_TCP_READ_PROGRESS) {
+        CHECK(status == TCP_STATUS(READ_PROGRESS) ||
+              status == TCP_STATUS(READ_WOULD_BLOCK) ||
+              status == TCP_STATUS(READ_INTERRUPTED));
+        if (status != TCP_STATUS(READ_PROGRESS)) {
             CHECK(wait_fd(peer->fd, POLLIN, &deadline));
         }
     }
@@ -562,10 +617,10 @@ static bool force_network_loss(Pair *pair)
         pair->edge.fd,
         SOL_SOCKET,
         SO_LINGER,
-        &reset,
+        (const char *)&reset,
         (socklen_t)sizeof(reset)
     ) == 0);
-    meiso_posix_tcp_abort(pair->edge.adapter, ECONNRESET);
+    TCP_API(abort)(pair->edge.adapter, ERR_RESET);
     close_fd(&pair->edge.fd);
     CHECK(read_transport_lost(&pair->host));
     return true;
@@ -1379,10 +1434,10 @@ static bool test_network_loss_requires_full_renegotiation(void)
           edge_after_loss.failure == MEISO_SESSION_FAILURE_TRANSPORT_LOST &&
           !host_after_loss.outbound_pending &&
           !edge_after_loss.outbound_pending);
-    CHECK(!meiso_posix_tcp_wants_read(pair.host.adapter) &&
-          !meiso_posix_tcp_wants_write(pair.host.adapter) &&
-          !meiso_posix_tcp_wants_read(pair.edge.adapter) &&
-          !meiso_posix_tcp_wants_write(pair.edge.adapter));
+    CHECK(!TCP_API(wants_read)(pair.host.adapter) &&
+          !TCP_API(wants_write)(pair.host.adapter) &&
+          !TCP_API(wants_read)(pair.edge.adapter) &&
+          !TCP_API(wants_write)(pair.edge.adapter));
     CHECK(meiso_runtime_production_snapshot(
         pair.host.runtime, *meiso_wifi_telemetry_endpoint(), &production
     ) == MEISO_RUNTIME_CORE_NOT_READY);
@@ -1534,10 +1589,17 @@ static bool test_network_loss_requires_full_renegotiation(void)
 
 int main(void)
 {
+#ifdef _WIN32
+    WSADATA winsock;
+    if (WSAStartup(MAKEWORD(2, 2), &winsock) != 0) return 1;
+#endif
     if (!test_wifi_runtime_over_tcp() ||
         !test_network_loss_requires_full_renegotiation()) {
         return 1;
     }
+#ifdef _WIN32
+    if (WSACleanup() != 0) return 1;
+#endif
     (void)printf("wifi runtime TCP integration test passed\n");
     return 0;
 }
