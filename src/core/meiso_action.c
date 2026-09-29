@@ -8,7 +8,7 @@
 
 size_t meiso_action_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 size_t meiso_action_caller_memory_required(
     const MeisoResourceDescriptor *descriptor,

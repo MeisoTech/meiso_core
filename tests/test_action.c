@@ -23,7 +23,7 @@ _Static_assert(sizeof(MeisoActionIngestStatus) == sizeof(uint8_t), "fixed status
     } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[32768];
 } TestArena;
 
@@ -148,7 +148,7 @@ static void test_init_contract(void)
     const MeisoOwnerScope scope = {MEISO_OWNER_ROLE_EDGE, 7U};
     size_t required = meiso_action_caller_memory_required(&descriptor, &config);
 
-    CHECK(meiso_action_alignment_required() >= _Alignof(max_align_t));
+    CHECK(meiso_action_alignment_required() >= _Alignof(MeisoMaxAlign));
     CHECK(required > 0U);
     CHECK(meiso_action_caller_init(
         arena.bytes + 1U, sizeof(arena.bytes) - 1U,

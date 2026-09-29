@@ -223,17 +223,17 @@ static bool test_profile_contract(void)
     ) == NULL);
     CHECK(meiso_wifi_telemetry_resource_for_facet(0U) == NULL);
 
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_ALL == UINT32_C(0x000003ff));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE == UINT32_C(0x00000001));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM == UINT32_C(0x00000002));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_RX_BYTES == UINT32_C(0x00000004));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_TX_BYTES == UINT32_C(0x00000008));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_RX_PACKETS == UINT32_C(0x00000010));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_TX_PACKETS == UINT32_C(0x00000020));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_RX_DROPPED == UINT32_C(0x00000040));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_TX_DROPPED == UINT32_C(0x00000080));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_RX_ERRORS == UINT32_C(0x00000100));
-    CHECK(MEISO_WIFI_TELEMETRY_FIELD_TX_ERRORS == UINT32_C(0x00000200));
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_ALL == UINT32_C(0x000003ff), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_LINK_STATE == UINT32_C(0x00000001), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_SIGNAL_MBM == UINT32_C(0x00000002), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_RX_BYTES == UINT32_C(0x00000004), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_TX_BYTES == UINT32_C(0x00000008), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_RX_PACKETS == UINT32_C(0x00000010), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_TX_PACKETS == UINT32_C(0x00000020), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_RX_DROPPED == UINT32_C(0x00000040), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_TX_DROPPED == UINT32_C(0x00000080), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_RX_ERRORS == UINT32_C(0x00000100), "telemetry field bit");
+    _Static_assert(MEISO_WIFI_TELEMETRY_FIELD_TX_ERRORS == UINT32_C(0x00000200), "telemetry field bit");
     CHECK(meiso_wifi_telemetry_parameters_supported(
         &capability, &desired
     ));
@@ -453,7 +453,7 @@ static bool test_sample_codec(void)
         (MeisoByteView){wire, size}, &decoded
     ) == MEISO_WIFI_TELEMETRY_CODEC_MALFORMED);
     memmove(wire, SAMPLE_GOLDEN, sizeof(SAMPLE_GOLDEN));
-    wire[7] = (uint8_t)(wire[7] & (uint8_t)~0x02U);
+    wire[7] = (uint8_t)(wire[7] & (UINT8_MAX ^ 0x02U));
     CHECK(meiso_wifi_telemetry_sample_decode(
         (MeisoByteView){wire, size}, &decoded
     ) == MEISO_WIFI_TELEMETRY_CODEC_MALFORMED);

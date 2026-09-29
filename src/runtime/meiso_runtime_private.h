@@ -102,6 +102,11 @@ typedef struct {
     bool current;
 } MeisoRuntimeIdentitySlot;
 
+#if defined(_MSC_VER) && !defined(__clang__)
+/* C11 flexible array member; keep all other /W4 /WX diagnostics. */
+#pragma warning(push)
+#pragma warning(disable: 4200)
+#endif
 struct MeisoRuntime {
     uint64_t magic;
     MeisoSession *session;
@@ -162,6 +167,9 @@ struct MeisoRuntime {
     bool invalidated;
     uint8_t storage[];
 };
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 typedef struct {
     size_t endpoint_offset[2];

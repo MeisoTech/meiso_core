@@ -6,7 +6,7 @@
 #include <string.h>
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[16384];
 } TestArena;
 
@@ -261,7 +261,7 @@ static bool test_memory_and_init_contract(void)
 
     CHECK(required != 0U);
     CHECK(required <= sizeof(arena.bytes));
-    CHECK(meiso_blob_alignment_required() == _Alignof(max_align_t));
+    CHECK(meiso_blob_alignment_required() == _Alignof(MeisoMaxAlign));
     invalid_descriptor.kind = MEISO_RESOURCE_KIND_STATE;
     CHECK(meiso_blob_store_memory_required(&invalid_descriptor, &config) == 0U);
     CHECK(meiso_blob_store_memory_required(&descriptor, &invalid_config) == 0U);

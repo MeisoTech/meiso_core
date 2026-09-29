@@ -10,7 +10,7 @@
 #include <string.h>
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[8192];
 } FixedArena;
 

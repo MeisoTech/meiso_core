@@ -53,6 +53,11 @@ enum {
  * and runtime payload views borrow that arena and are invalidated by the next
  * mutating Session operation. Field order is the arena ABI and must not move.
  */
+#if defined(_MSC_VER) && !defined(__clang__)
+/* C11 flexible array member; keep all other /W4 /WX diagnostics. */
+#pragma warning(push)
+#pragma warning(disable: 4200)
+#endif
 struct MeisoSession {
     MeisoSessionConfig config;
     MeisoPeerId remote_peer_id;
@@ -81,6 +86,9 @@ struct MeisoSession {
     bool session_bound_close_started;
     uint8_t storage[];
 };
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 MEISO_SESSION_PRIVATE_API bool
 meiso_session_private_close_reason_valid(MeisoSessionCloseReason reason);

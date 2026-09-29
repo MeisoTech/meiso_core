@@ -5,7 +5,7 @@
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s\n", __LINE__, #x); return 1; } } while (0)
 
-typedef union { max_align_t align; uint8_t bytes[65536]; } Arena;
+typedef union { MeisoMaxAlign align; uint8_t bytes[65536]; } Arena;
 static Arena session_memory[2], runtime_memory;
 
 /* Two planes Sessions through the handshake; old_peer negotiates the registry of a peer from
@@ -60,7 +60,7 @@ static int session_sizing(void)
 }
 
 /* The Edge's Runtime also holds the image reassembly scratch. */
-static union { max_align_t align; uint8_t bytes[1 << 20]; } runtime_pair[2];
+static union { MeisoMaxAlign align; uint8_t bytes[1 << 20]; } runtime_pair[2];
 
 /* One Session message from one peer to the other; a Runtime message comes back as its event.
  * State accepts are sent by hand here, as the POSIX transport's scheduler would. */

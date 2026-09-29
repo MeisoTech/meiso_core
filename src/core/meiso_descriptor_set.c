@@ -133,7 +133,7 @@ static bool set_valid(const MeisoDescriptorSet *set)
 
 size_t meiso_descriptor_set_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 
 size_t meiso_descriptor_set_memory_required(size_t capacity)

@@ -22,7 +22,7 @@ _Static_assert(sizeof(MeisoStreamReceiveCode) == sizeof(uint8_t), "fixed status"
     } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[8192];
 } TestArena;
 
@@ -130,7 +130,7 @@ static void test_init_contract(void)
     size_t required = meiso_stream_memory_required(&descriptor, &config);
 
     CHECK(required > 0U);
-    CHECK(meiso_stream_alignment_required() >= _Alignof(max_align_t));
+    CHECK(meiso_stream_alignment_required() >= _Alignof(MeisoMaxAlign));
     CHECK(meiso_stream_init(
         arena.bytes + 1U, sizeof(arena.bytes) - 1U,
         &descriptor, &config, &stream

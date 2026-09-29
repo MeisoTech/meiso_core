@@ -38,6 +38,7 @@ install(
 install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/core/action.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/core/alignment.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/core/blob.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/core/descriptor_set.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/core/resource.h"

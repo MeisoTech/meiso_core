@@ -6,6 +6,11 @@ meiso_add_c_test(
     runtime
     meiso_composition_profile
 )
+if(MSVC)
+    # This test keeps a 0.75 MiB RuntimePair on main's stack plus up to
+    # 1.1 MiB of nested arena fixtures. Windows' default 1 MiB is too small.
+    target_link_options(meiso_runtime_v4_test PRIVATE /STACK:4194304)
+endif()
 meiso_add_c_test(
     meiso_composition_media_transport_test
     tests/test_composition_media_transport.c

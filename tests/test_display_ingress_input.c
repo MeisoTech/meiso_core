@@ -4,7 +4,7 @@
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s\n", __LINE__, #x); return 1; } } while (0)
 
-typedef union { max_align_t align; uint8_t bytes[65536]; } Arena;
+typedef union { MeisoMaxAlign align; uint8_t bytes[65536]; } Arena;
 static Arena session_memory[2], runtime_memory;
 
 /* Two planes Sessions through the handshake; the Edge offers peer_registry (23 now, 19 before §11,
@@ -58,7 +58,7 @@ static int session_sizing(void)
     return 0;
 }
 
-static union { max_align_t align; uint8_t bytes[1 << 20]; } runtime_pair[2];
+static union { MeisoMaxAlign align; uint8_t bytes[1 << 20]; } runtime_pair[2];
 
 /* One Session message from one peer to the other; a Runtime message comes back as its event. */
 static int deliver(MeisoSession *from, MeisoSession *to, MeisoRuntime *runtime, MeisoRuntimeStatus *status, MeisoRuntimeEvent *event)
@@ -290,8 +290,8 @@ int main(void)
               rt[base + 2].route.facet == MEISO_RUNTIME_FACET_DATA &&
               rt[base + 2].route.resource.max_payload_size == MEISO_DISPLAY_INPUT_KEY_BYTES);
         CHECK(meiso_display_planes_validate_catalog(ep, ec, rt, rc, &got));
-        CHECK(got.input_enabled && got.input.keys == 0xfe && got.input.pointer == 1 && got.camera_enabled == camera &&
-              got.tracking_enabled == tracking);
+        CHECK(got.input_enabled && got.input.keys == 0xfe && got.input.pointer == 1 && got.camera_enabled == (camera != 0) &&
+              got.tracking_enabled == (tracking != 0));
         CHECK(!meiso_display_planes_validate_catalog(ep, ec, rt, rc - 1, &got));
         CHECK(!meiso_display_planes_validate_catalog(ep, ec - 1, rt, rc, &got));
         rt[base + 2].route.resource.owner = MEISO_OWNER_ROLE_HOST;

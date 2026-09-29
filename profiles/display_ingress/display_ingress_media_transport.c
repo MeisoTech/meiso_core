@@ -192,7 +192,7 @@ meiso_display_ingress_media_transport_memory_required(
     (void)frame_bytes;
     (void)packet_capacity;
     *out_size = required;
-    *out_alignment = alignof(max_align_t);
+    *out_alignment = alignof(MeisoMaxAlign);
     return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK;
 }
 
@@ -227,7 +227,7 @@ meiso_display_ingress_media_transport_init(
         )) {
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_INVALID_CONFIG;
     }
-    if (!pointer_aligned(arena.data, alignof(max_align_t)) ||
+    if (!pointer_aligned(arena.data, alignof(MeisoMaxAlign)) ||
         arena.capacity < required) {
         return MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_CAPACITY;
     }

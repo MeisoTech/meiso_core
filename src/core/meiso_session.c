@@ -160,7 +160,7 @@ bool meiso_session_limits_valid(MeisoSessionLimits value)
 
 size_t meiso_session_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 
 size_t meiso_session_memory_required(const MeisoSessionConfig *config)

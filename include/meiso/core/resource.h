@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <meiso/core/alignment.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -144,6 +144,9 @@ Package gate 会把 prefix 移动到新路径，然后从仓外 fresh configure/
 ## 5. Arena、borrow 与 failure
 
 - 所有 `memory_required/init` 先计算并验证 caller-owned arena；不隐式分配 heap。
+- `meiso/core/alignment.h` 的 `MeisoMaxAlign` 可用于静态 arena 的 union 对齐。
+  MSVC C11 没有 `max_align_t`，这里使用与其 C++ 库相同的 `double` 基本对齐；
+  其他编译器沿用本机 `max_align_t`。实际容量与对齐仍查询对应 API，不承诺 SIMD 过度对齐。
 - 公开 output 与 arena/input 的 alias 规则属于 API contract；failure 不得伪造 partial success。
 - queued work 对 payload 的 borrow 必须持续到 matching completion/boundary/terminal。
 - State receipt、delivery accepted、Actual observed/applied、production RUNNING 和 media frame 是不同证据层。
@@ -186,6 +189,21 @@ target-policy/web/conformance/compiler-variant lane 组织。`cmake/MeisoTests.c
 
 K230D 五个 `build_*.sh` 只是 CMake target 的参数校验/拷贝 wrapper；CMake 是唯一
 Linux source graph authority。RT-Smart overlay 因外部 SDK 约束保留 Makefile，但必须经 manifest gate。
+
+### Windows 原生默认构建
+
+在 VS 2022 x64 Native Tools 命令提示符中，安装 CMake 和 Python 3 后运行：
+
+```bat
+cmake -S . -B build-windows -G "NMake Makefiles" -DMEISO_REQUIRE_MSVC_X64_V143=ON -DMEISO_BUILD_APPLICATIONS=OFF -DBUILD_TESTING=ON
+cmake --build build-windows
+ctest --test-dir build-windows --output-on-failure
+```
+
+这条路径保持 `/W4 /WX`，验证默认 Core/Runtime/Profile、conformance 和可迁移安装包。
+MSVC 对合法 C11 flexible array 的 C4200 仅在相关私有结构声明处局部处理；
+Runtime v4 测试因嵌套的大型 arena 使用 4 MiB 栈，仅影响该测试可执行文件。
+POSIX 网络适配与历史 Composition 不在这条 Windows 验证范围内。
 
 ## 8. 当前非目标与阻断
 

@@ -785,11 +785,12 @@ MeisoRuntimeStatus meiso_runtime_private_decode_catalog_to_staging(
             route.resource.owner = record[41U];
             route.facet = record[42U];
             route.resource.schema = meiso_runtime_private_get_schema(record + 44U);
-            if (sizeof(size_t) < sizeof(uint64_t) &&
-                maximum > (uint64_t)SIZE_MAX) {
+#if SIZE_MAX < UINT64_MAX
+            if (maximum > (uint64_t)SIZE_MAX) {
                 status = MEISO_RUNTIME_PAYLOAD_CAPACITY;
                 break;
             }
+#endif
             route.resource.max_payload_size = (size_t)maximum;
             status = route_input_validate_delivery(runtime, &route, delivery);
             if (status != MEISO_RUNTIME_OK) {
