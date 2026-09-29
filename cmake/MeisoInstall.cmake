@@ -38,6 +38,7 @@ install(
 install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/core/action.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/core/alignment.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/core/blob.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/core/descriptor_set.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/core/resource.h"
@@ -298,6 +299,21 @@ if(TARGET meiso_posix_tcp_adapter)
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/adapters/posix"
         COMPONENT Posix
     )
+endif()
+
+if(TARGET meiso_windows_tcp_adapter)
+    install(TARGETS meiso_windows_tcp_adapter meiso_display_ingress_media_windows_udp_adapter
+        EXPORT MeisoWindowsTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Windows
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Windows
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Windows
+        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+    install(EXPORT MeisoWindowsTargets FILE MeisoWindowsTargets.cmake NAMESPACE Meiso::
+        DESTINATION "${MEISO_INSTALL_CMAKEDIR}" COMPONENT Windows)
+    install(FILES
+        "${PROJECT_SOURCE_DIR}/include/meiso/adapters/windows/tcp.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/adapters/windows/display_ingress_media_udp.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/adapters/windows" COMPONENT Windows)
 endif()
 
 if(TARGET meiso_composition_host_runtime)

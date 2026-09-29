@@ -55,11 +55,11 @@ static MeisoSessionConfig base_session_config(void)
 }
 
 #define CHECK_DEVICE_ALIAS(Type, Value, Encode, Decode, Wire, WireSize) do {  \
-    union { max_align_t alignment; Type typed; uint8_t bytes[256]; }          \
+    union { MeisoMaxAlign alignment; Type typed; uint8_t bytes[256]; }          \
         typed_overlap;                                                        \
-    union { max_align_t alignment; size_t size; uint8_t bytes[256]; }         \
+    union { MeisoMaxAlign alignment; size_t size; uint8_t bytes[256]; }         \
         size_overlap;                                                         \
-    union { max_align_t alignment; Type typed; uint8_t bytes[256]; }          \
+    union { MeisoMaxAlign alignment; Type typed; uint8_t bytes[256]; }          \
         decode_overlap;                                                       \
     uint8_t typed_before[sizeof(typed_overlap.bytes)];                         \
     uint8_t size_before[sizeof(size_overlap.bytes)];                           \
@@ -93,11 +93,11 @@ static MeisoSessionConfig base_session_config(void)
 } while (0)
 
 #define CHECK_MEDIA_ALIAS(Type, Value, Encode, Decode, Wire, WireSize) do {   \
-    union { max_align_t alignment; Type typed; uint8_t bytes[256]; }          \
+    union { MeisoMaxAlign alignment; Type typed; uint8_t bytes[256]; }          \
         typed_overlap;                                                        \
-    union { max_align_t alignment; size_t size; uint8_t bytes[256]; }         \
+    union { MeisoMaxAlign alignment; size_t size; uint8_t bytes[256]; }         \
         size_overlap;                                                         \
-    union { max_align_t alignment; Type typed; uint8_t bytes[256]; }          \
+    union { MeisoMaxAlign alignment; Type typed; uint8_t bytes[256]; }          \
         decode_overlap;                                                       \
     uint8_t typed_before[sizeof(typed_overlap.bytes)];                         \
     uint8_t size_before[sizeof(size_overlap.bytes)];                           \
@@ -524,13 +524,13 @@ static bool test_profile_catalog_shape_and_failures(void)
     size_t size = 0U;
     size_t i;
     union {
-        max_align_t alignment;
+        MeisoMaxAlign alignment;
         MeisoCompositionProfileCatalogConfig config;
         size_t size;
         uint8_t bytes[MEISO_COMPOSITION_PROFILE_CATALOG_WIRE_SIZE];
     } alias;
     union {
-        max_align_t alignment;
+        MeisoMaxAlign alignment;
         MeisoRuntimeEndpointDescriptor endpoints[6];
         MeisoCompositionProfileRouteDescriptor routes[18];
         uint8_t bytes[sizeof(routes)];
@@ -541,7 +541,7 @@ static bool test_profile_catalog_shape_and_failures(void)
     CHECK(profile->id.high == UINT64_C(0x434f4d504f53455f) &&
           profile->id.low == UINT64_C(0x5f50524f46494c45) &&
           profile->version == 1U);
-    CHECK(MEISO_COMPOSITION_PROFILE_RUNTIME_WIRE_VERSION == 4U);
+    _Static_assert(MEISO_COMPOSITION_PROFILE_RUNTIME_WIRE_VERSION == 4U, "runtime wire version");
 
     session_before = session;
     CHECK(meiso_composition_profile_configure_session(&session) ==
@@ -917,7 +917,7 @@ static bool test_media_codec_boundaries_and_aliases(void)
     MeisoCompositionMediaActual actual_out;
     MeisoCompositionMediaOpen open_out;
     MeisoCompositionMediaBinding binding_out;
-    uint8_t typed_before[sizeof(binding_out)];
+    uint8_t failed_decode_before[sizeof(binding_out)];
     size_t size = 0U;
 
     CHECK(meiso_composition_media_capability_encode(
@@ -959,44 +959,44 @@ static bool test_media_codec_boundaries_and_aliases(void)
     memcpy(output, capability_wire, sizeof(capability_wire));
     output[sizeof(capability_wire)] = 0U;
     memset(&capability_out, 0xa5, sizeof(capability_out));
-    memcpy(typed_before, &capability_out, sizeof(capability_out));
+    memcpy(failed_decode_before, &capability_out, sizeof(capability_out));
     CHECK(meiso_composition_media_capability_decode(
         (MeisoByteView){output, sizeof(capability_wire) + 1U}, &capability_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&capability_out, typed_before, sizeof(capability_out)) == 0);
+    CHECK(memcmp(&capability_out, failed_decode_before, sizeof(capability_out)) == 0);
     memcpy(output, desired_wire, sizeof(desired_wire));
     output[sizeof(desired_wire)] = 0U;
     memset(&desired_out, 0xa5, sizeof(desired_out));
-    memcpy(typed_before, &desired_out, sizeof(desired_out));
+    memcpy(failed_decode_before, &desired_out, sizeof(desired_out));
     CHECK(meiso_composition_media_desired_decode(
         (MeisoByteView){output, sizeof(desired_wire) + 1U}, &desired_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&desired_out, typed_before, sizeof(desired_out)) == 0);
+    CHECK(memcmp(&desired_out, failed_decode_before, sizeof(desired_out)) == 0);
     memcpy(output, actual_wire, sizeof(actual_wire));
     output[sizeof(actual_wire)] = 0U;
     memset(&actual_out, 0xa5, sizeof(actual_out));
-    memcpy(typed_before, &actual_out, sizeof(actual_out));
+    memcpy(failed_decode_before, &actual_out, sizeof(actual_out));
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){output, sizeof(actual_wire) + 1U}, &actual_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&actual_out, typed_before, sizeof(actual_out)) == 0);
+    CHECK(memcmp(&actual_out, failed_decode_before, sizeof(actual_out)) == 0);
     memcpy(output, open_wire, sizeof(open_wire));
     output[sizeof(open_wire)] = 0U;
     memset(&open_out, 0xa5, sizeof(open_out));
-    memcpy(typed_before, &open_out, sizeof(open_out));
+    memcpy(failed_decode_before, &open_out, sizeof(open_out));
     CHECK(meiso_composition_media_open_decode(
         (MeisoByteView){output, sizeof(open_wire) + 1U}, &open_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&open_out, typed_before, sizeof(open_out)) == 0);
+    CHECK(memcmp(&open_out, failed_decode_before, sizeof(open_out)) == 0);
     memcpy(binding_trailing, binding_wire, sizeof(binding_wire));
     binding_trailing[sizeof(binding_wire)] = 0U;
     memset(&binding_out, 0xa5, sizeof(binding_out));
-    memcpy(typed_before, &binding_out, sizeof(binding_out));
+    memcpy(failed_decode_before, &binding_out, sizeof(binding_out));
     CHECK(meiso_composition_media_binding_decode(
         (MeisoByteView){binding_trailing, sizeof(binding_trailing)},
         &binding_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&binding_out, typed_before, sizeof(binding_out)) == 0);
+    CHECK(memcmp(&binding_out, failed_decode_before, sizeof(binding_out)) == 0);
 
     memset(output, 0xa5, sizeof(output));
     memcpy(output_before, output, sizeof(output));
@@ -1052,80 +1052,80 @@ static bool test_media_codec_boundaries_and_aliases(void)
     CHECK(size == 0U && memcmp(output, output_before, sizeof(output)) == 0);
 
     memset(&capability_out, 0xa5, sizeof(capability_out));
-    memcpy(typed_before, &capability_out, sizeof(capability_out));
+    memcpy(failed_decode_before, &capability_out, sizeof(capability_out));
     CHECK(meiso_composition_media_capability_decode(
         (MeisoByteView){capability_wire, sizeof(capability_wire) - 1U},
         &capability_out
     ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
-    CHECK(memcmp(&capability_out, typed_before, sizeof(capability_out)) == 0);
+    CHECK(memcmp(&capability_out, failed_decode_before, sizeof(capability_out)) == 0);
     capability_wire[44] = 1U;
     CHECK(meiso_composition_media_capability_decode(
         (MeisoByteView){capability_wire, sizeof(capability_wire)},
         &capability_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&capability_out, typed_before, sizeof(capability_out)) == 0);
+    CHECK(memcmp(&capability_out, failed_decode_before, sizeof(capability_out)) == 0);
     CHECK(meiso_composition_media_capability_encode(
         &capability,
         (MeisoMutableBuffer){capability_wire, sizeof(capability_wire)}, &size
     ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&desired_out, 0xa5, sizeof(desired_out));
-    memcpy(typed_before, &desired_out, sizeof(desired_out));
+    memcpy(failed_decode_before, &desired_out, sizeof(desired_out));
     CHECK(meiso_composition_media_desired_decode(
         (MeisoByteView){desired_wire, sizeof(desired_wire) - 1U}, &desired_out
     ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
-    CHECK(memcmp(&desired_out, typed_before, sizeof(desired_out)) == 0);
+    CHECK(memcmp(&desired_out, failed_decode_before, sizeof(desired_out)) == 0);
     desired_wire[6] = 1U;
     CHECK(meiso_composition_media_desired_decode(
         (MeisoByteView){desired_wire, sizeof(desired_wire)}, &desired_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&desired_out, typed_before, sizeof(desired_out)) == 0);
+    CHECK(memcmp(&desired_out, failed_decode_before, sizeof(desired_out)) == 0);
     CHECK(meiso_composition_media_desired_encode(
         &desired, (MeisoMutableBuffer){desired_wire, sizeof(desired_wire)},
         &size
     ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&actual_out, 0xa5, sizeof(actual_out));
-    memcpy(typed_before, &actual_out, sizeof(actual_out));
+    memcpy(failed_decode_before, &actual_out, sizeof(actual_out));
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){actual_wire, sizeof(actual_wire) - 1U}, &actual_out
     ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
-    CHECK(memcmp(&actual_out, typed_before, sizeof(actual_out)) == 0);
+    CHECK(memcmp(&actual_out, failed_decode_before, sizeof(actual_out)) == 0);
     actual_wire[72] = 1U;
     CHECK(meiso_composition_media_actual_decode(
         (MeisoByteView){actual_wire, sizeof(actual_wire)}, &actual_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&actual_out, typed_before, sizeof(actual_out)) == 0);
+    CHECK(memcmp(&actual_out, failed_decode_before, sizeof(actual_out)) == 0);
     CHECK(meiso_composition_media_actual_encode(
         &actual, (MeisoMutableBuffer){actual_wire, sizeof(actual_wire)}, &size
     ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&open_out, 0xa5, sizeof(open_out));
-    memcpy(typed_before, &open_out, sizeof(open_out));
+    memcpy(failed_decode_before, &open_out, sizeof(open_out));
     CHECK(meiso_composition_media_open_decode(
         (MeisoByteView){open_wire, sizeof(open_wire) - 1U}, &open_out
     ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
-    CHECK(memcmp(&open_out, typed_before, sizeof(open_out)) == 0);
+    CHECK(memcmp(&open_out, failed_decode_before, sizeof(open_out)) == 0);
     open_wire[48] = 1U;
     CHECK(meiso_composition_media_open_decode(
         (MeisoByteView){open_wire, sizeof(open_wire)}, &open_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&open_out, typed_before, sizeof(open_out)) == 0);
+    CHECK(memcmp(&open_out, failed_decode_before, sizeof(open_out)) == 0);
     CHECK(meiso_composition_media_open_encode(
         &open, (MeisoMutableBuffer){open_wire, sizeof(open_wire)}, &size
     ) == MEISO_COMPOSITION_PROFILE_OK);
 
     memset(&binding_out, 0xa5, sizeof(binding_out));
-    memcpy(typed_before, &binding_out, sizeof(binding_out));
+    memcpy(failed_decode_before, &binding_out, sizeof(binding_out));
     CHECK(meiso_composition_media_binding_decode(
         (MeisoByteView){binding_wire, sizeof(binding_wire) - 1U}, &binding_out
     ) == MEISO_COMPOSITION_PROFILE_TRUNCATED);
-    CHECK(memcmp(&binding_out, typed_before, sizeof(binding_out)) == 0);
+    CHECK(memcmp(&binding_out, failed_decode_before, sizeof(binding_out)) == 0);
     binding_wire[91] = 1U;
     CHECK(meiso_composition_media_binding_decode(
         (MeisoByteView){binding_wire, sizeof(binding_wire)}, &binding_out
     ) == MEISO_COMPOSITION_PROFILE_MALFORMED);
-    CHECK(memcmp(&binding_out, typed_before, sizeof(binding_out)) == 0);
+    CHECK(memcmp(&binding_out, failed_decode_before, sizeof(binding_out)) == 0);
     CHECK(meiso_composition_media_binding_encode(
         &binding,
         (MeisoMutableBuffer){binding_wire, sizeof(binding_wire)}, &size
@@ -1250,7 +1250,7 @@ static bool test_frame_capacity_alias_and_borrow(void)
     uint8_t decoded_before[sizeof(decoded)];
     size_t size = 0U;
     union {
-        max_align_t alignment;
+        MeisoMaxAlign alignment;
         size_t size;
         MeisoCompositionMediaFrame frame;
         uint8_t bytes[512];

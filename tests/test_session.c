@@ -7,7 +7,7 @@
 #include <string.h>
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[4096];
 } SessionArena;
 
@@ -397,11 +397,11 @@ static bool test_value_config_and_arena_contract(void)
     MeisoSessionSnapshot snapshot;
     const size_t required = meiso_session_memory_required(&config);
 
-    CHECK(MEISO_SESSION_WIRE_VERSION == 1U);
-    CHECK(MEISO_SESSION_WIRE_HEADER_SIZE == 12U);
-    CHECK(MEISO_SESSION_ID_WIRE_SIZE == 32U);
-    CHECK(MEISO_SESSION_MIN_MAX_FRAME_BYTES == 104U);
-    CHECK(meiso_session_alignment_required() == _Alignof(max_align_t));
+    _Static_assert(MEISO_SESSION_WIRE_VERSION == 1U, "session wire version");
+    _Static_assert(MEISO_SESSION_WIRE_HEADER_SIZE == 12U, "session header size");
+    _Static_assert(MEISO_SESSION_ID_WIRE_SIZE == 32U, "session ID size");
+    _Static_assert(MEISO_SESSION_MIN_MAX_FRAME_BYTES == 104U, "minimum frame size");
+    CHECK(meiso_session_alignment_required() == _Alignof(MeisoMaxAlign));
 
     CHECK(meiso_peer_id_valid(config.local_peer_id));
     CHECK(!meiso_peer_id_valid((MeisoPeerId){0U, 0U}));

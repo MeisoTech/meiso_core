@@ -93,7 +93,7 @@ static bool calculate_layout(
         }
     }
     if (
-        !meiso_runtime_private_align_up(cursor, _Alignof(max_align_t), &value.required)) {
+        !meiso_runtime_private_align_up(cursor, _Alignof(MeisoMaxAlign), &value.required)) {
         return false;
     }
     *out = value;
@@ -615,7 +615,7 @@ MeisoRuntimeStatus meiso_runtime_private_blob_tx_preflight(const MeisoRuntime *r
 
 size_t meiso_runtime_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 
 size_t meiso_runtime_memory_required(const MeisoRuntimeConfig *config)

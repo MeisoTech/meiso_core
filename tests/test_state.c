@@ -22,7 +22,7 @@ _Static_assert(sizeof(MeisoStatePublishStatus) == sizeof(uint8_t), "fixed status
     } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[1024];
 } TestArena;
 
@@ -96,7 +96,7 @@ static void test_init_contract(void)
     MeisoStateReplica *replica = (MeisoStateReplica *)(uintptr_t)1U;
     size_t required = meiso_state_publisher_memory_required(&descriptor, &config);
 
-    CHECK(meiso_state_alignment_required() >= _Alignof(max_align_t));
+    CHECK(meiso_state_alignment_required() >= _Alignof(MeisoMaxAlign));
     CHECK(required > 0U);
     CHECK(meiso_state_publisher_init(
         arena.bytes + 1U, sizeof(arena.bytes) - 1U, &descriptor, &config, &publisher

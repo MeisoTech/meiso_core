@@ -6,6 +6,11 @@ meiso_add_c_test(
     runtime
     meiso_composition_profile
 )
+if(MSVC)
+    # This test keeps a 0.75 MiB RuntimePair on main's stack plus up to
+    # 1.1 MiB of nested arena fixtures. Windows' default 1 MiB is too small.
+    target_link_options(meiso_runtime_v4_test PRIVATE /STACK:4194304)
+endif()
 meiso_add_c_test(
     meiso_composition_media_transport_test
     tests/test_composition_media_transport.c
@@ -109,6 +114,16 @@ if(TARGET meiso_posix_tcp_adapter)
             PRIVATE profiles/internal/composition_v2
         )
     endif()
+endif()
+
+if(TARGET meiso_windows_tcp_adapter)
+    meiso_add_c_test(meiso_wifi_runtime_tcp_test tests/test_wifi_runtime_tcp.c
+        integration meiso_windows_tcp_adapter meiso_wifi_telemetry_profile)
+    add_executable(meiso_windows_udp_test tests/test_windows_udp.c tests/windows_udp_test_adapter.c)
+    target_link_libraries(meiso_windows_udp_test PRIVATE meiso_display_ingress_media_transport ws2_32)
+    meiso_enable_warnings(meiso_windows_udp_test)
+    meiso_register_target_test(meiso_windows_udp_test "adapter")
+    set_tests_properties(meiso_windows_udp_test meiso_wifi_runtime_tcp_test PROPERTIES TIMEOUT 30)
 endif()
 
 if(TARGET meiso_four_kind_lab)

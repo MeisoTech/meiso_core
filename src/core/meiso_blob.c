@@ -299,7 +299,7 @@ static void record_reentrant_rejection(MeisoBlobStore *store)
 
 size_t meiso_blob_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 
 size_t meiso_blob_store_memory_required(

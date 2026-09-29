@@ -33,22 +33,22 @@ enum {
 };
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[65536];
 } SessionArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[300000];
 } RuntimeArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[1024];
 } StateArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[1100000];
 } BlobArena;
 
@@ -975,11 +975,11 @@ static bool test_v2_v3_layout_regression(
     CHECK(runtime == NULL && bytes_are(
         short_arena.bytes, 0x3c, sizeof(short_arena.bytes)
     ));
-    CHECK(MEISO_RUNTIME_WIRE_VERSION_V2 == 2U &&
+    _Static_assert(MEISO_RUNTIME_WIRE_VERSION_V2 == 2U &&
           MEISO_RUNTIME_WIRE_VERSION_V3 == 3U &&
           MEISO_RUNTIME_WIRE_VERSION_V4 == 4U &&
           MEISO_RUNTIME_V3_BLOB_BEGIN_WIRE_SIZE == 120U &&
-          MEISO_RUNTIME_V4_ROUTE_RECORD_WIRE_SIZE == 80U);
+          MEISO_RUNTIME_V4_ROUTE_RECORD_WIRE_SIZE == 80U, "runtime wire constants");
     return true;
 }
 

@@ -217,6 +217,17 @@ unset(difi_forbidden_artifacts)
 unset(difi_prefix)
 unset(difi_stage)
 
+if(WIN32)
+    set(windows_stage "${MEISO_TEST_ROOT}/windows-stage")
+    set(windows_prefix "${MEISO_TEST_ROOT}/windows-relocated")
+    foreach(component Core Runtime Profiles Windows)
+        meiso_install_component(${component} "${windows_stage}")
+    endforeach()
+    file(RENAME "${windows_stage}" "${windows_prefix}")
+    meiso_build_consumer(windows-consumer
+        "${MEISO_SOURCE_DIR}/tests/installed-consumers/windows" "${windows_prefix}")
+endif()
+
 if(NOT MEISO_LEGACY)
     set(product_prefix "${MEISO_TEST_ROOT}/product-default")
     meiso_run("${CMAKE_COMMAND}" --install "${MEISO_BUILD_DIR}" --prefix "${product_prefix}")

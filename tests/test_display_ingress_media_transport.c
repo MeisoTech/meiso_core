@@ -19,7 +19,7 @@
 } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[TEST_ARENA_CAPACITY];
 } TestArena;
 
@@ -211,7 +211,7 @@ static bool initialize_pair_policies(
     CHECK(meiso_display_ingress_media_transport_memory_required(
               &pair->host_config, &pair->host_bytes, &alignment
           ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
-    CHECK(alignment == alignof(max_align_t));
+    CHECK(alignment == alignof(MeisoMaxAlign));
     CHECK(pair->host_bytes <= sizeof(pair->host_arena.bytes));
     CHECK(meiso_display_ingress_media_transport_memory_required(
               &pair->edge_config, &pair->edge_bytes, &alignment
@@ -384,7 +384,7 @@ static bool test_memory_init_exact_profile_and_alias_contract(void)
               &config, &required, &alignment
           ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
     CHECK(required == 2048U + 2U * 32U + 224U + 8U);
-    CHECK(alignment == alignof(max_align_t));
+    CHECK(alignment == alignof(MeisoMaxAlign));
     CHECK(meiso_display_ingress_media_transport_memory_required(
               &config, &aliased, &aliased
           ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_INVALID_ARGUMENT);

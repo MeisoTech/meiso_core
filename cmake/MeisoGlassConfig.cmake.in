@@ -9,6 +9,7 @@ set(
     Profiles
     DisplayIngressHostFixtureInput
     Posix
+    Windows
 )
 if(@MEISO_BUILD_LEGACY_COMPOSITION@)
     list(APPEND MeisoGlass_SUPPORTED_COMPONENTS Client Composition Simulation Control Host)
@@ -33,6 +34,7 @@ set(MeisoGlass_Profiles_FOUND FALSE)
 set(MeisoGlass_DisplayIngressHostFixtureInput_FOUND FALSE)
 set(MeisoGlass_Client_FOUND FALSE)
 set(MeisoGlass_Posix_FOUND FALSE)
+set(MeisoGlass_Windows_FOUND FALSE)
 set(MeisoGlass_Composition_FOUND FALSE)
 set(MeisoGlass_Simulation_FOUND FALSE)
 set(MeisoGlass_Control_FOUND FALSE)
@@ -44,6 +46,7 @@ set(want_Profiles FALSE)
 set(want_DisplayIngressHostFixtureInput FALSE)
 set(want_Client FALSE)
 set(want_Posix FALSE)
+set(want_Windows FALSE)
 set(want_Composition FALSE)
 set(want_Simulation FALSE)
 set(want_Control FALSE)
@@ -77,7 +80,7 @@ if(want_Composition)
     set(want_Profiles TRUE)
     set(want_Runtime TRUE)
 endif()
-if(want_Posix)
+if(want_Posix OR want_Windows)
     set(want_Profiles TRUE)
 endif()
 if(want_Profiles)
@@ -95,6 +98,7 @@ foreach(component
         DisplayIngressHostFixtureInput
         Client
         Posix
+        Windows
         Composition
         Simulation
         Control
@@ -127,6 +131,7 @@ unset(want_Profiles)
 unset(want_DisplayIngressHostFixtureInput)
 unset(want_Client)
 unset(want_Posix)
+unset(want_Windows)
 unset(want_Composition)
 unset(want_Simulation)
 unset(want_Control)

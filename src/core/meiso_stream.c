@@ -335,7 +335,7 @@ static bool admission_comparable(const MeisoStreamAdmission *admission)
 
 size_t meiso_stream_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 
 size_t meiso_stream_memory_required(

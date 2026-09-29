@@ -38,7 +38,9 @@ int main(void)
     CHECK(meiso_display_planes_capability_encode(&c, (MeisoMutableBuffer){b, 64}));
     CHECK(b[3] == 0x80 && b[2] == 0x07 && b[7] == 0x38 && b[8] == 1 && b[10] == 16 && b[11] == 4 && b[41] == 30);
     CHECK(b[20] == 0xbe && b[24] == 0x3e); /* -0.4363f, +0.4363f big-endian sign bytes */
-    CHECK(meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd) && !memcmp(&c, &cd, sizeof(c)));
+    CHECK(meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
+    /* Compare the canonical wire, not unspecified struct padding bytes. */
+    CHECK(meiso_display_planes_capability_encode(&cd, (MeisoMutableBuffer){c2, 64}) && !memcmp(b, c2, 64));
     b[50] = 1; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd)); b[50] = 0;
     MeisoDisplayPlanesCapability bad = c; bad.ipd_m = 0.06f;
     CHECK(!meiso_display_planes_capability_encode(&bad, (MeisoMutableBuffer){c2, 64}));
@@ -89,7 +91,7 @@ int main(void)
     CHECK(!meiso_display_planes_model_bytes(&x)); /* no stream plane but a video reference */
     x.video_desired_version = 0; CHECK(meiso_display_planes_model_bytes(&x) && meiso_display_planes_model_image_count(&x) == 2);
     x = m; x.apps[0].name[1] = '\n'; CHECK(!meiso_display_planes_model_bytes(&x));
-    x = m; x.apps[1].name[1] = (char)0xff; CHECK(!meiso_display_planes_model_bytes(&x));
+    x = m; memset(&x.apps[1].name[1], 0xff, 1); CHECK(!meiso_display_planes_model_bytes(&x));
     x = m; x.apps[0].name[5] = 'x'; CHECK(!meiso_display_planes_model_bytes(&x));
     x = m; x.plane_count = 0; x.video_desired_version = 0; CHECK(meiso_display_planes_model_bytes(&x) == 32 + 80);
 

@@ -18,17 +18,17 @@
     } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[65536U];
 } SessionArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[65536U];
 } RuntimeArena;
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[2048U];
 } StateArena;
 
@@ -535,10 +535,10 @@ static bool test_catalog_contract(Catalog *catalog)
         untouched.endpoints, 1U, untouched.routes, 4U
     ) == MEISO_DISPLAY_INGRESS_PROFILE_INVALID_VALUE);
     CHECK(bytes_are((const uint8_t *)&untouched, 0x5a, sizeof(untouched)));
-    CHECK(MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_WIRE_SIZE == 428U &&
+    _Static_assert(MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_WIRE_SIZE == 428U &&
           MEISO_DISPLAY_INGRESS_PROFILE_MAX_RUNTIME_PAYLOAD_BYTES == 4180U &&
           MEISO_DISPLAY_INGRESS_PROFILE_MAX_SESSION_FRAME_BYTES == 4224U &&
-          MEISO_DISPLAY_INGRESS_PROFILE_MAX_REGISTRY_ENTRIES == 5U);
+          MEISO_DISPLAY_INGRESS_PROFILE_MAX_REGISTRY_ENTRIES == 5U, "profile wire limits");
     return true;
 }
 

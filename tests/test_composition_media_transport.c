@@ -17,7 +17,7 @@
 } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[TEST_ARENA_CAPACITY];
 } TestArena;
 
@@ -240,7 +240,7 @@ static bool initialize_pair(MediaPair *pair, bool handshake)
     CHECK(meiso_composition_media_transport_memory_required(
               &pair->host_config, &pair->host_bytes, &alignment
           ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_OK);
-    CHECK(alignment == alignof(max_align_t));
+    CHECK(alignment == alignof(MeisoMaxAlign));
     CHECK(pair->host_bytes <= sizeof(pair->host_arena.bytes));
     CHECK(meiso_composition_media_transport_memory_required(
               &pair->edge_config, &pair->edge_bytes, &alignment
@@ -505,7 +505,7 @@ static bool test_memory_init_and_validation_contract(void)
     MeisoCompositionMediaTransport *zero_mask_transport_before =
         zero_mask_transport;
     union {
-        max_align_t alignment;
+        MeisoMaxAlign alignment;
         MeisoCompositionMediaTransportConfig config;
         size_t size;
     } config_alias;
@@ -516,7 +516,7 @@ static bool test_memory_init_and_validation_contract(void)
     CHECK(required == MEISO_COMPOSITION_MEDIA_TRANSPORT_METADATA_BYTES +
               2U * (8U + 6U) +
               MEISO_COMPOSITION_MEDIA_FRAME_HEADER_WIRE_SIZE + 3U);
-    CHECK(alignment == alignof(max_align_t));
+    CHECK(alignment == alignof(MeisoMaxAlign));
     CHECK(meiso_composition_media_transport_memory_required(
               &config, &required, &required
           ) == MEISO_COMPOSITION_MEDIA_TRANSPORT_INVALID_ARGUMENT);

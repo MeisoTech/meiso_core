@@ -13,7 +13,7 @@
 #define TEST_ENVELOPE_HEADER_SIZE 24U
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[4096];
 } FixedArena;
 

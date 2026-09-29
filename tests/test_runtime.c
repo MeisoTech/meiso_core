@@ -19,7 +19,7 @@
     } while (0)
 
 typedef union {
-    max_align_t alignment;
+    MeisoMaxAlign alignment;
     uint8_t bytes[65536];
 } TestArena;
 

@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+/* C11 flexible array members, supported by MSVC but diagnosed as C4200. */
+#pragma warning(push)
+#pragma warning(disable: 4200)
+#endif
 struct MeisoStatePublisher {
     MeisoResourceDescriptor descriptor;
     MeisoStateConfig config;
@@ -31,6 +36,9 @@ struct MeisoStateReplica {
     bool has_value;
     uint8_t payload[];
 };
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 static bool state_descriptor_valid(const MeisoResourceDescriptor *descriptor)
 {
@@ -121,7 +129,7 @@ static void replica_view(const MeisoStateReplica *replica, MeisoStateView *out_v
 
 size_t meiso_state_alignment_required(void)
 {
-    return _Alignof(max_align_t);
+    return _Alignof(MeisoMaxAlign);
 }
 
 size_t meiso_state_publisher_memory_required(
