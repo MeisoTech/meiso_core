@@ -110,7 +110,7 @@ int main(void)
     CHECK(meiso_display_planes_status_decode((MeisoByteView){b, 16}, &sd) && sd.generation == 7 && sd.waiting == 1);
     b[12] = 1; CHECK(!meiso_display_planes_status_decode((MeisoByteView){b, 16}, &sd));
     s.generation = 0; CHECK(!meiso_display_planes_status_encode(&s, (MeisoMutableBuffer){b, 16}));
-    MeisoDisplayPlanesEvidence e = {MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP, 2, 0, 7, 9, {0}}, ed;
+    MeisoDisplayPlanesEvidence e = {MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP, 2, 0, 7, 9, {0}, 0}, ed;
     memset(e.model_sha256, 0x5a, 32);
     CHECK(meiso_display_planes_evidence_encode(&e, (MeisoMutableBuffer){b, 64}) && b[0] == 2 && b[15] == 7 && b[23] == 9 && b[55] == 0x5a);
     CHECK(meiso_display_planes_evidence_decode((MeisoByteView){b, 64}, &ed) && ed.drawn == 2 && ed.desired_version == 9);
@@ -166,7 +166,7 @@ int main(void)
     memset(&sc, 0, sizeof(sc));
     sc.local_role = MEISO_SESSION_ROLE_EDGE; sc.local_peer_id = (MeisoPeerId){11, 12}; sc.expected_peer_id = (MeisoPeerId){21, 22};
     sc.local_incarnation = 1; sc.local_nonce = (MeisoSessionNonce){3, 4}; sc.protocol = (MeisoProtocolVersion){1, 0};
-    CHECK(meiso_display_planes_configure_session(&sc) && sc.profile.version == 12 && sc.limits.max_registry_entries == 23); /* with input (§11) */
+    CHECK(meiso_display_planes_configure_session(&sc) && sc.profile.version == 12 && sc.limits.max_registry_entries == 24); /* section 14 */
     printf("display ingress planes v12: ok\n");
     return 0;
 }

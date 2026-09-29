@@ -22,6 +22,8 @@ extern "C" {
 #define MEISO_DISPLAY_INGRESS_PROFILE_DESIRED_WIRE_SIZE 12U
 #define MEISO_DISPLAY_INGRESS_PROFILE_ACTUAL_WIRE_SIZE 32U
 #define MEISO_DISPLAY_INGRESS_PROFILE_EVIDENCE_WIRE_SIZE 64U
+#define MEISO_DISPLAY_INGRESS_XR_EVIDENCE_WIRE_SIZE 72U
+#define MEISO_DISPLAY_INGRESS_MAX_EVIDENCE_WIRE_SIZE 72U
 #define MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_WIRE_SIZE 428U
 #define MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION 4096U
 #define MEISO_DISPLAY_INGRESS_PROFILE_MAX_FRAME_RATE_MILLIHZ 240000U
@@ -50,7 +52,8 @@ enum {
 typedef uint8_t MeisoDisplayIngressEvidenceClass;
 enum {
     MEISO_DISPLAY_INGRESS_EVIDENCE_SIMULATED = 1,
-    MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP = 2
+    MEISO_DISPLAY_INGRESS_EVIDENCE_DRM_KMS_PAGE_FLIP = 2,
+    MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED = 3
 };
 
 typedef uint32_t MeisoDisplayIngressEvidenceClassMask;
@@ -58,7 +61,9 @@ enum {
     MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_SIMULATED = UINT32_C(1) << 0U,
     MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_DRM_KMS_PAGE_FLIP =
         UINT32_C(1) << 1U,
-    MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_ALL = UINT32_C(0x00000003)
+    MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_ALL = UINT32_C(0x00000003),
+    /* Legacy masks retain their meaning. XR is exclusive and v12-only. */
+    MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_XR_FRAME_SUBMITTED = UINT32_C(1) << 2U
 };
 
 typedef uint8_t MeisoDisplayIngressConnectorKind;
@@ -106,7 +111,8 @@ typedef struct {
     MeisoDisplayIngressActual effective;
 } MeisoDisplayIngressActualStateView;
 
-/* source_time in the containing Core Stream sample is the present time. */
+/* source_time is the presentation time for classes 1/2; for class 3 it is
+ * the accepted submission time (physical=false), on Edge clock epoch 4. */
 typedef struct {
     MeisoDisplayIngressEvidenceClass evidence_class;
     MeisoDisplayIngressConnectorKind connector_kind;
@@ -118,6 +124,7 @@ typedef struct {
         uint8_t input_frame_sha256[32U];
         uint8_t input_rgba_sha256[32U]; /* RAW v1 source compatibility. */
     };
+    uint64_t predicted_display_time_ns; /* class 3 only, nonzero; legacy zero */
 } MeisoDisplayIngressPresentationEvidence;
 
 typedef struct {

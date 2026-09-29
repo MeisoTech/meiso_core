@@ -4,25 +4,28 @@
 #include <meiso/profiles/composition/profile.h>
 #include <meiso/profiles/display_ingress/tracking.h>
 #include <meiso/profiles/display_ingress/input.h>
+#include <meiso/profiles/display_ingress/local_pose.h>
+#include <meiso/profiles/display_ingress/views.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 /* Application Profile v12: planes in space (planes-v12.md). Display (v2 H.264,
  * a texture source), planes (model/status/evidence/image Blob), optional camera,
- * optional tracking (IMU up, head pose down; tracking.h), optional input (keys up; input.h). */
+ * optional Host tracking OR Edge local pose, optional input, optional independent views. */
 enum {
     MEISO_DISPLAY_PLANES_PROFILE_VERSION = 12,
-    MEISO_DISPLAY_PLANES_MAX_ENDPOINTS = 5,
+    MEISO_DISPLAY_PLANES_MAX_ENDPOINTS = 6,
     MEISO_DISPLAY_PLANES_MAX_ROUTES = 18,
     /* Session registry sizes (endpoints + routes) at which each optional endpoint fits: a peer from
      * before §10 negotiates 14 (3 + 11), one from before §11 negotiates 19 (4 + 15). */
     MEISO_DISPLAY_PLANES_TRACKING_REGISTRY = 4 + 15,
     MEISO_DISPLAY_PLANES_INPUT_REGISTRY = 5 + 18,
+    MEISO_DISPLAY_PLANES_EDGE_REGISTRY = 6 + 18,
     MEISO_DISPLAY_PLANES_ROUTE_MODEL = 4,
     MEISO_DISPLAY_PLANES_ROUTE_STATUS = 5,
     MEISO_DISPLAY_PLANES_ROUTE_EVIDENCE = 6,
     MEISO_DISPLAY_PLANES_ROUTE_IMAGE = 7,
-    MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES = 208,
+    MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES = 352,
     MEISO_DISPLAY_PLANES_CAPABILITY_BYTES = 64,
     MEISO_DISPLAY_PLANES_MAX_PLANES = 16,
     MEISO_DISPLAY_PLANES_MAX_APPS = 8,
@@ -38,10 +41,11 @@ enum {
     MEISO_DISPLAY_PLANES_NO_APP = 0xff
 };
 typedef uint8_t MeisoDisplayPlanesViewLayout;
-enum { MEISO_DISPLAY_PLANES_VIEW_MONO = 1, MEISO_DISPLAY_PLANES_VIEW_SIDE_BY_SIDE = 2 };
+enum { MEISO_DISPLAY_PLANES_VIEW_MONO = 1, MEISO_DISPLAY_PLANES_VIEW_SIDE_BY_SIDE = 2,
+    MEISO_DISPLAY_PLANES_VIEW_RUNTIME_VIEWS = 3 };
 typedef uint8_t MeisoDisplayPlanesTracking;
 enum { MEISO_DISPLAY_PLANES_TRACKING_NONE = 0, MEISO_DISPLAY_PLANES_TRACKING_ROTATION = 1,
-    MEISO_DISPLAY_PLANES_TRACKING_POSE = 2 };
+    MEISO_DISPLAY_PLANES_TRACKING_POSE = 2, MEISO_DISPLAY_PLANES_TRACKING_EDGE = 3 };
 typedef uint8_t MeisoDisplayPlanesAnchor;
 enum { MEISO_DISPLAY_PLANES_ANCHOR_HEAD = 1, MEISO_DISPLAY_PLANES_ANCHOR_WORLD = 2 };
 typedef uint8_t MeisoDisplayPlanesSource;
@@ -83,6 +87,7 @@ typedef struct {
     uint8_t plane_count, app_count, focused_app;
     MeisoDisplayPlanesApp apps[MEISO_DISPLAY_PLANES_MAX_APPS];
     MeisoDisplayPlane planes[MEISO_DISPLAY_PLANES_MAX_PLANES];
+    uint32_t world_epoch; /* nonzero for EDGE tracking, zero otherwise */
 } MeisoDisplayPlanesModel;
 
 typedef struct {
@@ -95,6 +100,7 @@ typedef struct {
     uint8_t drawn, waiting;
     uint64_t generation, desired_version;
     uint8_t model_sha256[32];
+    uint64_t predicted_display_time_ns; /* nonzero only for XR_FRAME_SUBMITTED */
 } MeisoDisplayPlanesEvidence;
 
 /* Codecs: inputs and outputs must be disjoint; failure leaves outputs unchanged. */
@@ -128,11 +134,15 @@ typedef struct {
     MeisoDisplayPlanesCapability planes;
     bool camera_enabled;
     MeisoCompositionMediaCapability camera;
-    /* With tracking, planes.tracking is POSE; without it, NONE. */
+    /* Host tracking: POSE; Edge local pose: EDGE; neither: NONE. */
     bool tracking_enabled;
     MeisoDisplayTrackingCapability tracking;
     bool input_enabled;
     MeisoDisplayInputCapability input;
+    bool local_pose_enabled; /* mutually exclusive with tracking_enabled */
+    MeisoDisplayLocalPoseCapability local_pose;
+    bool views_enabled; /* iff view_layout == RUNTIME_VIEWS */
+    MeisoDisplayViewsCapability views;
 } MeisoDisplayPlanesCatalogConfig;
 
 /* Tracking routes, in catalog order after the camera's: Desired, Actual, IMU, pose. */
@@ -144,6 +154,8 @@ enum {
 };
 /* Index of the first tracking route in a catalog built from this configuration. */
 size_t meiso_display_planes_tracking_route_base(const MeisoDisplayPlanesCatalogConfig *);
+/* Local pose occupies the same position as Host tracking (three routes). */
+size_t meiso_display_planes_local_pose_route_base(const MeisoDisplayPlanesCatalogConfig *);
 /* Input routes, in catalog order after tracking's: Desired, Actual, key events. */
 enum {
     MEISO_DISPLAY_INPUT_ROUTE_DESIRED = 0,
@@ -160,8 +172,11 @@ bool meiso_display_planes_session_allows_tracking(const MeisoSession *);
 /* A READY Session whose peer can hold the input endpoint too (planes-v12.md §11): one from before it
  * negotiates 19, and the Edge then leaves input out. */
 bool meiso_display_planes_session_allows_input(const MeisoSession *);
+/* The caller must require this before offering/accepting any section 14
+ * extension (local pose, runtime views or XR evidence). No fake fallback. */
+bool meiso_display_planes_session_allows_edge_extensions(const MeisoSession *);
 /* max_image_bytes sizes the Runtime Blob admission (and Edge reassembly). The registry is sized to
- * what the Session allows: with input and tracking, tracking only, or neither. */
+ * what the Session allows: registry 24/23/19/14 retain distinct capacities. */
 bool meiso_display_planes_configure_runtime(MeisoRuntimeV4Config *, MeisoSession *, uint32_t max_image_bytes);
 bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *, MeisoMutableBuffer capability_storage,
     MeisoRuntimeEndpointDescriptor *, size_t, MeisoRuntimeV4RouteDescriptor *, size_t);

@@ -11,6 +11,8 @@
 > 早于此的 Edge 不释放图，并按原来的校验拒收含 `opacity` 0 的模型（Host 这时改用撤平面，§7）。
 > 同日（meiso_host #73）：系统平面（`app` 为 NO_APP）画在 APP 平面之后，准星先取系统平面（§5、§11）。
 > bytes 不变；早于此的 Edge 只按距离画。
+> 2026-09-29 草案：§14 增加 Edge 自定位、独立视图与 XR 提交证据。保持 Profile v12，
+> 旧枚举与布局的行为不变；新增行为必须由显式能力选择。本分支待两端 owner/Kache 审阅。
 
 ## 1. 解决什么
 
@@ -25,18 +27,22 @@ Loop 1 验收后 v12 是唯一往前走的显示路径：v9/v10 不再加功能�
 
 ## 2. Resource Graph
 
-一个 Catalog 最多五个 endpoint，顺序固定：
+基线 Catalog 最多五个 endpoint，顺序固定；§14 的独立视图可增加一个只含能力的 endpoint：
 
 | endpoint | route | owner / kind / facet | delivery | schema | 含义 |
 |---|---|---|---|---|---|
-| 显示 `DISPLAY_/INGR_END` | 4 条，与 v2 完全相同 | — | — | `DISP_SCH/CAPABIL_:v2`（32 B） | 串流：H.264 独立帧（v2），作为平面的**纹理**，不再直接上屏 |
+| 显示 `DISPLAY_/INGR_END` | 4 条，与 v2 相同，XR 证据见 §14 | — | — | `DISP_SCH/CAPABIL_:v2`（32 B） | 串流：H.264 独立帧（v2），作为平面的**纹理**，不再直接上屏 |
 | 平面 `DISPLAY_/PLAN_END` | `DISPLAY_/PLN_DES_` | Host / State / DESIRED | inline | `DISP_SCH/PLN_MODL:v1` | 平面模型（完整值） |
 | | `DISPLAY_/PLN_ACT_` | Edge / State / ACTUAL | inline | `DISP_SCH/PLN_STAT:v1` | 已应用的模型与来源就绪情况 |
-| | `DISPLAY_/PLN_PRES` | Edge / Stream / DATA | inline | `DISP_SCH/PLN_PRES:v1` | 模型首次上屏的证据 |
+| | `DISPLAY_/PLN_PRES` | Edge / Stream / DATA | inline | `DISP_SCH/PLN_PRES:v1` | 按会话声明的类别报告模型呈现或提交（§6、§14） |
 | | `DISPLAY_/PLN_IMG_` | Host / Blob / IMMUTABLE | inline | `DISP_SCH/PLN_JPEG:v1` | 静态图，内容寻址（SHA-256） |
 | 相机（可选） | 3 条，与 v9 相同 | — | — | — | 不变 |
 | 跟踪（可选）`DISPLAY_/TRCK_END` | 4 条，见 §10 | — | — | — | IMU 上行、头部位姿下行 |
 | 输入（可选）`DISPLAY_/INPT_END` | 3 条，见 §11 | — | — | — | 按键上行 |
+
+§14 的“眼镜自带定位”与上表跟踪互斥，放在相同位置；视图描述放在所有上述 endpoint 之后。
+本页“翻页/上屏”及从后续 AU 推断旧 AU 离屏的规则适用于原证据类别；XR 类别严格按 §14.3
+使用提交接受里程碑，不把提交解释为物理呈现或确定离屏。
 
 显示与平面两个 endpoint 必选，相机、跟踪、输入可选，出现时按上表的顺序。平面 endpoint 的 capability 是 `DISP_SCH/PLN_CAP_:v1`（64 B）。
 所有 endpoint 共用本次设备 incarnation。缺项、多项、乱序、schema 或 delivery 不符，整个 Catalog 拒绝。
@@ -70,8 +76,8 @@ STREAM 平面不再画、计为等待；等一帧不含它们的画面真实翻�
 ```text
 0..3    output_width            u32  1..4096，整块输出的像素
 4..7    output_height           u32  1..4096
-8       view_layout             u8   1 = MONO（一个视图覆盖整块输出）；2 = SIDE_BY_SIDE（左右两半各一眼）
-9       tracking                u8   0 = NONE；1 = ROTATION（保留，不用）；2 = POSE。有跟踪 endpoint 时为 POSE，没有时为 NONE
+8       view_layout             u8   1 = MONO；2 = SIDE_BY_SIDE；3 = RUNTIME_VIEWS（§14）
+9       tracking                u8   0 = NONE；1 = ROTATION（保留，不用）；2 = POSE（§10）；3 = EDGE（§14）
 10      max_planes              u8   1..16
 11      max_images              u8   1..8，Edge 同时持有的不同静态图最多几张（§7）
 12..15  max_image_bytes         u32  1..1048576，一张图（JPEG）的字节上限，也是图 Blob 路由的 payload 上限
@@ -83,6 +89,8 @@ STREAM 平面不再画、计为等待；等一帧不含它们的画面真实翻�
 42..63  reserved                全零
 ```
 
+MONO 为一个视图覆盖整块输出，SIDE_BY_SIDE 为左右两半各一眼；两者的输出尺寸、FOV/IPD
+仍按上表解释。RUNTIME_VIEWS 的旧几何字段须为 +0，独立视图定义见 §14.2。
 FOV 与 IPD 描述 Edge 实际用来投影的视图，Host 据此把平面摆进视野；它不是光学标定结论。
 浮点均为 IEEE-754 binary32 大端，必须有限。
 
@@ -96,8 +104,13 @@ FOV 与 IPD 描述 Edge 实际用来投影的视图，Host 据此把平面摆进
 16      plane_count  P          u8   0..16；0 表示清空
 17      app_count    A          u8   0..8
 18      focused_app             u8   0xFF 表示无；否则 < A。HUD 显示它的名字
-19..31  reserved                全零
+19..23  reserved                全零
+24..27  world_epoch             u32  EDGE 时非零，其他 tracking 时零（§14）
+28..31  reserved                全零
 ```
+
+旧模式仍要求 19..31 全零。
+非 EDGE 会话的 24..27 必须保持零，由能力相关的模型准入检查验证。
 
 APP 表，每项 40 B，顺序即下标：
 
@@ -152,6 +165,7 @@ WORLD 平面在 Host 的世界坐标系里（§5）。平面中心在 `position`
 - `tracking=NONE`（0DoF）：头部位姿恒为单位，WORLD 平面看起来与 HEAD 相同。
 - `tracking=POSE`：WORLD 平面按显示时刻的头部位姿变换（§10）；HEAD 平面和 HUD 不受影响。
   `ROTATION` 保留不用（S-025 不做 3DoF）。
+- `tracking=EDGE`：位姿由 Edge 本地计算，按 §14 的 world_epoch 和有效性决定 WORLD 是否绘制。
 - STREAM 平面画当前最新解出的一帧，第一帧到之前不画。IMAGE 平面在图到齐并解码后才画。
 
 ## 6. 状态与证据
@@ -188,6 +202,7 @@ Actual 后缀 16 B：
 
 一个 generation 第一次被合成进已翻页的缓冲时发一次；此后 `drawn`/`waiting` 变化再发一次。
 证据只在真实翻页（或桌面的软件完成）之后发，不以收到、校验通过代替。
+选择 `XR_FRAME_SUBMITTED` 的会话改用 §14 的提交里程碑，不能把它解释成翻页。
 
 视频呈现的顺序（meiso_core #36）：
 - 同一媒体绑定（media stream epoch）内，Edge 只让串流往前走：`frame_sequence` 不大于已发布 AU 的帧不再发布；
@@ -245,7 +260,7 @@ TCP 的重传间隔逐次翻倍，卡 S 秒后控制连接可能要到开始卡�
 | 模型 | ≤ 1888 B/次，≤ `max_updates_per_second` 次/秒 |
 | 静态图 | ≤ `max_image_bytes`/张，4096 B 一块 Blob chunk |
 | 串流 | 与 v2 相同：独立帧 H.264，大小与帧率由显示 Desired 和 AU 上限决定 |
-| Runtime | 5 endpoint、18 route（Session registry 23）、capability 208 B、Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §11 时 Session 协商成 19，Runtime 按 4 endpoint、15 route 配，Edge 不放输入 endpoint；对端早于 §10 时协商成 14，按 3 endpoint、11 route 配，跟踪与输入都不放 |
+| Runtime | 基线 5 endpoint、18 route（Session registry 23）、capability 208 B；§14 扩展至 6/18、registry 24、352 B。Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §11 时协商 19，Runtime 按 4/15 配，不放输入；早于 §10 时协商 14，按 3/11 配，跟踪与输入都不放 |
 | IMU（§10） | 200 Hz × 32 B = 6.4 KB/s；每批 8 个时约 25 条/秒 |
 | 位姿（§10） | Host 自定，建议跟相机帧（约 30 Hz），≤ 200 Hz；72 B/条 |
 | 按键（§11） | 人按键的速度，24 B/条；积压最多 32 条 |
@@ -458,4 +473,138 @@ stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切�
     REJECTED 以后 Host 不减账，新图等到有模型应用后再送，不被拒。
   - 隐藏（`opacity` 0）的平面不画、不是准星下的平面，它的图不释放；再显示不重送图。
   - 对着早于本条的 Edge，Host 改用撤平面：含隐藏平面的模型被拒以后，去掉隐藏平面的模型被应用，显示、收起照常。
-  - 板上（meiso_host #71）：系统面板反复更新几十次，每次都上屏，Session 不重建；收起再打开不重送图。
+- 板上（meiso_host #71）：系统面板反复更新几十次，每次都上屏，Session 不重建；收起再打开不重送图。
+
+## 14. Edge 自定位、独立视图与 XR 提交（草案）
+
+本节对应 meiso_vr #1 的 Kache 09-29 裁定。在 v12 原地扩展；不建立 VR 专用 Profile。
+§3 的 `tracking=3 EDGE`、`view_layout=3 RUNTIME_VIEWS` 及显示 capability 的
+`evidence_class_mask=4`（bit 2：`XR_FRAME_SUBMITTED=3`）均为显式选择。旧的 NONE/POSE、
+MONO/SIDE_BY_SIDE、SIMULATED/DRM_KMS_PAGE_FLIP 的解释、字节和行为保持。
+旧端对这些新增值、位或模型保留区明确拒绝，不得降级成 NONE/MONO/DRM 后继续。
+
+### 14.1 眼镜自带定位
+
+endpoint 为 `DISPLAY_/LPOSEEND`，capability schema `DISP_SCH/LPS_CAP_:v1`，16 B：
+0..1 是大端 u16 `max_samples_per_second`，1..200；2..15 保留为零。
+它与 §10 `TRCK_END` 互斥；`tracking=EDGE` 当且仅当存在它，POSE 当且仅当存在 §10。
+定位来源不绑定 VR、OpenXR 或某种传感器；本轮 K230D 不实现此 endpoint。
+
+| route | owner / kind / facet | schema | payload |
+|---|---|---|---|
+| `DISPLAY_/LPS_DES_` | Host / State / DESIRED | `DISP_SCH/LPS_DESI:v1` | Runtime prefix + 16 B |
+| `DISPLAY_/LPS_ACT_` | Edge / State / ACTUAL | `DISP_SCH/LPS_STAT:v1` | Runtime prefix + 16 B |
+| `DISPLAY_/LPS_POSE` | Edge / Stream / DATA | `DISP_SCH/LPS_POSE:v1` | 72 B |
+
+全部 inline。Desired 后缀 byte 0 `enabled` 为 0/1，其余零；关闭只停止上行，
+不关闭 Edge 为显示而运行的本地定位。Actual 后缀 byte 0 `state` 为 0 OFF、1 RUNNING、
+2 FAILED，其余零；OFF 对应 production STOPPED、FAILED 对应 production FAILED，
+两者 gate 关闭，RUNNING 建立非零 production epoch。Desired/Actual delivery generation
+分别为 19/20；位姿 stream epoch 为 1、序号递增，使用当前 Actual 的 production epoch。
+实际配置或服务状态改变才换 Actual/production epoch；短暂失跟踪通过位姿 LOST 表示。
+
+位姿复用 §10 的 72 B 数值布局、坐标系与校验，使用独立的 Edge-owned schema/route。
+`time_ns` 是 Edge 单调时钟上所描述的**当前定位时刻**，不得晚于发出时刻；禁止上传
+预测显示时刻的位姿。Edge 本地渲染可以另取预测显示时刻的定位，不绕经 Host。
+只发送最新待发样本，不等业务 ACK、不补发历史，频率不得超过能力上限。
+位置、方向均有效且被跟踪时才报 TRACKING；否则报 LOST，数值仍须有限合法。
+速度不可靠时填零。坏数值、时刻倒退或过期只丢当前记录并计数，不终止 Session；
+Runtime 的 route/producer/production epoch 失配仍按既有 gate 处理。
+
+`world_epoch` 为非零 u32；新 Session 从新的共享世界开始。Edge 管理本地定位空间到共享世界
+的转换。定位参考空间改变时，能保持旧共享世界就更新转换；不能保持则换 epoch、报 LOST。
+模型头 24..27 是大端 u32 `world_epoch`，19..23、28..31 仍为零；EDGE 模型必须非零，
+非 EDGE 必须零。WORLD 只在模型 epoch 与有效定位 epoch 相同且定位新鲜时绘制/求交；
+不匹配或 LOST 时 WORLD 不画、计 waiting，HEAD 保持。隐藏平面仍不计 drawn/waiting。
+Host 收到新 epoch 后重建布局；禁止跨世界插值。长按 BACK 仍由 Host 改模型，不命令运行时 recenter。
+
+位姿、§11 按键、提交和预计显示时刻都属于同一 Edge 时钟（clock epoch 4）。Core 不加对时，
+不认为 Windows 与 WSL 时钟同源。Host 保存原始 Edge 时刻及一次接收/首次发布时刻，供其
+`WindowedClockOffset.observe(Edge time, Host publication time)` 使用；转发不重新打接收时刻。
+offset 是 Edge−Host 的传输窗口估计，known 不代表误差已知，不作为单程延迟证明。
+新 Session 清空时钟估计；world_epoch 改变不表示 Edge 时钟重置。
+
+Host 按会话只选 HeadFusion 或 Edge 位姿一个来源，首页、抓起、摆正和按键解释共用该来源。
+以 Edge 按键时刻查同一 epoch 的历史，候选最多 128 条且最多保留 500 ms；有两侧有效样本
+时插值，否则只用不晚于按键的有效样本。样本年龄超过 500 ms、LOST、Actual OFF/FAILED
+或 epoch 失配时不执行 WORLD 交互，不等未来包补位。HEAD 输入仍可使用 §11 的 target。
+按键 target/generation 来自 Edge 最近一次有效提交所用模型；Host 拒绝已失效模型/世界的目标。
+
+### 14.2 独立视图
+
+`view_layout=RUNTIME_VIEWS` 不存在整块 MONO/SBS 输出栅格。旧 64 B PLN_CAP 的
+output_width、output_height、四个 FOV 与 ipd_m 在此分支必须全为 +0，表示不用这些字段；
+其他布局仍严格按 §3 原范围解释。不能把超出 4096 的推荐尺寸截小或伪报 MONO。
+
+此布局当且仅当有 `DISPLAY_/VIEWSEND` endpoint，schema 为 `DISP_SCH/VWS_CAP_:v1`。
+它只有 immutable capability、没有 route，不需要 Desired/Actual。固定 144 B：
+
+```text
+0       view_count             u8，1..2
+1..15   reserved               全零
+16..79  view[0]                64 B
+80..143 view[1]                64 B；view_count=1 时全部为零
+每个 view：
+0..3    recommended_width      u32，非零，渲染纹理预算信息
+4..7    recommended_height     u32，非零，同上
+8..23   fov_left/right/up/down 4×f32，范围同 §3
+24..35  position x/y/z         3×f32，相对头部视点的米制位置，|分量|≤1
+36..51  orientation x/y/z/w    4×f32，视图→头部的单位四元数，容差同 §4
+52..63  reserved               全零
+```
+
+字段不绑定 OpenXR；未来双目 Edge 可选择它。推荐尺寸不等于光学标定、物理面板分辨率、
+串流尺寸或必须分配的显存；消费者计算预算使用检查过的宽整数且受本机资源上限约束。
+Host 由各视图 FOV 和相对头部的位姿摆平面；Edge 使用本地运行时的实际视图。
+本轮重大视图配置变化重建 Session/Catalog，不另加动态视图状态机。
+max_planes 必须扣掉本地 HUD/准星所需层，只报剩余业务层容量；不把未来合层作为预算前提。
+
+### 14.3 提交证据
+
+显示 capability 的 bit 2 只能在 v12/H.264 选择，且与 bit 0/1 互斥。
+对应的证据类别为 3 `XR_FRAME_SUBMITTED`，物理呈现始终为 false。它证明运行时接受了
+这一版模型和所用 AU；强度与桌面软件完成同级。K230D 的 DRM 证据含义不变。
+
+模型证据仍为 §6 的 64 B；类别 3 使用 56..63 保存大端 u64 `predicted_display_time_ns`，
+必须非零。类别 1/2 的该区域仍全零。提交接受时刻在外层 Core Stream `source_time`，
+clock epoch 为 4；预计显示时刻也属于此时钟，可能早于实际返回时刻，不强制二者的先后。
+
+视频证据在类别 3 时为 **72 B**：沿用 `DISP_SCH/PRES_EVT:v2` 的前 64 B，类别为 3，
+connector_kind 为 UNSPECIFIED，output_width/height 为零（无单一输出栅格），
+64..71 追加非零 `predicted_display_time_ns`。原 `displayed_frame_sequence` 槽位在该类别
+仅表示被提交的 AU sequence，禁止据字段名写成已显示。media epoch/AU SHA-256 保持原位，
+外层 source_time 是提交接受时刻。类别 1/2 仍严格 64 B，不能带追加字段；
+类别 3 严格 72 B，对应视频证据 route 的 payload 上限改为 72，其他会话仍为 64。
+
+模型和 AU 证据只在包含它们的帧被运行时成功接受后发，按提交顺序发送。
+`shouldRender=false`、会话不可见、调用失败、锁屏或对应内容未提交时不发内容成功。
+首次接受新模型/新 AU 发一次，drawn/waiting 变化时模型再发。空模型撤内容也要等实际接受
+清除提交。运行时 swapchain 的 acquire/wait/release 与销毁由 Edge 正确维护。
+
+Host 按会话声明的类别选择完成里程碑：模型进度、有界发送、§7 的资源记账/释放及输入/首页
+操作的 executed 可以以提交为准；不写入物理 PRESENTED 历史，不在报告中称为“上屏”。
+收到新 AU 的提交证据不证明旧 AU 已经离开屏幕；只能把预计显示时刻后的替换标为估计。
+§2 停视频与 §11 黑屏/解锁 Actual 在 XR 会话等待相应清除/恢复提交被接受，不声称屏幕物理
+状态已知；Host 可以暂停/恢复准入，未观察的 AU 仍不能升级为已显示或肯定未显示。
+
+本轮延迟主数为 Host 发出模型→Edge 提交接受的 p50/p95，另报预计显示时刻减提交时刻。
+跨钟映射不足时只报往返上界，并加佩戴实物观察确认内容出现；不要求光子延迟。
+
+### 14.4 容量和失败向量
+
+完整上限为 6 endpoint、18 route、registry 24、capability 352 B。定位与旧跟踪互斥，
+所以自定位的最大全量组合为 6 endpoint/17 route/336 B；无相机的 VR 组合更小。
+新可选项仅在协商 registry≥24 时使用；不足时需要它们的 Edge 明确拒绝本次接入，
+不能假报旧能力。旧端协商 23/19/14 时 Runtime 仍按原来的容量级别配置。
+Desired、模型、JPEG、Blob chunk、Session/Runtime 帧上限不变。
+
+必须验证：旧解码器拒绝每个新增枚举/bit、非零模型 epoch 与 72 B 视频证据；
+旧模式 golden bytes 不变；混用两个定位 endpoint、错 owner/schema/顺序、view_count/保留位/
+FOV/四元数越界、旧布局带视图 endpoint、EDGE 模型 epoch 为零、非 EDGE 模型 epoch 非零、
+类别与证据长度/预测时刻不符，全都拒绝且不改输出。经过真实 Runtime 的错误位姿只丢样本，
+下一条好样本继续，production gate 失配拒绝；Host/Edge 实现还须验证时钟、旧世界停止绘制、
+LOST/FAILED/过期时 WORLD 停交互、HEAD 保持，以及提交不能变成物理呈现。
+
+可执行入口：`tests/test_display_ingress_edge_extensions.c`；真实旧 SDK 拒绝检查及固定修订
+复现见 [legacy-v12-consumer](../../tests/legacy-v12-consumer/README.md)。codec/Catalog/Runtime
+测试不替代 Host 时钟/交互、Edge 绘制与头显提交实测。

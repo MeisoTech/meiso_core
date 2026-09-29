@@ -10,6 +10,16 @@
 #define MEISO_DISPLAY_INGRESS_PRIVATE_API
 #endif
 
+/* Shared display graph builder. Only planes v12 opts into XR evidence. */
+MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoDisplayIngressProfileStatus
+meiso_display_ingress_private_build_catalog(const MeisoDisplayIngressCatalogConfig *,
+    MeisoMutableBuffer, MeisoRuntimeEndpointDescriptor *, size_t, MeisoRuntimeV4RouteDescriptor *, size_t, bool);
+MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoDisplayIngressProfileStatus
+meiso_display_ingress_private_validate_catalog(const MeisoRuntimeEndpointDescriptor *, size_t,
+    const MeisoRuntimeV4RouteDescriptor *, size_t, MeisoDisplayIngressCapability *, bool);
+MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoRuntimeV4RouteDescriptor
+meiso_display_camera_private_route(unsigned index, uint64_t incarnation);
+
 MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoRuntimeEndpointDescriptor
 meiso_display_overlay_private_endpoint(uint64_t incarnation);
 MEISO_DISPLAY_INGRESS_PRIVATE_API MeisoRuntimeV4RouteDescriptor

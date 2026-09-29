@@ -1,6 +1,10 @@
 #include <meiso/host/display_ingress_fixture_input.h>
+#include <meiso/profiles/display_ingress/local_pose.h>
+#include <meiso/profiles/display_ingress/views.h>
 
 #include <type_traits>
+static_assert(std::is_standard_layout<MeisoDisplayLocalPose>::value);
+static_assert(std::is_standard_layout<MeisoDisplayViewsCapability>::value);
 
 static_assert(
     std::is_standard_layout<MeisoDisplayIngressHostFixtureInput>::value,
