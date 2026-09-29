@@ -2,7 +2,7 @@
 #include "display_ingress_profile_private.h"
 #include <string.h>
 
-static MeisoRuntimeV4RouteDescriptor camera_route(unsigned i, uint64_t incarnation)
+MeisoRuntimeV4RouteDescriptor meiso_display_camera_private_route(unsigned i, uint64_t incarnation)
 {
     MeisoRuntimeV4RouteDescriptor r={0};
     r.route.endpoint_id=*meiso_composition_camera_media_endpoint();
@@ -49,7 +49,7 @@ bool meiso_display_camera_build_catalog(const MeisoDisplayIngressCatalogConfig *
     e[0].capability.data=storage.data;
     e[1]=(MeisoRuntimeEndpointDescriptor){*meiso_composition_camera_media_endpoint(),video->endpoint_incarnation,
         *meiso_composition_media_capability_schema(),{storage.data+32,64}};
-    for(unsigned i=0;i<3;++i) r[4+i]=camera_route(i,video->endpoint_incarnation);
+    for(unsigned i=0;i<3;++i) r[4+i]=meiso_display_camera_private_route(i,video->endpoint_incarnation);
     memcpy(storage.data,cap,96); memcpy(ep,e,sizeof(e)); memcpy(rt,r,sizeof(r)); return true;
 }
 bool meiso_display_camera_validate_catalog(const MeisoRuntimeEndpointDescriptor *ep, size_t ec,
@@ -70,7 +70,7 @@ bool meiso_display_camera_validate_catalog(const MeisoRuntimeEndpointDescriptor 
         meiso_composition_media_capability_decode(ep[1].capability,&c)!=MEISO_COMPOSITION_PROFILE_OK ||
         c.source!=MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA) return false;
     for(unsigned i=0;i<3;++i) {
-        const MeisoRuntimeV4RouteDescriptor e=camera_route(i,ep[1].incarnation), *r=&rt[4+i];
+        const MeisoRuntimeV4RouteDescriptor e=meiso_display_camera_private_route(i,ep[1].incarnation), *r=&rt[4+i];
         if(!meiso_endpoint_id_equal(r->route.endpoint_id,e.route.endpoint_id) ||
             r->route.endpoint_incarnation!=e.route.endpoint_incarnation || r->route.facet!=e.route.facet ||
             r->delivery!=e.delivery || !meiso_resource_descriptor_equal(&r->route.resource,&e.route.resource)) return false;

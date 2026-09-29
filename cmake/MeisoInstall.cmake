@@ -132,6 +132,8 @@ install(
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/planes.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/tracking.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/input.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/local_pose.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/views.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/projection.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/media_transport.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso/profiles/display_ingress"

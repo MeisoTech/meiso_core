@@ -93,9 +93,11 @@ bool meiso_display_ingress_private_capability_valid(
         value->max_fragment_payload_bytes >= 1U &&
         value->max_fragment_payload_bytes <= value->max_frame_bytes &&
         value->evidence_classes != 0U &&
-        (value->evidence_classes &
+        (((value->evidence_classes &
          (MeisoDisplayIngressEvidenceClassMask)
-             ~MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_ALL) == 0U &&
+             ~MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_ALL) == 0U) ||
+         (value->evidence_classes == MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_XR_FRAME_SUBMITTED &&
+          value->frame_format == MEISO_DISPLAY_INGRESS_FRAME_H264_IDR)) &&
         (value->deadline_policy == MEISO_STREAM_DEADLINE_UNSUPPORTED ||
          value->deadline_policy == MEISO_STREAM_DEADLINE_REQUIRE_COMPARABLE);
 }
@@ -133,7 +135,11 @@ bool meiso_display_ingress_private_evidence_valid(
     const MeisoDisplayIngressPresentationEvidence *value
 )
 {
-    if (value == NULL || value->output_width < 1U ||
+    if (value == NULL || !value->media_stream_epoch) return false;
+    if (value->evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED)
+        return value->submitted_frame_sequence != 0U && value->predicted_display_time_ns != 0U && !value->output_width && !value->output_height &&
+            value->connector_kind == MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED;
+    if (!value->displayed_frame_sequence || value->predicted_display_time_ns || value->output_width < 1U ||
         value->output_width > MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION ||
         value->output_height < 1U ||
         value->output_height > MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION ||
@@ -199,10 +205,7 @@ bool meiso_display_ingress_evidence_supported(
         evidence->media_stream_epoch != containing_production_epoch) {
         return false;
     }
-    bit = evidence->evidence_class ==
-            MEISO_DISPLAY_INGRESS_EVIDENCE_SIMULATED ?
-        MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_SIMULATED :
-        MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_DRM_KMS_PAGE_FLIP;
+    bit = UINT32_C(1) << (evidence->evidence_class - 1U);
     return (capability->evidence_classes & bit) != 0U;
 }
 
@@ -473,7 +476,9 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_encode(
     size_t *out_size
 )
 {
-    uint8_t candidate[MEISO_DISPLAY_INGRESS_PROFILE_EVIDENCE_WIRE_SIZE];
+    uint8_t candidate[MEISO_DISPLAY_INGRESS_MAX_EVIDENCE_WIRE_SIZE];
+    const size_t size = value && value->evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED ?
+        MEISO_DISPLAY_INGRESS_XR_EVIDENCE_WIRE_SIZE : MEISO_DISPLAY_INGRESS_PROFILE_EVIDENCE_WIRE_SIZE;
 
     if (out_size == NULL || encode_arguments_alias(
             value, value == NULL ? 0U : sizeof(*value), output, out_size
@@ -487,7 +492,7 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_encode(
     if (!meiso_display_ingress_private_evidence_valid(value)) {
         return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_VALUE;
     }
-    if (output.capacity < sizeof(candidate)) {
+    if (output.capacity < size) {
         return MEISO_DISPLAY_INGRESS_PROFILE_CAPACITY;
     }
     memset(candidate, 0, sizeof(candidate));
@@ -499,12 +504,15 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_encode(
         candidate + 16U, value->media_stream_epoch
     );
     meiso_display_ingress_private_put_u64(
-        candidate + 24U, value->displayed_frame_sequence
+        candidate + 24U, value->evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED ?
+            value->submitted_frame_sequence : value->displayed_frame_sequence
     );
     memmove(candidate + 32U, value->input_rgba_sha256,
             sizeof(value->input_rgba_sha256));
-    memmove(output.data, candidate, sizeof(candidate));
-    *out_size = sizeof(candidate);
+    if (size == MEISO_DISPLAY_INGRESS_XR_EVIDENCE_WIRE_SIZE)
+        meiso_display_ingress_private_put_u64(candidate + 64U, value->predicted_display_time_ns);
+    memmove(output.data, candidate, size);
+    *out_size = size;
     return MEISO_DISPLAY_INGRESS_PROFILE_OK;
 }
 
@@ -516,7 +524,8 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_decode(
     MeisoDisplayIngressPresentationEvidence candidate;
     const MeisoDisplayIngressProfileStatus status = decode_arguments_status(
         input, out_value, out_value == NULL ? 0U : sizeof(*out_value),
-        MEISO_DISPLAY_INGRESS_PROFILE_EVIDENCE_WIRE_SIZE
+        input.data && input.size && input.data[0] == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED ?
+            MEISO_DISPLAY_INGRESS_XR_EVIDENCE_WIRE_SIZE : MEISO_DISPLAY_INGRESS_PROFILE_EVIDENCE_WIRE_SIZE
     );
 
     if (status != MEISO_DISPLAY_INGRESS_PROFILE_OK) {
@@ -524,6 +533,8 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_decode(
     }
     memset(&candidate, 0, sizeof(candidate));
     candidate.evidence_class = input.data[0];
+    if (candidate.evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED)
+        candidate.predicted_display_time_ns = meiso_display_ingress_private_get_u64(input.data + 64U);
     candidate.connector_kind = input.data[1];
     candidate.output_width =
         meiso_display_ingress_private_get_u32(input.data + 4U);
@@ -531,8 +542,10 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_decode(
         meiso_display_ingress_private_get_u32(input.data + 8U);
     candidate.media_stream_epoch =
         meiso_display_ingress_private_get_u64(input.data + 16U);
-    candidate.displayed_frame_sequence =
-        meiso_display_ingress_private_get_u64(input.data + 24U);
+    if (candidate.evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED)
+        candidate.submitted_frame_sequence = meiso_display_ingress_private_get_u64(input.data + 24U);
+    else
+        candidate.displayed_frame_sequence = meiso_display_ingress_private_get_u64(input.data + 24U);
     memmove(candidate.input_rgba_sha256, input.data + 32U,
             sizeof(candidate.input_rgba_sha256));
     if (!meiso_display_ingress_private_bytes_zero(input.data + 2U, 2U) ||

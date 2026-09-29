@@ -18,7 +18,7 @@ static int handshake(uint32_t peer_registry, MeisoSession **host, MeisoSession *
         cfg.local_peer_id = (MeisoPeerId){i ? 2 : 1, 3}; cfg.expected_peer_id = (MeisoPeerId){i ? 1 : 2, 3};
         cfg.local_incarnation = 4U + (uint64_t)i; cfg.local_nonce = (MeisoSessionNonce){6U + (uint64_t)i, 8};
         cfg.protocol = (MeisoProtocolVersion){1, 0};
-        CHECK(meiso_display_planes_configure_session(&cfg) && cfg.limits.max_registry_entries == MEISO_DISPLAY_PLANES_INPUT_REGISTRY);
+        CHECK(meiso_display_planes_configure_session(&cfg) && cfg.limits.max_registry_entries == MEISO_DISPLAY_PLANES_EDGE_REGISTRY);
         if (i) cfg.limits.max_registry_entries = peer_registry;
         CHECK(meiso_session_init(session_memory[i].bytes, sizeof(session_memory[i].bytes), &cfg, &s[i]) == MEISO_SESSION_INIT_OK);
         CHECK(meiso_session_start(s[i]) == MEISO_SESSION_START_STARTED);

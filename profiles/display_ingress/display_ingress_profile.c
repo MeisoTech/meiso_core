@@ -145,6 +145,9 @@ static size_t expected_max_payload(
         MEISO_DISPLAY_INGRESS_PROFILE_EVIDENCE_WIRE_SIZE
     };
 
+    if (route_index == MEISO_DISPLAY_INGRESS_ROUTE_PRESENTATION_EVIDENCE &&
+        capability->evidence_classes == MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_XR_FRAME_SUBMITTED)
+        return MEISO_DISPLAY_INGRESS_XR_EVIDENCE_WIRE_SIZE;
     return route_index == MEISO_DISPLAY_INGRESS_ROUTE_MEDIA ?
         capability->max_frame_bytes : fixed[route_index];
 }
@@ -352,13 +355,14 @@ static bool build_outputs_disjoint(
         );
 }
 
-MeisoDisplayIngressProfileStatus meiso_display_ingress_build_catalog(
+MeisoDisplayIngressProfileStatus meiso_display_ingress_private_build_catalog(
     const MeisoDisplayIngressCatalogConfig *config,
     MeisoMutableBuffer capability_storage,
     MeisoRuntimeEndpointDescriptor *endpoints,
     size_t endpoint_capacity,
     MeisoRuntimeV4RouteDescriptor *routes,
-    size_t route_capacity
+    size_t route_capacity,
+    bool allow_xr
 )
 {
     MeisoRuntimeEndpointDescriptor endpoint_candidate[
@@ -388,7 +392,8 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_build_catalog(
         )) {
         return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_ARGUMENT;
     }
-    if (config->endpoint_incarnation == 0U) {
+    if (config->endpoint_incarnation == 0U || (!allow_xr &&
+        (config->capability.evidence_classes & MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_XR_FRAME_SUBMITTED))) {
         return MEISO_DISPLAY_INGRESS_PROFILE_INVALID_VALUE;
     }
     if (meiso_display_ingress_capability_encode(
@@ -433,12 +438,13 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_build_catalog(
     return MEISO_DISPLAY_INGRESS_PROFILE_OK;
 }
 
-MeisoDisplayIngressProfileStatus meiso_display_ingress_validate_catalog(
+MeisoDisplayIngressProfileStatus meiso_display_ingress_private_validate_catalog(
     const MeisoRuntimeEndpointDescriptor *endpoints,
     size_t endpoint_count,
     const MeisoRuntimeV4RouteDescriptor *routes,
     size_t route_count,
-    MeisoDisplayIngressCapability *out_capability
+    MeisoDisplayIngressCapability *out_capability,
+    bool allow_xr
 )
 {
     MeisoDisplayIngressCapability capability_candidate;
@@ -470,6 +476,7 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_validate_catalog(
         meiso_display_ingress_capability_decode(
             endpoints[0].capability, &capability_candidate
         ) != MEISO_DISPLAY_INGRESS_PROFILE_OK ||
+        (!allow_xr && (capability_candidate.evidence_classes & MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_XR_FRAME_SUBMITTED)) ||
         !meiso_schema_ref_equal(endpoints[0].capability_schema,
             *meiso_display_ingress_capability_schema_for_format(capability_candidate.frame_format))) {
         return MEISO_DISPLAY_INGRESS_PROFILE_CATALOG_MISMATCH;
@@ -494,6 +501,20 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_validate_catalog(
     }
     *out_capability = capability_candidate;
     return MEISO_DISPLAY_INGRESS_PROFILE_OK;
+}
+
+MeisoDisplayIngressProfileStatus meiso_display_ingress_build_catalog(
+    const MeisoDisplayIngressCatalogConfig *config, MeisoMutableBuffer storage,
+    MeisoRuntimeEndpointDescriptor *ep, size_t ec, MeisoRuntimeV4RouteDescriptor *rt, size_t rc)
+{
+    return meiso_display_ingress_private_build_catalog(config, storage, ep, ec, rt, rc, false);
+}
+
+MeisoDisplayIngressProfileStatus meiso_display_ingress_validate_catalog(
+    const MeisoRuntimeEndpointDescriptor *ep, size_t ec, const MeisoRuntimeV4RouteDescriptor *rt, size_t rc,
+    MeisoDisplayIngressCapability *out)
+{
+    return meiso_display_ingress_private_validate_catalog(ep, ec, rt, rc, out, false);
 }
 
 MeisoDisplayIngressProfileStatus
