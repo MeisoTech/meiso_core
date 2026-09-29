@@ -114,6 +114,8 @@ bool meiso_display_planes_status_encode(const MeisoDisplayPlanesStatus *, MeisoM
 bool meiso_display_planes_status_decode(MeisoByteView, MeisoDisplayPlanesStatus *);
 bool meiso_display_planes_evidence_encode(const MeisoDisplayPlanesEvidence *, MeisoMutableBuffer);
 bool meiso_display_planes_evidence_decode(MeisoByteView, MeisoDisplayPlanesEvidence *);
+/* Valid evidence whose class is declared by this Session's video capability. */
+bool meiso_display_planes_evidence_supported(const MeisoDisplayIngressCapability *, const MeisoDisplayPlanesEvidence *);
 /* Model fits this capability and the active enabled display Desired
  * (version and input size; version 0 means no enabled video). Image source
  * rectangles are checked by the Edge after decoding. */

@@ -129,18 +129,27 @@ static int evidence(void)
         [56] = 1, [57] = 2, [58] = 3, [59] = 4, [60] = 5, [61] = 6, [62] = 7, [63] = 8};
     CHECK(meiso_display_planes_evidence_encode(&e, (MeisoMutableBuffer){b, 64}) && !memcmp(b, plane_evidence, 64));
     CHECK(meiso_display_planes_evidence_decode((MeisoByteView){b, 64}, &ed) && ed.predicted_display_time_ns == e.predicted_display_time_ns);
+    CHECK(meiso_display_planes_evidence_supported(&c.video.capability, &ed));
+    c.video.capability.evidence_classes = 2;
+    CHECK(!meiso_display_planes_evidence_supported(&c.video.capability, &ed)); c = config();
     b[0] = 2; CHECK(!meiso_display_planes_evidence_decode((MeisoByteView){b, 64}, &ed));
     b[0] = 3; memset(b + 56, 0, 8); CHECK(!meiso_display_planes_evidence_decode((MeisoByteView){b, 64}, &ed));
     e.predicted_display_time_ns = 0; CHECK(!meiso_display_planes_evidence_encode(&e, (MeisoMutableBuffer){b, 64}));
     e.evidence_class = 2; CHECK(meiso_display_planes_evidence_encode(&e, (MeisoMutableBuffer){b, 64})); /* old class stays 64 */
+    CHECK(!meiso_display_planes_evidence_supported(&c.video.capability, &e));
+    c.video.capability.evidence_classes = 2; CHECK(meiso_display_planes_evidence_supported(&c.video.capability, &e));
+    e.evidence_class = 32; CHECK(!meiso_display_planes_evidence_supported(&c.video.capability, &e));
+    CHECK(!meiso_display_planes_evidence_supported(NULL, &e)); CHECK(!meiso_display_planes_evidence_supported(&c.video.capability, NULL));
+    c = config();
 
     MeisoDisplayIngressPresentationEvidence v = {0}, vd;
     v.evidence_class = MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED; v.media_stream_epoch = 11;
-    v.displayed_frame_sequence = 13; v.predicted_display_time_ns = UINT64_C(0x0102030405060708);
+    v.submitted_frame_sequence = 13; v.predicted_display_time_ns = UINT64_C(0x0102030405060708);
     static const uint8_t video_evidence[72] = {[0] = 3, [23] = 11, [31] = 13,
         [64] = 1, [65] = 2, [66] = 3, [67] = 4, [68] = 5, [69] = 6, [70] = 7, [71] = 8};
     CHECK(meiso_display_ingress_evidence_encode(&v, (MeisoMutableBuffer){b, sizeof(b)}, &n) == 0 && n == 72 && !memcmp(b, video_evidence, 72));
-    CHECK(meiso_display_ingress_evidence_decode((MeisoByteView){b, 72}, &vd) == 0 && vd.predicted_display_time_ns == v.predicted_display_time_ns);
+    CHECK(meiso_display_ingress_evidence_decode((MeisoByteView){b, 72}, &vd) == 0 && vd.predicted_display_time_ns == v.predicted_display_time_ns &&
+        vd.submitted_frame_sequence == 13);
     CHECK(meiso_display_ingress_evidence_supported(&c.video.capability, &vd, 11));
     CHECK(!meiso_display_ingress_evidence_supported(&c.video.capability, &vd, 12));
     c.video.capability.evidence_classes = 2;

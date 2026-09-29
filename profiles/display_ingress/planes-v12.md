@@ -11,8 +11,8 @@
 > 早于此的 Edge 不释放图，并按原来的校验拒收含 `opacity` 0 的模型（Host 这时改用撤平面，§7）。
 > 同日（meiso_host #73）：系统平面（`app` 为 NO_APP）画在 APP 平面之后，准星先取系统平面（§5、§11）。
 > bytes 不变；早于此的 Edge 只按距离画。
-> 2026-09-29 草案：§14 增加 Edge 自定位、独立视图与 XR 提交证据。保持 Profile v12，
-> 旧枚举与布局的行为不变；新增行为必须由显式能力选择。本分支待两端 owner/Kache 审阅。
+> 2026-09-29：§14 增加 Edge 自定位、独立视图与 XR 提交证据（meiso_core #43）。保持 Profile v12，
+> 旧枚举与布局的行为不变；新增行为必须由显式能力选择。
 
 ## 1. 解决什么
 
@@ -475,7 +475,7 @@ stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切�
   - 对着早于本条的 Edge，Host 改用撤平面：含隐藏平面的模型被拒以后，去掉隐藏平面的模型被应用，显示、收起照常。
 - 板上（meiso_host #71）：系统面板反复更新几十次，每次都上屏，Session 不重建；收起再打开不重送图。
 
-## 14. Edge 自定位、独立视图与 XR 提交（草案）
+## 14. Edge 自定位、独立视图与 XR 提交
 
 本节对应 meiso_vr #1 的 Kache 09-29 裁定。在 v12 原地扩展；不建立 VR 专用 Profile。
 §3 的 `tracking=3 EDGE`、`view_layout=3 RUNTIME_VIEWS` 及显示 capability 的
@@ -524,7 +524,8 @@ Host 收到新 epoch 后重建布局；禁止跨世界插值。长按 BACK 仍�
 offset 是 Edge−Host 的传输窗口估计，known 不代表误差已知，不作为单程延迟证明。
 新 Session 清空时钟估计；world_epoch 改变不表示 Edge 时钟重置。
 
-Host 按会话只选 HeadFusion 或 Edge 位姿一个来源，首页、抓起、摆正和按键解释共用该来源。
+Host 按已校验 Catalog 的 tracking 选择唯一来源：POSE 用 HeadFusion，EDGE 用 Edge 位姿，
+NONE 不启用定位；registry 容量 gate 只作前提，不选择来源。首页、抓起、摆正和按键解释共用该来源。
 以 Edge 按键时刻查同一 epoch 的历史，候选最多 128 条且最多保留 500 ms；有两侧有效样本
 时插值，否则只用不晚于按键的有效样本。样本年龄超过 500 ms、LOST、Actual OFF/FAILED
 或 epoch 失配时不执行 WORLD 交互，不等未来包补位。HEAD 输入仍可使用 §11 的 target。
@@ -572,9 +573,11 @@ clock epoch 为 4；预计显示时刻也属于此时钟，可能早于实际返
 视频证据在类别 3 时为 **72 B**：沿用 `DISP_SCH/PRES_EVT:v2` 的前 64 B，类别为 3，
 connector_kind 为 UNSPECIFIED，output_width/height 为零（无单一输出栅格），
 64..71 追加非零 `predicted_display_time_ns`。原 `displayed_frame_sequence` 槽位在该类别
-仅表示被提交的 AU sequence，禁止据字段名写成已显示。media epoch/AU SHA-256 保持原位，
+仅表示被提交的 AU sequence；API 使用同槽别名 `submitted_frame_sequence`，禁止写成已显示。media epoch/AU SHA-256 保持原位，
 外层 source_time 是提交接受时刻。类别 1/2 仍严格 64 B，不能带追加字段；
 类别 3 严格 72 B，对应视频证据 route 的 payload 上限改为 72，其他会话仍为 64。
+模型证据 decode 只校验数值/布局；接收者还须用 `meiso_display_planes_evidence_supported`
+按会话视频能力的 evidence mask 检查类别，视频证据使用已有的 `meiso_display_ingress_evidence_supported`。
 
 模型和 AU 证据只在包含它们的帧被运行时成功接受后发，按提交顺序发送。
 `shouldRender=false`、会话不可见、调用失败、锁屏或对应内容未提交时不发内容成功。

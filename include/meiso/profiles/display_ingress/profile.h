@@ -119,7 +119,10 @@ typedef struct {
     uint32_t output_width;
     uint32_t output_height;
     uint64_t media_stream_epoch;
-    uint64_t displayed_frame_sequence;
+    union {
+        uint64_t displayed_frame_sequence; /* classes 1/2 */
+        uint64_t submitted_frame_sequence; /* class 3: accepted, not displayed */
+    };
     union {
         uint8_t input_frame_sha256[32U];
         uint8_t input_rgba_sha256[32U]; /* RAW v1 source compatibility. */

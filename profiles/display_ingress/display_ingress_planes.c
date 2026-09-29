@@ -396,6 +396,14 @@ bool meiso_display_planes_session_allows_input(const MeisoSession *session)
     return negotiated_registry(session) >= MEISO_DISPLAY_PLANES_INPUT_REGISTRY;
 }
 
+bool meiso_display_planes_evidence_supported(const MeisoDisplayIngressCapability *c, const MeisoDisplayPlanesEvidence *e)
+{
+    uint8_t check[MEISO_DISPLAY_PLANES_EVIDENCE_BYTES];
+    return meiso_display_ingress_private_capability_valid(c) &&
+        meiso_display_planes_evidence_encode(e, (MeisoMutableBuffer){check, sizeof(check)}) &&
+        (c->evidence_classes & (UINT32_C(1) << (e->evidence_class - 1U))) != 0U;
+}
+
 bool meiso_display_planes_session_allows_edge_extensions(const MeisoSession *session)
 {
     return negotiated_registry(session) >= MEISO_DISPLAY_PLANES_EDGE_REGISTRY;

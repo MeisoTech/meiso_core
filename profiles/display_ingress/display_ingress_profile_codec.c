@@ -135,11 +135,11 @@ bool meiso_display_ingress_private_evidence_valid(
     const MeisoDisplayIngressPresentationEvidence *value
 )
 {
-    if (value == NULL || !value->media_stream_epoch || !value->displayed_frame_sequence) return false;
+    if (value == NULL || !value->media_stream_epoch) return false;
     if (value->evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED)
-        return value->predicted_display_time_ns != 0U && !value->output_width && !value->output_height &&
+        return value->submitted_frame_sequence != 0U && value->predicted_display_time_ns != 0U && !value->output_width && !value->output_height &&
             value->connector_kind == MEISO_DISPLAY_INGRESS_CONNECTOR_UNSPECIFIED;
-    if (value->predicted_display_time_ns || value->output_width < 1U ||
+    if (!value->displayed_frame_sequence || value->predicted_display_time_ns || value->output_width < 1U ||
         value->output_width > MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION ||
         value->output_height < 1U ||
         value->output_height > MEISO_DISPLAY_INGRESS_PROFILE_MAX_DIMENSION ||
@@ -504,7 +504,8 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_encode(
         candidate + 16U, value->media_stream_epoch
     );
     meiso_display_ingress_private_put_u64(
-        candidate + 24U, value->displayed_frame_sequence
+        candidate + 24U, value->evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED ?
+            value->submitted_frame_sequence : value->displayed_frame_sequence
     );
     memmove(candidate + 32U, value->input_rgba_sha256,
             sizeof(value->input_rgba_sha256));
@@ -541,8 +542,10 @@ MeisoDisplayIngressProfileStatus meiso_display_ingress_evidence_decode(
         meiso_display_ingress_private_get_u32(input.data + 8U);
     candidate.media_stream_epoch =
         meiso_display_ingress_private_get_u64(input.data + 16U);
-    candidate.displayed_frame_sequence =
-        meiso_display_ingress_private_get_u64(input.data + 24U);
+    if (candidate.evidence_class == MEISO_DISPLAY_INGRESS_EVIDENCE_XR_FRAME_SUBMITTED)
+        candidate.submitted_frame_sequence = meiso_display_ingress_private_get_u64(input.data + 24U);
+    else
+        candidate.displayed_frame_sequence = meiso_display_ingress_private_get_u64(input.data + 24U);
     memmove(candidate.input_rgba_sha256, input.data + 32U,
             sizeof(candidate.input_rgba_sha256));
     if (!meiso_display_ingress_private_bytes_zero(input.data + 2U, 2U) ||
