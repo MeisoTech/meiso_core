@@ -154,6 +154,10 @@ bool meiso_display_ingress_media_posix_udp_drop_class(
     int error_number,
     MeisoDisplayIngressMediaPosixUdpDropClass *out_class
 );
+/* The errno of a drop class; 0 for an invalid class. */
+int meiso_display_ingress_media_posix_udp_drop_class_error(
+    MeisoDisplayIngressMediaPosixUdpDropClass drop_class
+);
 /* "EHOSTUNREACH" and the like for the errnos this adapter reports (the drop
  * classes, the syscall retries and the usual terminal ones); NULL for others.
  * Diagnostics print it with the number. */
