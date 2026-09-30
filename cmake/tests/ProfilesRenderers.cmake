@@ -6,6 +6,8 @@ meiso_add_c_test(meiso_display_ingress_tracking_test
     tests/test_display_ingress_tracking.c profile meiso_display_ingress_profile)
 meiso_add_c_test(meiso_display_ingress_input_test
     tests/test_display_ingress_input.c profile meiso_display_ingress_profile)
+meiso_add_c_test(meiso_display_ingress_audio_test
+    tests/test_display_ingress_audio.c profile meiso_display_ingress_profile)
 meiso_add_c_test(meiso_display_ingress_edge_extensions_test
     tests/test_display_ingress_edge_extensions.c profile meiso_display_ingress_profile)
 meiso_add_c_test(meiso_display_ingress_camera_test

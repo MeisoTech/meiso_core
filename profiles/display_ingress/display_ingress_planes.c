@@ -80,6 +80,24 @@ size_t meiso_display_planes_input_route_base(const MeisoDisplayPlanesCatalogConf
     return c ? 8U + 3U * c->camera_enabled + 4U * c->tracking_enabled + 3U * c->local_pose_enabled : 0;
 }
 
+/* Audio endpoint (planes-v12.md §15); views has no routes, so audio's follow input's. */
+static const MeisoSchemaRef audio_capability_schema = {{DISP_SCH, UINT64_C(0x4155445f4341505f)}, 1}; /* AUD_CAP_ */
+static const uint64_t audio_resource_suffix[3] = {
+    UINT64_C(0x4155445f4445535f), /* AUD_DES_ */
+    UINT64_C(0x4155445f4143545f), /* AUD_ACT_ */
+    UINT64_C(0x4155445f50434d5f)  /* AUD_PCM_ */
+};
+static const uint64_t audio_schema_suffix[3] = {
+    UINT64_C(0x4155445f44455349), /* AUD_DESI */
+    UINT64_C(0x4155445f53544154), /* AUD_STAT */
+    UINT64_C(0x4155445f50434d5f)  /* AUD_PCM_ */
+};
+
+size_t meiso_display_planes_audio_route_base(const MeisoDisplayPlanesCatalogConfig *c)
+{
+    return c ? meiso_display_planes_input_route_base(c) + 3U * c->input_enabled : 0;
+}
+
 static void putf(uint8_t *b, float v) { uint32_t u; memcpy(&u, &v, 4); put32(b, u); }
 static float getf(const uint8_t *b) { uint32_t u = get32(b); float v; memcpy(&v, &u, 4); return v; }
 static void put16(uint8_t *b, uint16_t v) { b[0] = (uint8_t)(v >> 8); b[1] = (uint8_t)v; }
@@ -409,17 +427,24 @@ bool meiso_display_planes_session_allows_edge_extensions(const MeisoSession *ses
     return negotiated_registry(session) >= MEISO_DISPLAY_PLANES_EDGE_REGISTRY;
 }
 
+bool meiso_display_planes_session_allows_audio(const MeisoSession *session)
+{
+    return negotiated_registry(session) >= MEISO_DISPLAY_PLANES_AUDIO_REGISTRY;
+}
+
 bool meiso_display_planes_configure_runtime(MeisoRuntimeV4Config *out, MeisoSession *session, uint32_t max_image_bytes)
 {
     if (!out || !session || !max_image_bytes || max_image_bytes > MEISO_DISPLAY_PLANES_MAX_IMAGE_BYTES) return false;
     const bool input = meiso_display_planes_session_allows_input(session);
     const bool tracking = meiso_display_planes_session_allows_tracking(session);
     const bool extended = meiso_display_planes_session_allows_edge_extensions(session);
-    const uint32_t endpoints = 3U + tracking + input + extended, routes = 11U + 4U * tracking + 3U * input;
+    const bool audio = meiso_display_planes_session_allows_audio(session);
+    const uint32_t endpoints = 3U + tracking + input + extended + audio,
+        routes = 11U + 4U * tracking + 3U * input + 3U * audio;
     MeisoRuntimeV4Config c = {0};
     c.base.session = session; c.base.max_endpoints = endpoints;
     c.base.max_endpoint_history = 2 * endpoints; c.base.max_routes = routes;
-    c.base.max_capability_bytes = extended ? MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES : 208U;
+    c.base.max_capability_bytes = audio ? MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES : extended ? 352U : 208U;
     c.base.max_desired_profile_bytes_per_endpoint = MEISO_DISPLAY_PLANES_MAX_MODEL_BYTES;
     c.base.max_actual_profile_bytes_per_endpoint = 80;
     c.max_blob_transfer_bytes = max_image_bytes;
@@ -511,6 +536,18 @@ static MeisoRuntimeV4RouteDescriptor input_route(unsigned i, uint64_t incarnatio
     return v;
 }
 
+static MeisoRuntimeV4RouteDescriptor audio_route(unsigned i, uint64_t incarnation)
+{
+    /* Same kinds, facets and owners as input's three. */
+    MeisoRuntimeV4RouteDescriptor v = input_route(i, incarnation);
+    v.route.endpoint_id = *meiso_display_audio_endpoint();
+    v.route.resource.id = (MeisoResourceId){DISPLAY_, audio_resource_suffix[i]};
+    v.route.resource.schema = (MeisoSchemaRef){{DISP_SCH, audio_schema_suffix[i]}, 1};
+    v.route.resource.max_payload_size = i == 0 ? MEISO_RUNTIME_DESIRED_STATE_PREFIX_SIZE + MEISO_DISPLAY_AUDIO_DESIRED_BYTES :
+        i == 1 ? MEISO_RUNTIME_ACTUAL_STATE_PREFIX_SIZE + MEISO_DISPLAY_AUDIO_ACTUAL_BYTES : MEISO_DISPLAY_AUDIO_MAX_RECORD_BYTES;
+    return v;
+}
+
 bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *c, MeisoMutableBuffer storage,
     MeisoRuntimeEndpointDescriptor *ep, size_t ec, MeisoRuntimeV4RouteDescriptor *rt, size_t rc)
 {
@@ -522,12 +559,17 @@ bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *c
             c->tracking_enabled ? MEISO_DISPLAY_PLANES_TRACKING_POSE : MEISO_DISPLAY_PLANES_TRACKING_NONE) ||
         c->views_enabled != (c->planes.view_layout == MEISO_DISPLAY_PLANES_VIEW_RUNTIME_VIEWS))
         return false;
-    const size_t endpoints = 2U + c->camera_enabled + c->tracking_enabled + c->local_pose_enabled + c->input_enabled + c->views_enabled;
-    const size_t routes = meiso_display_planes_input_route_base(c) + 3U * c->input_enabled;
+    /* Audio records only while SYSTEM is held, so it comes with input that has SYSTEM (§15). */
+    if (c->audio_enabled &&
+        (!c->input_enabled || !(c->input.keys & meiso_display_input_key_bit(MEISO_DISPLAY_INPUT_KEY_SYSTEM)))) return false;
+    const size_t endpoints = 2U + c->camera_enabled + c->tracking_enabled + c->local_pose_enabled + c->input_enabled +
+        c->views_enabled + c->audio_enabled;
+    const size_t routes = meiso_display_planes_audio_route_base(c) + 3U * c->audio_enabled;
     const size_t camera_bytes = 64U * c->camera_enabled;
     const size_t input_at = 96U + camera_bytes + 32U * c->tracking_enabled + 16U * c->local_pose_enabled;
     const size_t views_at = input_at + 16U * c->input_enabled;
-    const size_t bytes = views_at + MEISO_DISPLAY_VIEWS_CAPABILITY_BYTES * c->views_enabled;
+    const size_t audio_at = views_at + MEISO_DISPLAY_VIEWS_CAPABILITY_BYTES * c->views_enabled;
+    const size_t bytes = audio_at + MEISO_DISPLAY_AUDIO_CAPABILITY_BYTES * c->audio_enabled;
     if (ec < endpoints || rc < routes || storage.capacity < bytes) return false;
     const void *p[] = {c, ep, rt, storage.data};
     const size_t n[] = {sizeof(*c), endpoints * sizeof(*ep), routes * sizeof(*rt), bytes};
@@ -578,8 +620,17 @@ bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *c
     if (c->views_enabled) {
         if (!meiso_display_views_capability_encode(&c->views, (MeisoMutableBuffer){cap + views_at, MEISO_DISPLAY_VIEWS_CAPABILITY_BYTES}))
             return false;
-        e[endpoints - 1] = (MeisoRuntimeEndpointDescriptor){*meiso_display_views_endpoint(), c->video.endpoint_incarnation,
-            views_capability_schema, {storage.data + views_at, MEISO_DISPLAY_VIEWS_CAPABILITY_BYTES}};
+        e[endpoints - 1 - c->audio_enabled] = (MeisoRuntimeEndpointDescriptor){*meiso_display_views_endpoint(),
+            c->video.endpoint_incarnation, views_capability_schema,
+            {storage.data + views_at, MEISO_DISPLAY_VIEWS_CAPABILITY_BYTES}};
+    }
+    if (c->audio_enabled) {
+        const size_t base = meiso_display_planes_audio_route_base(c);
+        if (!meiso_display_audio_capability_encode(&c->audio,
+                (MeisoMutableBuffer){cap + audio_at, MEISO_DISPLAY_AUDIO_CAPABILITY_BYTES})) return false;
+        e[endpoints - 1] = (MeisoRuntimeEndpointDescriptor){*meiso_display_audio_endpoint(), c->video.endpoint_incarnation,
+            audio_capability_schema, {storage.data + audio_at, MEISO_DISPLAY_AUDIO_CAPABILITY_BYTES}};
+        for (unsigned i = 0; i < 3; ++i) r[base + i] = audio_route(i, c->video.endpoint_incarnation);
     }
     memcpy(storage.data, cap, bytes); memcpy(ep, e, endpoints * sizeof(*ep)); memcpy(rt, r, routes * sizeof(*rt));
     return true;
@@ -598,10 +649,12 @@ bool meiso_display_planes_validate_catalog(const MeisoRuntimeEndpointDescriptor 
     c.video.endpoint_incarnation = ep[0].incarnation; c.video.capability = video;
     if (!meiso_endpoint_id_equal(ep[1].id, endpoint) ||
         !meiso_display_planes_capability_decode(ep[1].capability, &c.planes)) return false;
-    /* Optional endpoints in order: camera, tracking, input; the rebuild below checks each one's id. */
+    /* Optional endpoints in order: camera, tracking | local pose, input, views, audio; the rebuild below
+     * checks each one's id. */
     size_t next = 2;
     const MeisoEndpointId *tracking = meiso_display_tracking_endpoint(), *input = meiso_display_input_endpoint();
     const MeisoEndpointId *local_pose = meiso_display_local_pose_endpoint(), *views = meiso_display_views_endpoint();
+    const MeisoEndpointId *audio = meiso_display_audio_endpoint();
     if (next < ec && meiso_endpoint_id_equal(ep[next].id, *meiso_composition_camera_media_endpoint())) {
         c.camera_enabled = true;
         if (meiso_composition_media_capability_decode(ep[next].capability, &c.camera) != MEISO_COMPOSITION_PROFILE_OK) return false;
@@ -628,7 +681,12 @@ bool meiso_display_planes_validate_catalog(const MeisoRuntimeEndpointDescriptor 
         if (!meiso_display_views_capability_decode(ep[next].capability, &c.views)) return false;
         ++next;
     }
-    if (next != ec || rc != meiso_display_planes_input_route_base(&c) + 3U * c.input_enabled) return false;
+    if (next < ec && meiso_endpoint_id_equal(ep[next].id, *audio)) {
+        c.audio_enabled = true;
+        if (!meiso_display_audio_capability_decode(ep[next].capability, &c.audio)) return false;
+        ++next;
+    }
+    if (next != ec || rc != meiso_display_planes_audio_route_base(&c) + 3U * c.audio_enabled) return false;
     uint8_t cap[MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES];
     MeisoRuntimeEndpointDescriptor e[MEISO_DISPLAY_PLANES_MAX_ENDPOINTS];
     MeisoRuntimeV4RouteDescriptor r[MEISO_DISPLAY_PLANES_MAX_ROUTES];

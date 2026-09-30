@@ -6,26 +6,30 @@
 #include <meiso/profiles/display_ingress/input.h>
 #include <meiso/profiles/display_ingress/local_pose.h>
 #include <meiso/profiles/display_ingress/views.h>
+#include <meiso/profiles/display_ingress/audio.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 /* Application Profile v12: planes in space (planes-v12.md). Display (v2 H.264,
  * a texture source), planes (model/status/evidence/image Blob), optional camera,
- * optional Host tracking OR Edge local pose, optional input, optional independent views. */
+ * optional Host tracking OR Edge local pose, optional input, optional independent views,
+ * optional push-to-talk audio. */
 enum {
     MEISO_DISPLAY_PLANES_PROFILE_VERSION = 12,
-    MEISO_DISPLAY_PLANES_MAX_ENDPOINTS = 6,
-    MEISO_DISPLAY_PLANES_MAX_ROUTES = 18,
+    MEISO_DISPLAY_PLANES_MAX_ENDPOINTS = 7,
+    MEISO_DISPLAY_PLANES_MAX_ROUTES = 21,
     /* Session registry sizes (endpoints + routes) at which each optional endpoint fits: a peer from
-     * before §10 negotiates 14 (3 + 11), one from before §11 negotiates 19 (4 + 15). */
+     * before §10 negotiates 14 (3 + 11), one from before §11 negotiates 19 (4 + 15), one from before
+     * §15 negotiates 24 or less. */
     MEISO_DISPLAY_PLANES_TRACKING_REGISTRY = 4 + 15,
     MEISO_DISPLAY_PLANES_INPUT_REGISTRY = 5 + 18,
     MEISO_DISPLAY_PLANES_EDGE_REGISTRY = 6 + 18,
+    MEISO_DISPLAY_PLANES_AUDIO_REGISTRY = 7 + 21,
     MEISO_DISPLAY_PLANES_ROUTE_MODEL = 4,
     MEISO_DISPLAY_PLANES_ROUTE_STATUS = 5,
     MEISO_DISPLAY_PLANES_ROUTE_EVIDENCE = 6,
     MEISO_DISPLAY_PLANES_ROUTE_IMAGE = 7,
-    MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES = 352,
+    MEISO_DISPLAY_PLANES_MAX_CAPABILITY_BYTES = 368,
     MEISO_DISPLAY_PLANES_CAPABILITY_BYTES = 64,
     MEISO_DISPLAY_PLANES_MAX_PLANES = 16,
     MEISO_DISPLAY_PLANES_MAX_APPS = 8,
@@ -145,6 +149,8 @@ typedef struct {
     MeisoDisplayLocalPoseCapability local_pose;
     bool views_enabled; /* iff view_layout == RUNTIME_VIEWS */
     MeisoDisplayViewsCapability views;
+    bool audio_enabled; /* needs input with the SYSTEM key */
+    MeisoDisplayAudioCapability audio;
 } MeisoDisplayPlanesCatalogConfig;
 
 /* Tracking routes, in catalog order after the camera's: Desired, Actual, IMU, pose. */
@@ -165,6 +171,13 @@ enum {
     MEISO_DISPLAY_INPUT_ROUTE_KEY = 2
 };
 size_t meiso_display_planes_input_route_base(const MeisoDisplayPlanesCatalogConfig *);
+/* Audio routes, last in the catalog: Desired, Actual, records. */
+enum {
+    MEISO_DISPLAY_AUDIO_ROUTE_DESIRED = 0,
+    MEISO_DISPLAY_AUDIO_ROUTE_ACTUAL = 1,
+    MEISO_DISPLAY_AUDIO_ROUTE_RECORD = 2
+};
+size_t meiso_display_planes_audio_route_base(const MeisoDisplayPlanesCatalogConfig *);
 
 bool meiso_display_planes_configure_session(MeisoSessionConfig *);
 /* A READY Session whose peer can hold the tracking endpoint (planes-v12.md §10). A peer from before
@@ -177,8 +190,11 @@ bool meiso_display_planes_session_allows_input(const MeisoSession *);
 /* The caller must require this before offering/accepting any section 14
  * extension (local pose, runtime views or XR evidence). No fake fallback. */
 bool meiso_display_planes_session_allows_edge_extensions(const MeisoSession *);
+/* A READY Session whose peer can hold the audio endpoint too (planes-v12.md §15): one from before it
+ * negotiates 24 or less, and the Edge then leaves audio out (keys still work, without voice). */
+bool meiso_display_planes_session_allows_audio(const MeisoSession *);
 /* max_image_bytes sizes the Runtime Blob admission (and Edge reassembly). The registry is sized to
- * what the Session allows: registry 24/23/19/14 retain distinct capacities. */
+ * what the Session allows: registry 28/24/23/19/14 retain distinct capacities. */
 bool meiso_display_planes_configure_runtime(MeisoRuntimeV4Config *, MeisoSession *, uint32_t max_image_bytes);
 bool meiso_display_planes_build_catalog(const MeisoDisplayPlanesCatalogConfig *, MeisoMutableBuffer capability_storage,
     MeisoRuntimeEndpointDescriptor *, size_t, MeisoRuntimeV4RouteDescriptor *, size_t);

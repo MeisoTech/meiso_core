@@ -13,6 +13,8 @@
 > bytes 不变；早于此的 Edge 只按距离画。
 > 2026-09-29：§14 增加 Edge 自定位、独立视图与 XR 提交证据（meiso_core #43）。保持 Profile v12，
 > 旧枚举与布局的行为不变；新增行为必须由显式能力选择。
+> 2026-09-30：§15 加可选的音频 endpoint（按住 `SYSTEM` 说话，meiso_host #93）。只加不改，没有它的 v12 Catalog
+> 照旧合法；完整上限增至 7 endpoint、21 route、registry 28。
 
 ## 1. 解决什么
 
@@ -260,10 +262,11 @@ TCP 的重传间隔逐次翻倍，卡 S 秒后控制连接可能要到开始卡�
 | 模型 | ≤ 1888 B/次，≤ `max_updates_per_second` 次/秒 |
 | 静态图 | ≤ `max_image_bytes`/张，4096 B 一块 Blob chunk |
 | 串流 | 与 v2 相同：独立帧 H.264，大小与帧率由显示 Desired 和 AU 上限决定 |
-| Runtime | 基线 5 endpoint、18 route（Session registry 23）、capability 208 B；§14 扩展至 6/18、registry 24、352 B。Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §11 时协商 19，Runtime 按 4/15 配，不放输入；早于 §10 时协商 14，按 3/11 配，跟踪与输入都不放 |
+| Runtime | 基线 5 endpoint、18 route（Session registry 23）、capability 208 B；§14 扩展至 6/18、registry 24、352 B；§15 音频至 7/21、registry 28、368 B。Desired 后缀 ≤ 1888 B、Blob 单次 ≤ `max_image_bytes`；对端早于 §11 时协商 19，Runtime 按 4/15 配，不放输入；早于 §10 时协商 14，按 3/11 配，跟踪与输入都不放 |
 | IMU（§10） | 200 Hz × 32 B = 6.4 KB/s；每批 8 个时约 25 条/秒 |
 | 位姿（§10） | Host 自定，建议跟相机帧（约 30 Hz），≤ 200 Hz；72 B/条 |
 | 按键（§11） | 人按键的速度，24 B/条；积压最多 32 条 |
+| 音频（§15） | 只在按住 `SYSTEM` 时：32 KB/s 加每条 24 B 的头，≤ 1944 B/条；一段最多 `max_utterance_ms`，整段缓存 |
 
 ## 10. 跟踪：IMU 上行、头部位姿下行（meiso_host #53）
 
@@ -445,6 +448,7 @@ stream epoch 为 1，序号逐条递增。Actual 只在 Desired 变或锁屏切�
 - 准星在面板上的落点（面板内的指点、点击位置）。本版只报准星下是哪块面板。
 - 选连哪台 Host 的界面：归 Edge 本地（§11），本版不做。
 - IMU 上行改走 UDP 以扛卡顿（meiso_core #36 验收时留下）。
+- 放音（助手的回答念出来）：另开一节，等喇叭接上、电流量过再写。音频上行见 §15。
 
 ## 13. 验收
 
@@ -598,7 +602,7 @@ Host 按会话声明的类别选择完成里程碑：模型进度、有界发送
 完整上限为 6 endpoint、18 route、registry 24、capability 352 B。定位与旧跟踪互斥，
 所以自定位的最大全量组合为 6 endpoint/17 route/336 B；无相机的 VR 组合更小。
 新可选项仅在协商 registry≥24 时使用；不足时需要它们的 Edge 明确拒绝本次接入，
-不能假报旧能力。旧端协商 23/19/14 时 Runtime 仍按原来的容量级别配置。
+不能假报旧能力。旧端协商 23/19/14 时 Runtime 仍按原来的容量级别配置。§15 再加音频后的上限见 §15.4。
 Desired、模型、JPEG、Blob chunk、Session/Runtime 帧上限不变。
 
 必须验证：旧解码器拒绝每个新增枚举/bit、非零模型 epoch 与 72 B 视频证据；
@@ -611,3 +615,143 @@ LOST/FAILED/过期时 WORLD 停交互、HEAD 保持，以及提交不能变成�
 可执行入口：`tests/test_display_ingress_edge_extensions.c`；真实旧 SDK 拒绝检查及固定修订
 复现见 [legacy-v12-consumer](../../tests/legacy-v12-consumer/README.md)。codec/Catalog/Runtime
 测试不替代 Host 时钟/交互、Edge 绘制与头显提交实测。
+
+## 15. 音频：按住说话（meiso_host #93）
+
+纲领第 4 点：按住 `SYSTEM` 键问系统助手 Holo。S-032/S-033：助手是系统的，APP 拿不到系统权限。
+S-035：不做常开麦克风，也不做唤醒词。本节只管眼镜到 Host 的上行，放音另开一节（§12）。
+
+### 15.1 谁能打开麦克风
+
+- **只有眼镜上的物理按键能打开麦克风。**
+  - Edge 在 `SYSTEM` 键（§11 键码 7）按下时开始录，松开时停，不等 Host。
+  - Host、APP、远端都没有办法让 Edge 开始录。
+- Host 的 Desired 只是许可，不是开关：
+  - `allowed=0`（或还没有 Desired）时 Edge 什么都不录，按键照常上送；
+  - `allowed=1` 时 Edge 也只在按住 `SYSTEM` 时录。
+- Edge 只在同时满足下面几条时开始录：
+  - 音频 Actual 为 READY；
+  - 输入 Actual 为 RUNNING，且没有锁屏；
+  - 这次 `SYSTEM` PRESS 已按 §11 上送。
+- 锁屏时不录。§11 锁屏时不上送按键，这里也一样。
+- 录音时 Edge 在 HUD 上画麦克风标记。这由 Edge 本地画，同准星，不需要 Host。
+- **只归系统**：
+  - 音频和由它得到的文字只交给系统助手，Host 不得交给任何 APP，与 `SYSTEM` 键同一规则（§11）。
+  - 以后 APP 若要麦克风，另开权限，不在本版。
+- **不进默认记录**：
+  - 原始音频不进系统默认记录（S-014），只在 Host 内存里用于识别，用完即丢，不写盘。
+  - 识别出的文字和助手的回答进助手的对话记录，跟着记录暂停与删除走（参考实现 `meiso-history pause`/`delete`）。
+  - 开发时可以显式打开保存原始音频，默认关。
+
+### 15.2 线路与编码
+
+| route | owner / kind / facet | delivery | schema | 含义 |
+|---|---|---|---|---|
+| `DISPLAY_/AUD_DES_` | Host / State / DESIRED | inline | `DISP_SCH/AUD_DESI:v1` | 允不允许按住说话 |
+| `DISPLAY_/AUD_ACT_` | Edge / State / ACTUAL | inline | `DISP_SCH/AUD_STAT:v1` | 麦克风状态 |
+| `DISPLAY_/AUD_PCM_` | Edge / Stream / DATA | inline | `DISP_SCH/AUD_PCM_:v1` | 音频记录 |
+
+Endpoint 为 `DISPLAY_/AUDI_END`，排在所有可选 endpoint 最后（视图之后）；它的三条 route 排在输入的之后。
+音频只随带 `SYSTEM` 键的输入 endpoint 出现，没有输入或输入没有 `SYSTEM` 键的 Catalog 不能有音频。
+
+能力（Edge → Host，`DISP_SCH/AUD_CAP_:v1`，16 B，大端）：
+
+```text
+0..3    sample_rate_hz     u32  本版只有 16000
+4       channels           u8   1
+5       format             u8   1 = S16LE
+6..7    max_utterance_ms   u16  1000..60000：一段最长多久
+8..15   reserved           全零
+```
+
+Desired 后缀 16 B：`0 allowed u8 0/1`，其余全零。
+
+Actual 后缀 16 B：`0 state u8`，其余全零。
+- 0 OFF：不许录，或还没有 Desired；
+- 1 READY：按住 `SYSTEM` 时录；
+- 2 FAILED：麦克风打不开。
+
+Actual 只在 Desired 变、麦克风坏了或恢复时换，每换一次 production epoch 加一。正在不在录不写进 Actual。
+
+线上编号：
+- Desired 的 delivery generation 为 21，Actual 为 22。
+- 音频流用 Actual 的 production epoch，stream epoch 为 1，序号逐条递增。
+
+音频记录（Edge → Host，24 + 2×n B；头部大端，样本小端）：
+
+```text
+0..7    time_ns     u64  Edge 时钟（clock epoch 4）：这条第一个样本的采样时刻
+8..11   utterance   u32  本 Session 从 1 起，每次按住加一
+12..15  index       u32  这段里的第几条，从 0 起连续
+16      flags       u8   bit0 FIRST：index 为 0 的那条，且只有它；
+                         bit1 LAST：这段的最后一条；
+                         bit2 TRUNCATED：到了 max_utterance_ms 还按着；
+                         bit3 ABORTED：这段作废（锁屏、Desired 改为禁止、麦克风出错）。
+                         TRUNCATED 与 ABORTED 只随 LAST，且不同时出现；其余位为 0
+17      reserved    全零
+18..19  count n     u16  0..960（最多 60 ms）；0 只随 LAST
+20..23  reserved    全零
+然后 n 个 S16LE 样本，单声道
+```
+
+记录长度必须正好是 24 + 2×n。坏记录只丢这一条，Session 不断，同 §10、§11。
+
+### 15.3 一段话
+
+- **分段**：
+  - 每次 `SYSTEM` PRESS 开一段。这段音频属于刚上送的那条 PRESS：两者同属 Edge、走同一条有序连接，PRESS 先到。
+  - 松开后，Edge 发完剩下的样本，最后一条带 LAST（可以没有样本）。
+  - 到了 `max_utterance_ms` 还按着：这段结束，最后一条带 LAST|TRUNCATED，松开之前不再开新的一段。
+  - 锁屏、Desired 改为禁止、麦克风出错：这段结束，最后一条带 LAST|ABORTED，Host 丢掉整段。
+- **短按与按住**：
+  - Edge 每次按下都录，不做判断。
+  - Host 用 §11 那一对 PRESS、RELEASE 的 `time_ns` 算按了多久：
+    - 短于 300 ms（`MEISO_DISPLAY_AUDIO_SHORT_PRESS_MS`）算短按：这段不送识别，直接丢掉，`SYSTEM` 按一次点按处理（参考实现：开关助手面板）；
+    - 300 ms 及以上算按住说话。
+- **一段之内不丢**：
+  - 语音转文字宁可晚，不能缺，这一点与视频相反。
+  - Edge 缓存整段（30 s 为 960 KB）。卡顿时不丢样本，恢复后接着发；积压时一条可以放到 960 个样本，好追上。
+  - 只有 Session 断了这段才作废：Edge 丢掉没发完的，新 Session 不补发；Host 丢掉没收到 LAST 的那段。
+  - Host 看到同一段里 `index` 不连续（有坏记录被丢）时，丢掉整段并计数。
+- **不挤住按键和 IMU**：
+  - 按住说话时，按键和 IMU 照常准时到。
+  - Edge 先发按键、IMU 与证据；音频只在它们没有待发时发，而且不在连接里积压。
+  - 卡顿恢复后，先到的是按键与 IMU，音频随后追上。
+
+带宽：16 kHz × 2 B = 32 KB/s（256 kbit/s），加每条 24 B 的头；20 ms 一条时约 50 条/秒。
+
+### 15.4 容量与旧端
+
+- 完整上限增至 7 endpoint、21 route、registry 28、capability 368 B（§14.4 的 352 B 加 16 B）。
+  音频记录最大 1944 B，在 Session 与 Runtime 的帧上限之内。
+- 协商 registry ≥ 28 时 Runtime 按 7/21/368 配。24/23/19/14 保持原来的容量级别（§9、§14.4）。
+- 对端早于本节时，Session 注册表协商成 24 或更小，Edge 不放音频 endpoint：
+  - 新 Edge 对旧 Host、旧 Edge 对新 Host 都能建立 Session；
+  - 按键照常，`SYSTEM` 照常上送（短按照旧），只是没有语音。
+- 不在本版的：放音（§12）、APP 用麦克风、压缩（Opus 等）、常开与唤醒词（S-035）。
+
+### 15.5 验收
+
+- 能力、Desired、Actual、记录的 golden bytes 往返。
+- 这些都拒收，且不改输出：
+  - 保留位非零、采样率不是 16000、声道不是 1、格式不是 S16LE、`max_utterance_ms` 越界；
+  - state 越界；
+  - 时刻为 0、utterance 为 0；
+  - FIRST 与 `index` 为 0 不一致、未知 flag、TRUNCATED 或 ABORTED 不随 LAST、两者同时出现；
+  - 空记录不带 LAST、n 超过 960、长度与 n 不符。
+- Catalog：
+  - 完整组合（相机、跟踪、输入、视图、音频）为 7/21/368；
+  - 音频排在视图之后，乱序拒绝；
+  - 没有输入或输入没有 `SYSTEM` 键时不能有音频；
+  - 关掉音频后 bytes、endpoint、route 与本节之前完全相同。
+- 注册表协商：对端 28 时可以有音频；24 时不能，Runtime 按 6/18/352 配；23/19/14 不变。
+- 经过两端 Runtime：
+  - 一段三条（含 960 个样本的最大一条、没有样本的 LAST）按序完整到达；
+  - 一条坏记录照常送到、Host 丢掉，Session 还在；
+  - 改为禁止换一次 production epoch，旧 epoch 的记录 Edge 不能再发。
+- 可执行入口：`tests/test_display_ingress_audio.c`。
+- 板上（meiso_host #93）：
+  - 按住 `SYSTEM` 说话，助手面板出现文字。量按下到第一条音频到 Host、松开到文字出现的 p50/p95；
+  - 按住时 Wi-Fi 卡顿 1、3、10 s，一段之内不丢（`index` 连续），文字照样出现；
+  - 没按键、锁屏时 Host 收不到音频，Host 盘上没有原始音频；
+  - 短按照旧开关面板，不送识别。

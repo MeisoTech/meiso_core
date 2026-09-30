@@ -132,6 +132,7 @@ install(
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/planes.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/tracking.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/input.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/audio.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/local_pose.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/views.h"
         "${PROJECT_SOURCE_DIR}/include/meiso/profiles/display_ingress/projection.h"
