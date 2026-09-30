@@ -1331,6 +1331,9 @@ static bool test_network_errors_drop_one_datagram(void)
         EMSGSIZE, &drop_class
     ));
     CHECK(meiso_display_ingress_media_posix_udp_error_name(-1) == NULL);
+    CHECK(meiso_display_ingress_media_posix_udp_drop_class_error(
+              MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT
+          ) == 0);
     for (index = 0U;
          index < MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT;
          ++index) {
@@ -1338,6 +1341,9 @@ static bool test_network_errors_drop_one_datagram(void)
             classes[index].error_number, &drop_class
         ));
         CHECK(drop_class == index);
+        CHECK(meiso_display_ingress_media_posix_udp_drop_class_error(
+                  drop_class
+              ) == classes[index].error_number);
         CHECK(strcmp(meiso_display_ingress_media_posix_udp_error_name(
                          classes[index].error_number
                      ), classes[index].name) == 0);

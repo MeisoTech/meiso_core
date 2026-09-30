@@ -68,6 +68,15 @@ bool meiso_display_ingress_media_posix_udp_drop_class(
     return false;
 }
 
+int meiso_display_ingress_media_posix_udp_drop_class_error(
+    MeisoDisplayIngressMediaPosixUdpDropClass drop_class
+)
+{
+    return drop_class < MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT
+        ? drop_class_errors[drop_class]
+        : 0;
+}
+
 const char *meiso_display_ingress_media_posix_udp_error_name(int error_number)
 {
     static const struct {
