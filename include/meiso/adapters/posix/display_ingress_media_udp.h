@@ -25,6 +25,34 @@ typedef struct {
     MeisoDisplayIngressMediaBinding binding;
 } MeisoDisplayIngressMediaPosixUdpConfig;
 
+/*
+ * Media is lossy (planes-v12 §8): a connected UDP socket reports the
+ * network's trouble as errors, and each of these loses at most the one
+ * datagram and never ends the transport. Whether the Session lives is the
+ * control connection's to say. They are counted per class. Every other send or
+ * receive error (EMSGSIZE, EBADF, EINVAL, ENOTCONN, EACCES, ...) is a
+ * configuration or program error that every datagram would hit, and stays
+ * terminal with its errno.
+ */
+typedef uint8_t MeisoDisplayIngressMediaPosixUdpDropClass;
+enum {
+    /* EHOSTUNREACH: no route, or the neighbour did not answer */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_HOST_UNREACHABLE = 0,
+    /* ENETUNREACH */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_NETWORK_UNREACHABLE = 1,
+    /* EHOSTDOWN */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_HOST_DOWN = 2,
+    /* ENETDOWN: the local interface went down (Wi-Fi left) */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_NETWORK_DOWN = 3,
+    /* ECONNREFUSED: an ICMP port unreachable came back */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_REFUSED = 4,
+    /* ENOBUFS */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_NO_BUFFERS = 5,
+    /* EPERM: a local firewall drop, e.g. nft in OUTPUT */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_NOT_PERMITTED = 6,
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT = 7
+};
+
 typedef uint8_t MeisoDisplayIngressMediaPosixUdpInitStatus;
 enum {
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_INIT_OK = 0,
@@ -59,7 +87,9 @@ enum {
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_INTERRUPTED = 7,
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_TRANSPORT_LOST = 8,
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_INVALID_ARGUMENT = 9,
-    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_INVALID_STATE = 10
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_INVALID_STATE = 10,
+    /* A drop-class error came instead of a datagram: counted, read again. */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_DROPPED = 11
 };
 
 typedef uint8_t MeisoDisplayIngressMediaPosixUdpWriteStatus;
@@ -71,7 +101,10 @@ enum {
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_TRANSPORT_LOST = 4,
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_TRANSPORT_INVALID = 5,
     MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_INVALID_ARGUMENT = 6,
-    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_INVALID_STATE = 7
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_INVALID_STATE = 7,
+    /* The datagram was lost to a drop-class error: counted, the packet is
+     * done and the next one follows (not WOULD_BLOCK, which sends it again). */
+    MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_DROPPED = 8
 };
 
 typedef uint8_t MeisoDisplayIngressMediaPosixUdpTerminateStatus;
@@ -97,6 +130,11 @@ typedef struct {
     uint64_t datagrams_rejected;
     uint64_t datagrams_truncated;
     size_t arena_bytes;
+    uint64_t datagrams_dropped;
+    uint64_t receive_errors_dropped;
+    uint64_t drops_by_class
+        [MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT];
+    int last_drop_error;
 } MeisoDisplayIngressMediaPosixUdpSnapshot;
 
 /*
@@ -104,8 +142,22 @@ typedef struct {
  * and truncated datagrams. rejected excludes truncated datagrams. sent counts
  * every complete datagram accepted by the local kernel, including the
  * unrecoverable case where subsequent local packet completion detects an
- * internal contract failure.
+ * internal contract failure. dropped counts datagrams lost to a drop-class
+ * send error (not in sent); receive_errors_dropped counts drop-class receive
+ * errors (no datagram removed, not in received). drops_by_class counts both by
+ * class (an adapter only sends or only receives); last_drop_error is the
+ * latest one's errno, 0 before any. Drop counters saturate.
  */
+
+/* The class of a drop-class errno; false for any other value. */
+bool meiso_display_ingress_media_posix_udp_drop_class(
+    int error_number,
+    MeisoDisplayIngressMediaPosixUdpDropClass *out_class
+);
+/* "EHOSTUNREACH" and the like for the errnos this adapter reports (the drop
+ * classes, the syscall retries and the usual terminal ones); NULL for others.
+ * Diagnostics print it with the number. */
+const char *meiso_display_ingress_media_posix_udp_error_name(int error_number);
 
 size_t meiso_display_ingress_media_posix_udp_alignment_required(void);
 size_t meiso_display_ingress_media_posix_udp_memory_required(

@@ -1251,14 +1251,17 @@ static bool test_short_send_and_io_error_are_sticky_terminal(void)
     CHECK(meiso_display_ingress_media_posix_udp_prepare_outbound(
               pair.host_adapter
           ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_PREPARE_READY);
-    injected_send_errno = ENETDOWN;
+    injected_send_errno = EMSGSIZE;
     CHECK(meiso_display_ingress_media_posix_udp_on_writable(
               pair.host_adapter
           ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_TRANSPORT_LOST);
     CHECK(meiso_display_ingress_media_posix_udp_last_error(
         pair.host_adapter, &error_number
     ));
-    CHECK(error_number == ENETDOWN);
+    CHECK(error_number == EMSGSIZE);
+    CHECK(strcmp(meiso_display_ingress_media_posix_udp_error_name(
+                     error_number
+                 ), "EMSGSIZE") == 0);
     close_pair(&pair);
 
     CHECK(initialize_pair(&pair, TEST_FRAGMENT_BYTES));
@@ -1266,14 +1269,15 @@ static bool test_short_send_and_io_error_are_sticky_terminal(void)
     flags = fcntl(pair.edge_fd, F_GETFL);
     descriptor_flags = fcntl(pair.edge_fd, F_GETFD);
     CHECK(flags >= 0 && descriptor_flags >= 0);
-    injected_recv_errno = ENETDOWN;
+    injected_recv_errno = ENOTCONN;
     CHECK(meiso_display_ingress_media_posix_udp_on_readable(
               pair.edge_adapter, NULL
           ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_TRANSPORT_LOST);
     CHECK(meiso_display_ingress_media_posix_udp_snapshot(
         pair.edge_adapter, &before
     ));
-    CHECK(before.terminal && before.last_error == ENETDOWN &&
+    CHECK(before.terminal && before.last_error == ENOTCONN &&
+          before.receive_errors_dropped == 0U &&
           before.datagrams_received == 0U &&
           before.datagrams_rejected == 0U &&
           before.datagrams_truncated == 0U);
@@ -1295,6 +1299,131 @@ static bool test_short_send_and_io_error_are_sticky_terminal(void)
     return true;
 }
 
+/*
+ * meiso_core #45: the network's errors lose one datagram, never the
+ * transport. Every class, both directions; the next frame still arrives.
+ */
+static bool test_network_errors_drop_one_datagram(void)
+{
+    static const struct {
+        int error_number;
+        const char *name;
+    } classes[MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT] = {
+        { EHOSTUNREACH, "EHOSTUNREACH" }, { ENETUNREACH, "ENETUNREACH" },
+        { EHOSTDOWN, "EHOSTDOWN" }, { ENETDOWN, "ENETDOWN" },
+        { ECONNREFUSED, "ECONNREFUSED" }, { ENOBUFS, "ENOBUFS" },
+        { EPERM, "EPERM" }
+    };
+    UdpPair pair;
+    uint8_t frame_bytes[TEST_FRAME_BYTES];
+    MeisoDisplayIngressMediaFrame frame;
+    MeisoDisplayIngressMediaLatestView latest;
+    MeisoDisplayIngressMediaPosixUdpSnapshot snapshot;
+    MeisoDisplayIngressMediaPosixUdpDropClass drop_class;
+    MeisoDisplayIngressMediaPosixUdpReadStatus read;
+    size_t index;
+    size_t packet_index;
+    size_t reads;
+    int error_number = 0;
+
+    CHECK(!meiso_display_ingress_media_posix_udp_drop_class(0, &drop_class));
+    CHECK(!meiso_display_ingress_media_posix_udp_drop_class(
+        EMSGSIZE, &drop_class
+    ));
+    CHECK(meiso_display_ingress_media_posix_udp_error_name(-1) == NULL);
+    for (index = 0U;
+         index < MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT;
+         ++index) {
+        CHECK(meiso_display_ingress_media_posix_udp_drop_class(
+            classes[index].error_number, &drop_class
+        ));
+        CHECK(drop_class == index);
+        CHECK(strcmp(meiso_display_ingress_media_posix_udp_error_name(
+                         classes[index].error_number
+                     ), classes[index].name) == 0);
+
+        CHECK(initialize_pair(&pair, TEST_FRAGMENT_BYTES));
+        CHECK(initialize_adapters(&pair));
+
+        /* Sending: the first fragment is lost, the other three go. */
+        fill_frame(frame_bytes, 1U);
+        frame = frame_value(frame_bytes, 1U, 0U);
+        CHECK(meiso_display_ingress_media_transport_submit(
+                  pair.host_transport, &frame, NULL
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+        CHECK(meiso_display_ingress_media_posix_udp_prepare_outbound(
+                  pair.host_adapter
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_PREPARE_READY);
+        injected_send_errno = classes[index].error_number;
+        CHECK(meiso_display_ingress_media_posix_udp_on_writable(
+                  pair.host_adapter
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_DROPPED);
+        CHECK(meiso_display_ingress_media_posix_udp_snapshot(
+            pair.host_adapter, &snapshot
+        ));
+        CHECK(!snapshot.terminal && !snapshot.tx_packet_borrowed &&
+              snapshot.datagrams_sent == 0U &&
+              snapshot.datagrams_dropped == 1U &&
+              snapshot.drops_by_class[index] == 1U &&
+              snapshot.last_drop_error == classes[index].error_number &&
+              snapshot.last_error == 0);
+        CHECK(!meiso_display_ingress_media_posix_udp_last_error(
+            pair.host_adapter, &error_number
+        ));
+        for (packet_index = 1U; packet_index < 4U; ++packet_index) {
+            CHECK(send_one(&pair));
+        }
+        CHECK(meiso_display_ingress_media_posix_udp_prepare_outbound(
+                  pair.host_adapter
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_PREPARE_IDLE);
+
+        /* Receiving: the error comes instead of a datagram. */
+        injected_recv_errno = classes[index].error_number;
+        CHECK(meiso_display_ingress_media_posix_udp_on_readable(
+                  pair.edge_adapter, NULL
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_DROPPED);
+        CHECK(meiso_display_ingress_media_posix_udp_snapshot(
+            pair.edge_adapter, &snapshot
+        ));
+        CHECK(!snapshot.terminal && snapshot.datagrams_received == 0U &&
+              snapshot.receive_errors_dropped == 1U &&
+              snapshot.drops_by_class[index] == 1U &&
+              snapshot.last_drop_error == classes[index].error_number);
+
+        /* The next frame arrives whole behind what is left of the first. */
+        fill_frame(frame_bytes, 2U);
+        frame = frame_value(frame_bytes, 2U, 0U);
+        CHECK(meiso_display_ingress_media_transport_submit(
+                  pair.host_transport, &frame, NULL
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+        for (packet_index = 0U; packet_index < 4U; ++packet_index) {
+            CHECK(send_one(&pair));
+        }
+        read = MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_WOULD_BLOCK;
+        for (reads = 0U; reads < 7U &&
+             read != MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_FRAME_PUBLISHED;
+             ++reads) {
+            CHECK(wait_readable(pair.edge_fd));
+            read = meiso_display_ingress_media_posix_udp_on_readable(
+                pair.edge_adapter, NULL
+            );
+            CHECK(read !=
+                      MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_TRANSPORT_LOST &&
+                  read !=
+                      MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_INVALID_STATE);
+        }
+        CHECK(read == MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_FRAME_PUBLISHED);
+        CHECK(meiso_display_ingress_media_transport_latest(
+                  pair.edge_transport, &latest
+              ) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK);
+        CHECK(latest.frame.frame_sequence == 2U &&
+              memcmp(latest.frame.rgba_frame.data, frame_bytes,
+                     TEST_FRAME_BYTES) == 0);
+        close_pair(&pair);
+    }
+    return true;
+}
+
 int main(void)
 {
     if (!test_init_fd_alias_roles_and_datagram_limit() ||
@@ -1305,7 +1434,8 @@ int main(void)
         !test_dropped_old_fragment_does_not_block_recovery_frame() ||
         !test_reordered_and_duplicate_datagrams_recover() ||
         !test_truncation_rejection_and_stale_scope_fail_closed() ||
-        !test_short_send_and_io_error_are_sticky_terminal()) {
+        !test_short_send_and_io_error_are_sticky_terminal() ||
+        !test_network_errors_drop_one_datagram()) {
         return 1;
     }
     puts("Display Ingress connected UDP behavior tests passed");

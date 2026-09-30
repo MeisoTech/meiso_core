@@ -25,6 +25,11 @@ struct MeisoDisplayIngressMediaPosixUdp {
     uint64_t datagrams_received;
     uint64_t datagrams_rejected;
     uint64_t datagrams_truncated;
+    uint64_t datagrams_dropped;
+    uint64_t receive_errors_dropped;
+    uint64_t drops_by_class
+        [MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT];
+    int last_drop_error;
     uint32_t magic;
     int connected_fd;
     int last_error;
@@ -36,6 +41,58 @@ struct MeisoDisplayIngressMediaPosixUdp {
     bool terminal;
     uint8_t storage[];
 };
+
+static const int drop_class_errors
+    [MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT] = {
+    EHOSTUNREACH, ENETUNREACH, EHOSTDOWN, ENETDOWN,
+    ECONNREFUSED, ENOBUFS, EPERM
+};
+
+bool meiso_display_ingress_media_posix_udp_drop_class(
+    int error_number,
+    MeisoDisplayIngressMediaPosixUdpDropClass *out_class
+)
+{
+    size_t index;
+
+    for (index = 0U;
+         index < MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT;
+         ++index) {
+        if (error_number != 0 && drop_class_errors[index] == error_number) {
+            if (out_class != NULL) {
+                *out_class = (MeisoDisplayIngressMediaPosixUdpDropClass)index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *meiso_display_ingress_media_posix_udp_error_name(int error_number)
+{
+    static const struct {
+        int number;
+        const char *name;
+    } names[] = {
+        { EHOSTUNREACH, "EHOSTUNREACH" }, { ENETUNREACH, "ENETUNREACH" },
+        { EHOSTDOWN, "EHOSTDOWN" }, { ENETDOWN, "ENETDOWN" },
+        { ECONNREFUSED, "ECONNREFUSED" }, { ENOBUFS, "ENOBUFS" },
+        { EPERM, "EPERM" }, { EAGAIN, "EAGAIN" }, { EINTR, "EINTR" },
+        { EMSGSIZE, "EMSGSIZE" }, { EBADF, "EBADF" }, { EINVAL, "EINVAL" },
+        { ENOTCONN, "ENOTCONN" }, { EACCES, "EACCES" }, { EIO, "EIO" },
+        { EPROTO, "EPROTO" }, { EOVERFLOW, "EOVERFLOW" },
+        { ECONNRESET, "ECONNRESET" }, { EPIPE, "EPIPE" },
+        { ENOTSOCK, "ENOTSOCK" }, { EFAULT, "EFAULT" }, { ENOMEM, "ENOMEM" }
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        if (names[index].number == error_number) {
+            return names[index].name;
+        }
+    }
+    return NULL;
+}
 
 static bool add_size(size_t lhs, size_t rhs, size_t *out_value)
 {
@@ -321,6 +378,23 @@ static bool mark_terminal(
     return synchronize_terminal(adapter, error_number);
 }
 
+/* A drop-class error: counted by class, saturating; never terminal. */
+static void count_drop(
+    MeisoDisplayIngressMediaPosixUdp *adapter,
+    MeisoDisplayIngressMediaPosixUdpDropClass drop_class,
+    int error_number,
+    uint64_t *direction_count
+)
+{
+    if (*direction_count != UINT64_MAX) {
+        ++*direction_count;
+    }
+    if (adapter->drops_by_class[drop_class] != UINT64_MAX) {
+        ++adapter->drops_by_class[drop_class];
+    }
+    adapter->last_drop_error = error_number;
+}
+
 size_t meiso_display_ingress_media_posix_udp_alignment_required(void)
 {
     return alignof(max_align_t);
@@ -585,6 +659,7 @@ meiso_display_ingress_media_posix_udp_on_readable(
     struct msghdr message;
     ssize_t received;
     int error_number;
+    MeisoDisplayIngressMediaPosixUdpDropClass drop_class;
 
     if (!adapter_valid(adapter, &snapshot) ||
         (admission != NULL &&
@@ -634,6 +709,15 @@ meiso_display_ingress_media_posix_udp_on_readable(
         if (error_number == EINTR) {
             return MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_INTERRUPTED;
         }
+        if (meiso_display_ingress_media_posix_udp_drop_class(
+                error_number, &drop_class
+            )) {
+            count_drop(
+                adapter, drop_class, error_number,
+                &adapter->receive_errors_dropped
+            );
+            return MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_READ_DROPPED;
+        }
         (void)mark_terminal(
             adapter,
             MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_MEDIA_TRANSPORT_LOST,
@@ -662,6 +746,7 @@ meiso_display_ingress_media_posix_udp_on_writable(
     MeisoDisplayIngressMediaTransportStatus status;
     ssize_t sent;
     int error_number;
+    MeisoDisplayIngressMediaPosixUdpDropClass drop_class;
 
     if (!adapter_valid(adapter, &snapshot)) {
         return MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_INVALID_ARGUMENT;
@@ -700,6 +785,27 @@ meiso_display_ingress_media_posix_udp_on_writable(
         }
         if (error_number == EINTR) {
             return MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_INTERRUPTED;
+        }
+        if (meiso_display_ingress_media_posix_udp_drop_class(
+                error_number, &drop_class
+            )) {
+            /* Lost like a datagram in the air: the packet is done. */
+            status = meiso_display_ingress_media_transport_complete_outbound(
+                adapter->transport, &adapter->tx_packet.ref
+            );
+            if (status != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK) {
+                (void)mark_terminal(
+                    adapter,
+                    MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_MEDIA_TRANSPORT_LOST,
+                    EPROTO
+                );
+                return MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_TRANSPORT_INVALID;
+            }
+            clear_tx(adapter);
+            count_drop(
+                adapter, drop_class, error_number, &adapter->datagrams_dropped
+            );
+            return MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_WRITE_DROPPED;
         }
         (void)mark_terminal(
             adapter,
@@ -821,6 +927,13 @@ bool meiso_display_ingress_media_posix_udp_snapshot(
     snapshot.datagrams_rejected = adapter->datagrams_rejected;
     snapshot.datagrams_truncated = adapter->datagrams_truncated;
     snapshot.arena_bytes = adapter->arena_size;
+    snapshot.datagrams_dropped = adapter->datagrams_dropped;
+    snapshot.receive_errors_dropped = adapter->receive_errors_dropped;
+    memcpy(
+        snapshot.drops_by_class, adapter->drops_by_class,
+        sizeof(snapshot.drops_by_class)
+    );
+    snapshot.last_drop_error = adapter->last_drop_error;
     *out_snapshot = snapshot;
     return true;
 }
