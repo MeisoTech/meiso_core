@@ -1310,7 +1310,12 @@ static bool test_network_errors_drop_one_datagram(void)
         const char *name;
     } classes[MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT] = {
         { EHOSTUNREACH, "EHOSTUNREACH" }, { ENETUNREACH, "ENETUNREACH" },
-        { EHOSTDOWN, "EHOSTDOWN" }, { ENETDOWN, "ENETDOWN" },
+#ifdef EHOSTDOWN
+        { EHOSTDOWN, "EHOSTDOWN" },
+#else
+        { 0, NULL }, /* not POSIX: macOS under _POSIX_C_SOURCE lacks it */
+#endif
+        { ENETDOWN, "ENETDOWN" },
         { ECONNREFUSED, "ECONNREFUSED" }, { ENOBUFS, "ENOBUFS" },
         { EPERM, "EPERM" }
     };
@@ -1330,13 +1335,20 @@ static bool test_network_errors_drop_one_datagram(void)
     CHECK(!meiso_display_ingress_media_posix_udp_drop_class(
         EMSGSIZE, &drop_class
     ));
-    CHECK(meiso_display_ingress_media_posix_udp_error_name(-1) == NULL);
+    CHECK(meiso_display_ingress_media_posix_udp_error_name(-1) == NULL &&
+          meiso_display_ingress_media_posix_udp_error_name(0) == NULL);
     CHECK(meiso_display_ingress_media_posix_udp_drop_class_error(
               MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT
           ) == 0);
     for (index = 0U;
          index < MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT;
          ++index) {
+        if (classes[index].error_number == 0) {
+            CHECK(meiso_display_ingress_media_posix_udp_drop_class_error(
+                      (MeisoDisplayIngressMediaPosixUdpDropClass)index
+                  ) == 0);
+            continue;
+        }
         CHECK(meiso_display_ingress_media_posix_udp_drop_class(
             classes[index].error_number, &drop_class
         ));
