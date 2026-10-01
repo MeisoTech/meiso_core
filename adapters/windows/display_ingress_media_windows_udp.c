@@ -19,6 +19,11 @@ struct MeisoDisplayIngressMediaWindowsUdp {
     uint64_t datagrams_received;
     uint64_t datagrams_rejected;
     uint64_t datagrams_truncated;
+    uint64_t datagrams_dropped;
+    uint64_t receive_errors_dropped;
+    uint64_t drops_by_class
+        [MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_CLASS_COUNT];
+    int last_drop_error;
     uint32_t magic;
     SOCKET connected_socket;
     int last_error;
@@ -29,6 +34,62 @@ struct MeisoDisplayIngressMediaWindowsUdp {
     bool receive_status_present;
     bool terminal;
 };
+
+static const int drop_class_errors
+    [MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_CLASS_COUNT] = {
+    WSAEHOSTUNREACH, WSAENETUNREACH, WSAENETDOWN, WSAECONNRESET, WSAENOBUFS
+};
+
+bool meiso_display_ingress_media_windows_udp_drop_class(
+    int error_number,
+    MeisoDisplayIngressMediaWindowsUdpDropClass *out_class
+)
+{
+    size_t index;
+
+    for (index = 0U;
+         index < MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_CLASS_COUNT;
+         ++index) {
+        if (drop_class_errors[index] == error_number) {
+            if (out_class != NULL) {
+                *out_class = (MeisoDisplayIngressMediaWindowsUdpDropClass)index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *meiso_display_ingress_media_windows_udp_error_name(int error_number)
+{
+    static const struct {
+        int number;
+        const char *name;
+    } names[] = {
+        { WSAEHOSTUNREACH, "WSAEHOSTUNREACH" },
+        { WSAENETUNREACH, "WSAENETUNREACH" },
+        { WSAENETDOWN, "WSAENETDOWN" },
+        { WSAECONNRESET, "WSAECONNRESET" },
+        { WSAENOBUFS, "WSAENOBUFS" },
+        { WSAEWOULDBLOCK, "WSAEWOULDBLOCK" }, { WSAEINTR, "WSAEINTR" },
+        { WSAEMSGSIZE, "WSAEMSGSIZE" }, { WSAENOTSOCK, "WSAENOTSOCK" },
+        { WSAEBADF, "WSAEBADF" }, { WSAEINVAL, "WSAEINVAL" },
+        { WSAENOTCONN, "WSAENOTCONN" }, { WSAEACCES, "WSAEACCES" },
+        { WSAECONNABORTED, "WSAECONNABORTED" }, { WSAEFAULT, "WSAEFAULT" },
+        { WSAESHUTDOWN, "WSAESHUTDOWN" }, { WSAENETRESET, "WSAENETRESET" },
+        { WSAETIMEDOUT, "WSAETIMEDOUT" }, { WSAEOPNOTSUPP, "WSAEOPNOTSUPP" },
+        { WSAEINPROGRESS, "WSAEINPROGRESS" },
+        { WSANOTINITIALISED, "WSANOTINITIALISED" }
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        if (names[index].number == error_number) {
+            return names[index].name;
+        }
+    }
+    return NULL;
+}
 
 static bool add_size(size_t lhs, size_t rhs, size_t *out_value)
 {
@@ -282,6 +343,22 @@ static bool mark_terminal(
         return false;
     }
     return synchronize_terminal(adapter, error_number);
+}
+
+static void count_drop(
+    MeisoDisplayIngressMediaWindowsUdp *adapter,
+    MeisoDisplayIngressMediaWindowsUdpDropClass drop_class,
+    int error_number,
+    uint64_t *direction_count
+)
+{
+    if (*direction_count != UINT64_MAX) {
+        ++*direction_count;
+    }
+    if (adapter->drops_by_class[drop_class] != UINT64_MAX) {
+        ++adapter->drops_by_class[drop_class];
+    }
+    adapter->last_drop_error = error_number;
 }
 
 size_t meiso_display_ingress_media_windows_udp_alignment_required(void)
@@ -539,6 +616,7 @@ meiso_display_ingress_media_windows_udp_on_readable(
     MeisoDisplayIngressMediaTransportSnapshot snapshot;
     int received;
     int error_number;
+    MeisoDisplayIngressMediaWindowsUdpDropClass drop_class;
 
     if (!adapter_valid(adapter, &snapshot) ||
         (admission != NULL &&
@@ -583,6 +661,15 @@ meiso_display_ingress_media_windows_udp_on_readable(
         if (error_number == WSAEINTR) {
             return MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_INTERRUPTED;
         }
+        if (meiso_display_ingress_media_windows_udp_drop_class(
+                error_number, &drop_class
+            )) {
+            count_drop(
+                adapter, drop_class, error_number,
+                &adapter->receive_errors_dropped
+            );
+            return MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_DROPPED;
+        }
         if (error_number == WSAEMSGSIZE) {
             /* UDP consumed the oversized datagram. Never parse its prefix. */
             ++adapter->datagrams_received;
@@ -611,6 +698,7 @@ meiso_display_ingress_media_windows_udp_on_writable(
     MeisoDisplayIngressMediaTransportStatus status;
     int sent;
     int error_number;
+    MeisoDisplayIngressMediaWindowsUdpDropClass drop_class;
 
     if (!adapter_valid(adapter, &snapshot)) {
         return MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_INVALID_ARGUMENT;
@@ -649,6 +737,27 @@ meiso_display_ingress_media_windows_udp_on_writable(
         }
         if (error_number == WSAEINTR) {
             return MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_INTERRUPTED;
+        }
+        if (meiso_display_ingress_media_windows_udp_drop_class(
+                error_number, &drop_class
+            )) {
+            /* Packet completion advances the cursor; it is not delivery evidence. */
+            status = meiso_display_ingress_media_transport_complete_outbound(
+                adapter->transport, &adapter->tx_packet.ref
+            );
+            if (status != MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_OK) {
+                (void)mark_terminal(
+                    adapter,
+                    MEISO_DISPLAY_INGRESS_MEDIA_TERMINAL_MEDIA_TRANSPORT_LOST,
+                    WSAEINVAL
+                );
+                return MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_TRANSPORT_INVALID;
+            }
+            clear_tx(adapter);
+            count_drop(
+                adapter, drop_class, error_number, &adapter->datagrams_dropped
+            );
+            return MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_DROPPED;
         }
         (void)mark_terminal(
             adapter,
@@ -770,6 +879,13 @@ bool meiso_display_ingress_media_windows_udp_snapshot(
     snapshot.datagrams_rejected = adapter->datagrams_rejected;
     snapshot.datagrams_truncated = adapter->datagrams_truncated;
     snapshot.arena_bytes = adapter->arena_size;
+    snapshot.datagrams_dropped = adapter->datagrams_dropped;
+    snapshot.receive_errors_dropped = adapter->receive_errors_dropped;
+    memcpy(
+        snapshot.drops_by_class, adapter->drops_by_class,
+        sizeof(snapshot.drops_by_class)
+    );
+    snapshot.last_drop_error = adapter->last_drop_error;
     *out_snapshot = snapshot;
     return true;
 }

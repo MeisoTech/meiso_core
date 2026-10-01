@@ -25,6 +25,19 @@ typedef struct {
     MeisoDisplayIngressMediaBinding binding;
 } MeisoDisplayIngressMediaWindowsUdpConfig;
 
+/* Network errors lose one datagram, not the Session. These classes are local
+ * diagnostics, not wire values. All other I/O errors retain their existing
+ * handling (including READ_TRUNCATED for receive WSAEMSGSIZE). */
+typedef uint8_t MeisoDisplayIngressMediaWindowsUdpDropClass;
+enum {
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_HOST_UNREACHABLE = 0, /* WSAEHOSTUNREACH */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_NETWORK_UNREACHABLE = 1, /* WSAENETUNREACH */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_NETWORK_DOWN = 2, /* WSAENETDOWN */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_REFUSED = 3, /* WSAECONNRESET: UDP ICMP port unreachable */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_NO_BUFFERS = 4, /* WSAENOBUFS */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_CLASS_COUNT = 5
+};
+
 typedef uint8_t MeisoDisplayIngressMediaWindowsUdpInitStatus;
 enum {
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_INIT_OK = 0,
@@ -58,7 +71,9 @@ enum {
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_INTERRUPTED = 7,
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_TRANSPORT_LOST = 8,
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_INVALID_ARGUMENT = 9,
-    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_INVALID_STATE = 10
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_INVALID_STATE = 10,
+    /* A network error instead of a datagram: counted, read again. */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_READ_DROPPED = 11
 };
 
 typedef uint8_t MeisoDisplayIngressMediaWindowsUdpWriteStatus;
@@ -70,7 +85,9 @@ enum {
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_TRANSPORT_LOST = 4,
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_TRANSPORT_INVALID = 5,
     MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_INVALID_ARGUMENT = 6,
-    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_INVALID_STATE = 7
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_INVALID_STATE = 7,
+    /* Lost and consumed: prepare the next packet, do not retry this one. */
+    MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_WRITE_DROPPED = 8
 };
 
 typedef uint8_t MeisoDisplayIngressMediaWindowsUdpTerminateStatus;
@@ -96,6 +113,11 @@ typedef struct {
     uint64_t datagrams_rejected;
     uint64_t datagrams_truncated;
     size_t arena_bytes;
+    uint64_t datagrams_dropped;
+    uint64_t receive_errors_dropped;
+    uint64_t drops_by_class
+        [MEISO_DISPLAY_INGRESS_MEDIA_WINDOWS_UDP_DROP_CLASS_COUNT];
+    int last_drop_error;
 } MeisoDisplayIngressMediaWindowsUdpSnapshot;
 
 /*
@@ -103,8 +125,20 @@ typedef struct {
  * and truncated datagrams. rejected excludes truncated datagrams. sent counts
  * every complete datagram accepted by the local kernel, including the
  * unrecoverable case where subsequent local packet completion detects an
- * internal contract failure.
+ * internal contract failure. datagrams_dropped counts network send errors,
+ * excluded from sent. receive_errors_dropped counts network receive errors,
+ * not received datagrams. drops_by_class counts both (each adapter has one
+ * direction); last_drop_error is their latest WSA code, initially zero.
+ * Drop counters saturate. last_error remains terminal-only.
  */
+
+/* False leaves a non-NULL out_class unchanged; NULL is valid for classification. */
+bool meiso_display_ingress_media_windows_udp_drop_class(
+    int error_number,
+    MeisoDisplayIngressMediaWindowsUdpDropClass *out_class
+);
+/* WSA symbolic name for known diagnostics, NULL otherwise. Log with the number. */
+const char *meiso_display_ingress_media_windows_udp_error_name(int error_number);
 
 size_t meiso_display_ingress_media_windows_udp_alignment_required(void);
 size_t meiso_display_ingress_media_windows_udp_memory_required(
@@ -150,7 +184,7 @@ bool meiso_display_ingress_media_windows_udp_wants_write(
 
 /*
  * Host-only. READY borrows one exact idempotent DIFR packet but sends nothing.
- * Repeated prepare is idempotent until successful send completion.
+ * Repeated prepare is idempotent until send completion or WRITE_DROPPED.
  */
 MeisoDisplayIngressMediaWindowsUdpPrepareStatus
 meiso_display_ingress_media_windows_udp_prepare_outbound(
@@ -162,6 +196,8 @@ meiso_display_ingress_media_windows_udp_prepare_outbound(
  * datagram to the media receiver. admission is the caller's Core-style local
  * deadline mapping assertion for this receive attempt. WSAEWOULDBLOCK and
  * WSAEINTR leave both adapter and transport byte-exact unchanged.
+ * Drop-class network errors return READ_DROPPED and update diagnostics only;
+ * they do not discard in-progress reassembly or count a received datagram.
  */
 MeisoDisplayIngressMediaWindowsUdpReadStatus
 meiso_display_ingress_media_windows_udp_on_readable(
@@ -170,10 +206,11 @@ meiso_display_ingress_media_windows_udp_on_readable(
 );
 
 /*
- * Host-only. Performs at most one atomic datagram send. Only a full successful
- * send completes the transport packet. WSAEWOULDBLOCK and WSAEINTR preserve
- * the exact borrow and all transport cursors. A short send or other I/O error
- * makes adapter and media transport terminal.
+ * Host-only. Performs at most one atomic datagram send. A full send or a
+ * drop-class network error completes the transport packet and clears its
+ * borrow; WRITE_DROPPED does not count as sent. WSAEWOULDBLOCK and WSAEINTR
+ * preserve the exact borrow and all transport cursors. A short send or other
+ * I/O error makes adapter and media transport terminal.
  */
 MeisoDisplayIngressMediaWindowsUdpWriteStatus
 meiso_display_ingress_media_windows_udp_on_writable(

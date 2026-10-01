@@ -216,10 +216,147 @@ static bool test_io_failures(void)
     CHECK(UDP(on_writable)(p.adapter[0]) == STATUS(WRITE_TRANSPORT_LOST));
     CHECK(UDP(last_error)(p.adapter[0], &error) && error == WSAECONNABORTED);
     CHECK(MEDIA(snapshot)(p.transport[0], &state) == MEDIA_OK && state.phase == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_PHASE_TERMINAL);
-    meiso_test_recv_error = WSAECONNRESET;
+    meiso_test_recv_error = WSAENOTSOCK;
     CHECK(UDP(on_readable)(p.adapter[1], NULL) == STATUS(READ_TRANSPORT_LOST));
-    CHECK(UDP(last_error)(p.adapter[1], &error) && error == WSAECONNRESET);
+    CHECK(UDP(last_error)(p.adapter[1], &error) && error == WSAENOTSOCK);
     return close_pair(&p);
+}
+
+static const struct {
+    int error;
+    MeisoDisplayIngressMediaWindowsUdpDropClass drop_class;
+    const char *name;
+} drop_cases[] = {
+    {WSAEHOSTUNREACH, STATUS(DROP_HOST_UNREACHABLE), "WSAEHOSTUNREACH"},
+    {WSAENETUNREACH, STATUS(DROP_NETWORK_UNREACHABLE), "WSAENETUNREACH"},
+    {WSAENETDOWN, STATUS(DROP_NETWORK_DOWN), "WSAENETDOWN"},
+    {WSAECONNRESET, STATUS(DROP_REFUSED), "WSAECONNRESET"},
+    {WSAENOBUFS, STATUS(DROP_NO_BUFFERS), "WSAENOBUFS"}
+};
+
+static bool test_network_drops(int family)
+{
+    Pair p;
+    MeisoDisplayIngressMediaWindowsUdpSnapshot snapshot;
+    MeisoDisplayIngressMediaTransportSnapshot state;
+    MeisoDisplayIngressMediaLatestView latest;
+    Arena receiver_before;
+    CHECK(make_pair(&p, family) && initialize(&p));
+    for (size_t k = 0; k < sizeof(drop_cases) / sizeof(drop_cases[0]); ++k) {
+        const uint64_t sequence = 2 * (uint64_t)k + 1;
+        MeisoDisplayIngressMediaWindowsUdpDropClass drop_class = UINT8_MAX;
+        int error = -1;
+        CHECK(UDP(drop_class)(drop_cases[k].error, &drop_class));
+        CHECK(drop_class == drop_cases[k].drop_class);
+        CHECK(UDP(drop_class)(drop_cases[k].error, NULL));
+        CHECK(strcmp(UDP(error_name)(drop_cases[k].error), drop_cases[k].name) == 0);
+        CHECK(submit(&p, sequence));
+        for (unsigned i = 0; i < 4; ++i) {
+            CHECK(UDP(prepare_outbound)(p.adapter[0]) == STATUS(PREPARE_READY));
+            CHECK(UDP(snapshot)(p.adapter[0], &snapshot));
+            CHECK(snapshot.tx_packet.fragment_offset == i * 8 &&
+                  snapshot.tx_packet.frame_sequence == sequence);
+            if (i == 1) {
+                /* Lose the middle fragment. Neither retry it nor end the media. */
+                meiso_test_send_error = drop_cases[k].error;
+                CHECK(UDP(on_writable)(p.adapter[0]) == STATUS(WRITE_DROPPED));
+                CHECK(!UDP(wants_write)(p.adapter[0]));
+                CHECK(UDP(on_writable)(p.adapter[0]) == STATUS(WRITE_IDLE));
+                CHECK(UDP(snapshot)(p.adapter[0], &snapshot));
+                CHECK(!snapshot.tx_packet_borrowed && !snapshot.terminal);
+                CHECK(snapshot.datagrams_dropped == k + 1 &&
+                      snapshot.last_drop_error == drop_cases[k].error);
+                CHECK(!UDP(last_error)(p.adapter[0], &error) && error == -1);
+                CHECK(MEDIA(snapshot)(p.transport[0], &state) == MEDIA_OK);
+                CHECK(state.phase == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_ACTIVE &&
+                      !state.outbound_packet_pending && state.send_fragment_offset == 16);
+                /* An asynchronous receive error must preserve partial reassembly. */
+                receiver_before = p.transport_arena[1];
+                meiso_test_recv_error = drop_cases[k].error;
+                CHECK(UDP(on_readable)(p.adapter[1], NULL) == STATUS(READ_DROPPED));
+                CHECK(memcmp(&receiver_before, &p.transport_arena[1], sizeof(Arena)) == 0);
+                CHECK(UDP(wants_read)(p.adapter[1]));
+                CHECK(UDP(snapshot)(p.adapter[1], &snapshot));
+                CHECK(!snapshot.terminal && snapshot.receive_errors_dropped == k + 1 &&
+                      snapshot.last_drop_error == drop_cases[k].error);
+                CHECK(!UDP(last_error)(p.adapter[1], &error) && error == -1);
+            } else {
+                CHECK(UDP(on_writable)(p.adapter[0]) == STATUS(WRITE_PACKET_SENT));
+                CHECK(wait_readable(p.sockets[1]));
+                CHECK(UDP(on_readable)(p.adapter[1], NULL) ==
+                      (i == 0 ? STATUS(READ_FRAGMENT_ACCEPTED) : STATUS(READ_PACKET_REJECTED)));
+            }
+        }
+        CHECK(UDP(prepare_outbound)(p.adapter[0]) == STATUS(PREPARE_IDLE));
+        CHECK(MEDIA(latest)(p.transport[1], &latest) == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_NO_FRAME);
+        /* The same socket, binding and media objects recover on the next frame. */
+        CHECK(submit(&p, sequence + 1));
+        for (unsigned i = 0; i < 4; ++i) {
+            CHECK(UDP(prepare_outbound)(p.adapter[0]) == STATUS(PREPARE_READY));
+            CHECK(UDP(on_writable)(p.adapter[0]) == STATUS(WRITE_PACKET_SENT));
+            CHECK(wait_readable(p.sockets[1]));
+            CHECK(UDP(on_readable)(p.adapter[1], NULL) ==
+                  (i == 3 ? STATUS(READ_FRAME_PUBLISHED) : STATUS(READ_FRAGMENT_ACCEPTED)));
+        }
+        CHECK(MEDIA(latest)(p.transport[1], &latest) == MEDIA_OK);
+        CHECK(latest.frame.frame_sequence == sequence + 1 && latest.frame.rgba_frame.size == 32);
+        for (size_t i = 0; i < latest.frame.rgba_frame.size; ++i)
+            CHECK(latest.frame.rgba_frame.data[i] == (i % 4 == 3 ? 0xff : 0x5a));
+        CHECK(MEDIA(release_latest)(p.transport[1], &latest.ref) == MEDIA_OK);
+        for (unsigned i = 0; i < 2; ++i) {
+            CHECK(UDP(snapshot)(p.adapter[i], &snapshot));
+            CHECK(!snapshot.terminal && snapshot.last_error == 0);
+            CHECK(snapshot.datagrams_sent == (i == 0 ? 7 * (k + 1) : 0));
+            CHECK(snapshot.datagrams_received == (i == 1 ? 7 * (k + 1) : 0));
+            CHECK(snapshot.datagrams_dropped == (i == 0 ? k + 1 : 0));
+            CHECK(snapshot.receive_errors_dropped == (i == 1 ? k + 1 : 0));
+            for (size_t j = 0; j < STATUS(DROP_CLASS_COUNT); ++j)
+                CHECK(snapshot.drops_by_class[drop_cases[j].drop_class] == (j <= k ? 1U : 0U));
+        }
+    }
+    return close_pair(&p);
+}
+
+static bool test_terminal_errors(void)
+{
+    static const struct { int error; const char *name; } cases[] = {
+        {WSAEMSGSIZE, "WSAEMSGSIZE"}, {WSAENOTSOCK, "WSAENOTSOCK"},
+        {WSAEBADF, "WSAEBADF"}, {WSAEINVAL, "WSAEINVAL"},
+        {WSAENOTCONN, "WSAENOTCONN"}, {WSAEACCES, "WSAEACCES"},
+        {WSAECONNABORTED, "WSAECONNABORTED"}, {WSAEFAULT, "WSAEFAULT"},
+        {WSAESHUTDOWN, "WSAESHUTDOWN"}, {WSAENETRESET, "WSAENETRESET"},
+        {WSAETIMEDOUT, "WSAETIMEDOUT"}
+    };
+    MeisoDisplayIngressMediaWindowsUdpDropClass drop_class = UINT8_MAX;
+    CHECK(!UDP(drop_class)(0, &drop_class) && drop_class == UINT8_MAX);
+    CHECK(!UDP(drop_class)(-1, NULL) && UDP(error_name)(-1) == NULL);
+    CHECK(!UDP(drop_class)(WSAEWOULDBLOCK, NULL) && !UDP(drop_class)(WSAEINTR, NULL));
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); ++k) {
+        Pair p;
+        MeisoDisplayIngressMediaWindowsUdpSnapshot snapshot;
+        MeisoDisplayIngressMediaTransportSnapshot state;
+        int error = 0;
+        CHECK(!UDP(drop_class)(cases[k].error, &drop_class) && drop_class == UINT8_MAX);
+        CHECK(strcmp(UDP(error_name)(cases[k].error), cases[k].name) == 0);
+        CHECK(make_pair(&p, AF_INET) && initialize(&p) && submit(&p, 1));
+        CHECK(UDP(prepare_outbound)(p.adapter[0]) == STATUS(PREPARE_READY));
+        meiso_test_send_error = cases[k].error;
+        CHECK(UDP(on_writable)(p.adapter[0]) == STATUS(WRITE_TRANSPORT_LOST));
+        CHECK(UDP(last_error)(p.adapter[0], &error) && error == cases[k].error);
+        CHECK(UDP(snapshot)(p.adapter[0], &snapshot));
+        CHECK(snapshot.terminal && !snapshot.tx_packet_borrowed && snapshot.datagrams_dropped == 0);
+        CHECK(MEDIA(snapshot)(p.transport[0], &state) == MEDIA_OK &&
+              state.phase == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_PHASE_TERMINAL);
+        if (cases[k].error != WSAEMSGSIZE) { /* Oversized receives are already tested as truncation. */
+            meiso_test_recv_error = cases[k].error;
+            CHECK(UDP(on_readable)(p.adapter[1], NULL) == STATUS(READ_TRANSPORT_LOST));
+            CHECK(UDP(last_error)(p.adapter[1], &error) && error == cases[k].error);
+            CHECK(MEDIA(snapshot)(p.transport[1], &state) == MEDIA_OK &&
+                  state.phase == MEISO_DISPLAY_INGRESS_MEDIA_TRANSPORT_PHASE_TERMINAL);
+        }
+        CHECK(close_pair(&p));
+    }
+    return true;
 }
 
 int main(void)
@@ -227,7 +364,8 @@ int main(void)
     WSADATA winsock;
     if (WSAStartup(MAKEWORD(2, 2), &winsock) != 0) return 1;
     const bool success = test_roundtrip(AF_INET) && test_roundtrip(AF_INET6) &&
-        test_init_and_truncation() && test_io_failures();
+        test_init_and_truncation() && test_io_failures() &&
+        test_network_drops(AF_INET) && test_network_drops(AF_INET6) && test_terminal_errors();
     if (WSACleanup() != 0 || !success) return 1;
     puts("Windows DIFR UDP tests passed");
     return 0;

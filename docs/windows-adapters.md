@@ -23,8 +23,24 @@ Session 中途换帧而旧前缀已发出时进入 transport lost，不拼接两
 使 Session 失效，重新连接必须创建新 Session。配置的帧容量不得小于 Session 本地帧上限。
 
 UDP 沿用现有 DIFR 封包与有界媒体对象：一个包对应一个 datagram，最多 1200 B。
-Host 只发、Edge 只收。prepare 借用一个稳定的包；只有完整发送成功才完成该包。
-`WSAEWOULDBLOCK`/`WSAEINTR` 保留原借用及游标，短发送与其他硬错误终结该媒体对象。
+Host 只发、Edge 只收。prepare 借用一个稳定的包；完整发送成功或明确丢弃后完成该包。
+`WSAEWOULDBLOCK`/`WSAEINTR` 保留原借用及游标，等待重试同一包。
+发送遇到 `WSAEHOSTUNREACH`、`WSAENETUNREACH`、`WSAENETDOWN`、`WSAECONNRESET`、
+`WSAENOBUFS` 时返回 `WRITE_DROPPED`，完成并释放当前借用，下一次 prepare 取下一包；
+不算发送成功，也不终止媒体对象。接收遇到同样五类错误返回 `READ_DROPPED`，保留已有重组，
+不算收到 datagram。会话存活仍由控制连接与会话超时决定。
+接入方需显式接受 `WRITE_DROPPED` / `READ_DROPPED`；枚举值为兼容追加，不能用
+“小于 TRANSPORT_LOST”一类数值范围推断非终止结果。返回后由现有有界事件循环继续驱动，
+不增加立即重试循环。
+
+snapshot 的 `datagrams_dropped` / `receive_errors_dropped` 分别累计这两种结果，
+`drops_by_class` 按五种错误分别累计，计数饱和；`last_drop_error` 保存最近一次网络错误。
+调用方根据快照差值限频报告，不逐包刷日志；适配器自身不输出日志。
+`last_error` 仍只记录终止错误，`error_name()` 将已知 WSA 码转为符号名，未知值返回 NULL；
+诊断同时保留数字。短发送和其余错误（如发送的 `WSAEMSGSIZE`、`WSAENOTSOCK`、
+`WSAEINVAL`、`WSAENOTCONN`、`WSAEACCES`）仍终结媒体对象，便于发现配置或程序错误。
+Windows UDP 的 `WSAECONNRESET` 可以来自此前发送触发的 ICMP Port Unreachable，见
+[Microsoft send 说明](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-send)。
 超长 UDP 包的 `WSAEMSGSIZE` 被记为整包截断并丢弃，截断前缀不交给媒体解码器；
 长度恰为 1200 B 和空 datagram 仍交由完整 wire 校验判定。此处理依据
 [Microsoft recv 说明](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-recv)。
@@ -49,5 +65,6 @@ Profiles、Windows，或直接安装全部默认组件。
 
 测试覆盖 Windows TCP 上的真实 Session/Runtime Catalog、Desired/Actual、Stream、断线后
 重新协商；UDP 的 IPv4/IPv6 分片重组、初始化失败、角色限制、截断包、空包、非阻塞、
-中断、短发送、硬错误及终结后的借用所有权。安装门迁移 prefix 后用 C11/C++17 编译并运行。
+中断、五类收发网络错误的独立计数、丢掉中间分片后在同一对象上恢复完整帧、短发送、
+硬错误及终结后的借用所有权。安装门迁移 prefix 后用 C11/C++17 编译并运行。
 这些是原生回环与包测试，不构成头显显示、真实摄像头或跨机性能证据。
