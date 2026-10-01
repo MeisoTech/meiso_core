@@ -154,7 +154,8 @@ bool meiso_display_ingress_media_posix_udp_drop_class(
     int error_number,
     MeisoDisplayIngressMediaPosixUdpDropClass *out_class
 );
-/* The errno of a drop class; 0 for an invalid class. */
+/* The errno of a drop class; 0 for an invalid class, or one the platform's
+ * errno.h does not have (EHOSTDOWN is not POSIX). */
 int meiso_display_ingress_media_posix_udp_drop_class_error(
     MeisoDisplayIngressMediaPosixUdpDropClass drop_class
 );

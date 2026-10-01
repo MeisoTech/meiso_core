@@ -42,9 +42,17 @@ struct MeisoDisplayIngressMediaPosixUdp {
     uint8_t storage[];
 };
 
+/* EHOSTDOWN is not POSIX; where errno.h does not give it (macOS under
+ * _POSIX_C_SOURCE), that class never matches. */
+#ifdef EHOSTDOWN
+#define MEISO_UDP_EHOSTDOWN EHOSTDOWN
+#else
+#define MEISO_UDP_EHOSTDOWN 0
+#endif
+
 static const int drop_class_errors
     [MEISO_DISPLAY_INGRESS_MEDIA_POSIX_UDP_DROP_CLASS_COUNT] = {
-    EHOSTUNREACH, ENETUNREACH, EHOSTDOWN, ENETDOWN,
+    EHOSTUNREACH, ENETUNREACH, MEISO_UDP_EHOSTDOWN, ENETDOWN,
     ECONNREFUSED, ENOBUFS, EPERM
 };
 
@@ -84,7 +92,7 @@ const char *meiso_display_ingress_media_posix_udp_error_name(int error_number)
         const char *name;
     } names[] = {
         { EHOSTUNREACH, "EHOSTUNREACH" }, { ENETUNREACH, "ENETUNREACH" },
-        { EHOSTDOWN, "EHOSTDOWN" }, { ENETDOWN, "ENETDOWN" },
+        { MEISO_UDP_EHOSTDOWN, "EHOSTDOWN" }, { ENETDOWN, "ENETDOWN" },
         { ECONNREFUSED, "ECONNREFUSED" }, { ENOBUFS, "ENOBUFS" },
         { EPERM, "EPERM" }, { EAGAIN, "EAGAIN" }, { EINTR, "EINTR" },
         { EMSGSIZE, "EMSGSIZE" }, { EBADF, "EBADF" }, { EINVAL, "EINVAL" },
@@ -95,6 +103,9 @@ const char *meiso_display_ingress_media_posix_udp_error_name(int error_number)
     };
     size_t index;
 
+    if (error_number <= 0) {
+        return NULL;
+    }
     for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
         if (names[index].number == error_number) {
             return names[index].name;
