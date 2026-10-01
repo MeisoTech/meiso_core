@@ -15,7 +15,7 @@
 > 旧枚举与布局的行为不变；新增行为必须由显式能力选择。
 > 2026-09-30：§15 加可选的音频 endpoint（按住 `SYSTEM` 说话，meiso_host #93）。只加不改，没有它的 v12 Catalog
 > 照旧合法；完整上限增至 7 endpoint、21 route、registry 28。
-> 2026-10-01（草案，meiso_edge #35）：写明 `correction=IMU` 时 Edge 怎样用陀螺（§10）：位姿晚到或断了也接着转，
+> 2026-10-01（meiso_edge #35）：写明 `correction=IMU` 时 Edge 怎样用陀螺（§10）：位姿晚到或断了也接着转，
 > 位置保持；IMU 到头部的旋转在眼镜本地配置。bytes 与版本号不变；`correction=NONE` 的 Edge 行为不变。
 
 ## 1. 解决什么
@@ -357,7 +357,7 @@ Edge 怎样用：
 - `state=LOST`，或最新位姿比显示时刻旧 500 ms 以上：保持上一帧用过的位姿，WORLD 平面停在原处，
   不跳回单位位姿；新位姿到了接着用。`world_epoch` 变了直接换，不在两个世界系之间插值。
   `correction=IMU` 且陀螺可用时只保持位置：转动接着按陀螺积分，WORLD 平面留在房间里，
-  直到新位姿到、`world_epoch` 变了或 Session 结束。陀螺不可用（最新样本比显示时刻旧
+  直到新的 TRACKING 位姿到、`world_epoch` 变了或 Session 结束。陀螺不可用（最新样本比显示时刻旧
   100 ms + `max_prediction_ms` 以上，或核对不过）时与 `NONE` 相同。
 - `correction=IMU` 且陀螺可用时，到达的位姿早于 Edge 还留着的最早陀螺样本（断线恢复时补到的积压），
   就积不到现在，Edge 不用它，接着按陀螺转，等能接上的位姿。
