@@ -13,13 +13,14 @@
 
 ## 产品规范
 
-仅以下五份文档拥有通用产品语义；按问题选读。
+以下五份文档定义通用产品语义；当前显示选择的版本化契约列在其后。
 
 - [System](system.md)：角色、职责、依赖和系统不变量。
 - [Resource](resource.md)：State / Stream / Action / Blob 的所有权和生命周期。
 - [Runtime](runtime.md)：能力、endpoint、desired/actual、路由和资源可见性。
 - [Link](link.md)：身份、Session、时间、交付与失效。
 - [Composition](composition.md)：图层、激活与最终呈现责任；当前 Display Ingress 选择其中的 direct-latest 语义。
+- [Display Ingress planes-v12](../profiles/display_ingress/planes-v12.md)：当前空间平面、串流/静态图、跟踪、输入和呈现证据的两端 Profile 契约。
 
 这里的 Composition 通用规范不等于默认关闭的旧 Composition 应用栈；
 旧栈的构建和当前 CameraMedia 依赖见[SDK 组件边界](sdk-guide.md#3-cmake-package-与组件)。
