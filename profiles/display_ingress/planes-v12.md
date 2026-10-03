@@ -280,6 +280,12 @@ S-025：眼镜把相机与 IMU 用同一个时钟打时间戳回传，Host 算�
 两边的时间都在 Edge 时钟上（clock epoch 4，与 §6 证据相同），Core 不加对时：
 Host 的位姿由 Edge 时间的相机帧与 IMU 算出，本来就落在 Edge 时间上。
 
+**相机帧的时刻**（meiso_edge #37）：相机帧的 source time 指这幅图对应的时刻，即拍到它的那一刻，用 Edge 时钟。
+- 曝光到驱动打戳之间的偏差由 Edge 在源头扣掉，按这副眼镜自己的标定（一体机庐山派扣 15 ms，Kalibr 10-03）。
+- 没有标定的 Edge 送驱动时间戳或出队时刻；这个误差算在眼镜上，不由消费方补。
+- Host 的 VIO、透视、App 都按 source time 原样使用，不再各自加延迟（OKVIS2 `image_delay` 为 0）。
+- 标定跟着眼镜走，以后经能力上报给 Host（meiso_core #47 评论）；在那之前，标定只存在眼镜本地。
+
 | route | owner / kind / facet | delivery | schema | 含义 |
 |---|---|---|---|---|
 | `DISPLAY_/TRK_DES_` | Host / State / DESIRED | inline | `DISP_SCH/TRK_DESI:v1` | 开不开 IMU 上行、会不会送位姿 |
