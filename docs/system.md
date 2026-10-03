@@ -176,22 +176,18 @@ Core 当前不定义：
 
 ## 当前实现范围
 
-当前 public C11 baseline 已实现：
+当前 C11 Core 已实现有界 Resource、精确 Profile 握手、一次性 Session、受限 wire 与 POSIX 适配器。
+当前两端配对以 [Display Ingress planes-v12](../profiles/display_ingress/planes-v12.md) 为显示契约：
+Host 发布空间平面模型，Edge 将串流或静态图贴到平面，并按实际翻页报告呈现证据。
+K230D Edge 已在板上经 DSI→HDMI 输出 1080p60；相机与 IMU 在 Edge 采集，Host 消费后可把位姿送回。
+断线检测使用 Wi-Fi 链路状态、TCP 关闭和部署的存活探测/超时；本版没有应用层心跳。
+控制连接卡顿期间，Edge 可以继续显示最后一帧；配置 `correction=IMU` 时还用本地陀螺转动
+WORLD 平面。Session 真正结束后
+按 Profile 规则撤下平面，重连建立新 Session。
 
-- caller-owned bounded Resource primitives；
-- exact Profile handshake、一次性 Session、bounded wire 与 POSIX connected-stream adapter；
-- 正式 Composition 路径的 MRT0 v4 catalog、desired/actual、production gate、Blob 与
-  inline/external route；MRT0 v2/v3 只作内部 compatibility fixture；
-- `COMPOSE_/_PROFILE:v1` 的 MRT0 v4 固定 6/18 graph、opaque Host `EdgeHandle`、
-  simulator/trace；
-- K230D Linux Wi-Fi/Device/GC2093、Blob/Scene/C2、CPU offscreen raster 与双路 media；
-- native Composition Host Bridge 与 loopback Dashboard 的 typed editor/preview。
+Composition 的通用呈现语义仍有效；旧 Mesh/SceneStore、Coordinator、Composition
+Editor/HostBridge/EdgeService 应用栈已从当前显示主线退役，默认关闭，仅显式构建选项可纳入。
+当前实现不代表安全 transport、Session resume、通用 discovery/plugin、所有 XR 设备适配或长期性能保证。
 
-实现不等于全部产品能力。当前没有安全 transport、Session resume、通用 discovery/plugin、
-自动 Edge restart、Link heartbeat、physical display/scanout 或长期性能/soak 保证。固定 Dashboard
-只能在 Host 本地废弃 terminal child 并以 fresh child 重放 browser-owned 最新完整 intent；它不恢复
-旧 Session/handle，也不证明 target network recovery。
-
-当前实现、target evidence 与独立未验证边界统一见[系统状态](system-report.md)；具体 Core/Profile
-实现合同见[Session Core v0](session-core-v0.md)、[Runtime Core v0](runtime-core-v0.md)和
-[Host 集成回执](host-integration-receipt-v0.md)。
+当前支持范围和版本配对见[快速开始](host-edge-quickstart.md)与[版本配对](releases.md)；
+Core 的实现边界见[实现地图](system-runtime-map.md)，旧阶段报告从[系统状态](system-report.md)追溯。
