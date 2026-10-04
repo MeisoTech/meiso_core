@@ -116,6 +116,9 @@ static bool cap_valid(const MeisoDisplayPlanesCapability *c)
         !c->max_image_bytes || c->max_image_bytes > MEISO_DISPLAY_PLANES_MAX_IMAGE_BYTES ||
         !dimension(c->max_image_width) || !dimension(c->max_image_height) ||
         !c->max_updates_per_second || c->max_updates_per_second > 60) return false;
+    if ((c->motion & ~(MEISO_DISPLAY_PLANES_MOTION_TRANSITION | MEISO_DISPLAY_PLANES_MOTION_FOLLOW)) ||
+        ((c->motion & MEISO_DISPLAY_PLANES_MOTION_FOLLOW) && !(c->motion & MEISO_DISPLAY_PLANES_MOTION_TRANSITION)))
+        return false;
     if (c->view_layout == MEISO_DISPLAY_PLANES_VIEW_RUNTIME_VIEWS)
         return !c->output_width && !c->output_height && positive_zero(c->fov_left) && positive_zero(c->fov_right) &&
             positive_zero(c->fov_up) && positive_zero(c->fov_down) && positive_zero(c->ipd_m);
@@ -135,13 +138,13 @@ bool meiso_display_planes_capability_encode(const MeisoDisplayPlanesCapability *
     b[8] = c->view_layout; b[9] = c->tracking; b[10] = c->max_planes; b[11] = c->max_images;
     put32(b + 12, c->max_image_bytes); put16(b + 16, c->max_image_width); put16(b + 18, c->max_image_height);
     putf(b + 20, c->fov_left); putf(b + 24, c->fov_right); putf(b + 28, c->fov_up); putf(b + 32, c->fov_down);
-    putf(b + 36, c->ipd_m); put16(b + 40, c->max_updates_per_second);
+    putf(b + 36, c->ipd_m); put16(b + 40, c->max_updates_per_second); b[42] = c->motion;
     memcpy(out.data, b, 64); return true;
 }
 
 bool meiso_display_planes_capability_decode(MeisoByteView in, MeisoDisplayPlanesCapability *out)
 {
-    if (!in.data || in.size != 64 || !out || overlap(in.data, in.size, out, sizeof(*out)) || !zero(in.data + 42, 22))
+    if (!in.data || in.size != 64 || !out || overlap(in.data, in.size, out, sizeof(*out)) || !zero(in.data + 43, 21))
         return false;
     const uint8_t *b = in.data;
     MeisoDisplayPlanesCapability c = {0};
@@ -149,7 +152,7 @@ bool meiso_display_planes_capability_decode(MeisoByteView in, MeisoDisplayPlanes
     c.view_layout = b[8]; c.tracking = b[9]; c.max_planes = b[10]; c.max_images = b[11];
     c.max_image_bytes = get32(b + 12); c.max_image_width = get16(b + 16); c.max_image_height = get16(b + 18);
     c.fov_left = getf(b + 20); c.fov_right = getf(b + 24); c.fov_up = getf(b + 28); c.fov_down = getf(b + 32);
-    c.ipd_m = getf(b + 36); c.max_updates_per_second = get16(b + 40);
+    c.ipd_m = getf(b + 36); c.max_updates_per_second = get16(b + 40); c.motion = b[42];
     if (!cap_valid(&c)) return false;
     *out = c; return true;
 }
@@ -179,7 +182,12 @@ static bool plane_valid(const MeisoDisplayPlane *v, uint8_t app_count)
     const float *q = v->orientation;
     float n = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
     if (!v->plane_id || (v->app != MEISO_DISPLAY_PLANES_NO_APP && v->app >= app_count) ||
-        (v->anchor != MEISO_DISPLAY_PLANES_ANCHOR_HEAD && v->anchor != MEISO_DISPLAY_PLANES_ANCHOR_WORLD) ||
+        v->anchor < MEISO_DISPLAY_PLANES_ANCHOR_HEAD || v->anchor > MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW ||
+        v->transition_cs > MEISO_DISPLAY_PLANES_MAX_TRANSITION_CS ||
+        (v->motion_style & 0x0f) > MEISO_DISPLAY_PLANES_CURVE_EASE_IN_OUT ||
+        (v->motion_style >> 4) > MEISO_DISPLAY_PLANES_ENTER_FADE_SCALE ||
+        (v->anchor == MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW ?
+            !v->follow_deg || v->follow_deg > MEISO_DISPLAY_PLANES_MAX_FOLLOW_DEG : v->follow_deg != 0) ||
         (v->source != MEISO_DISPLAY_PLANES_SOURCE_STREAM && v->source != MEISO_DISPLAY_PLANES_SOURCE_IMAGE) ||
         !dimension(v->source_width) || !dimension(v->source_height) ||
         v->source_x > 4096 - v->source_width || v->source_y > 4096 - v->source_height) return false;
@@ -234,6 +242,7 @@ bool meiso_display_planes_model_encode(const MeisoDisplayPlanesModel *m, MeisoMu
         for (int k = 0; k < 3; ++k) putf(s + 56 + 4 * k, v->position[k]);
         for (int k = 0; k < 4; ++k) putf(s + 68 + 4 * k, v->orientation[k]);
         putf(s + 84, v->width_m); putf(s + 88, v->height_m);
+        s[92] = v->transition_cs; s[93] = v->motion_style; s[94] = v->follow_deg;
     }
     memcpy(out.data, b, n); return true;
 }
@@ -256,13 +265,14 @@ bool meiso_display_planes_model_decode(MeisoByteView in, MeisoDisplayPlanesModel
     }
     for (uint8_t i = 0; i < m.plane_count; ++i, s += 96) {
         MeisoDisplayPlane *v = &m.planes[i];
-        if (!zero(s + 92, 4)) return false;
+        if (s[95]) return false;
         v->plane_id = get32(s); v->app = s[4]; v->anchor = s[5]; v->source = s[6]; v->opacity = s[7];
         v->source_x = get32(s + 8); v->source_y = get32(s + 12); v->source_width = get32(s + 16); v->source_height = get32(s + 20);
         memcpy(v->image_sha256, s + 24, 32);
         for (int k = 0; k < 3; ++k) v->position[k] = getf(s + 56 + 4 * k);
         for (int k = 0; k < 4; ++k) v->orientation[k] = getf(s + 68 + 4 * k);
         v->width_m = getf(s + 84); v->height_m = getf(s + 88);
+        v->transition_cs = s[92]; v->motion_style = s[93]; v->follow_deg = s[94];
     }
     if (!model_valid(&m)) return false;
     *out = m; return true;
@@ -292,6 +302,10 @@ bool meiso_display_planes_model_supported(const MeisoDisplayPlanesCapability *c,
     if (m->video_desired_version && (m->video_desired_version != video_version || !video_width || !video_height)) return false;
     for (uint8_t i = 0; i < m->plane_count; ++i) {
         const MeisoDisplayPlane *v = &m->planes[i];
+        /* §16: motion fields and the FOLLOW anchor only for an Edge that declares them. */
+        if (!(c->motion & MEISO_DISPLAY_PLANES_MOTION_TRANSITION) && (v->transition_cs || v->motion_style || v->follow_deg))
+            return false;
+        if (v->anchor == MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW && !(c->motion & MEISO_DISPLAY_PLANES_MOTION_FOLLOW)) return false;
         if (v->source == MEISO_DISPLAY_PLANES_SOURCE_STREAM &&
             (v->source_width > video_width || v->source_x > video_width - v->source_width ||
              v->source_height > video_height || v->source_y > video_height - v->source_height)) return false;

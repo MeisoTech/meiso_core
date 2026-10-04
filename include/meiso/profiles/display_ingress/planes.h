@@ -51,7 +51,17 @@ typedef uint8_t MeisoDisplayPlanesTracking;
 enum { MEISO_DISPLAY_PLANES_TRACKING_NONE = 0, MEISO_DISPLAY_PLANES_TRACKING_ROTATION = 1,
     MEISO_DISPLAY_PLANES_TRACKING_POSE = 2, MEISO_DISPLAY_PLANES_TRACKING_EDGE = 3 };
 typedef uint8_t MeisoDisplayPlanesAnchor;
-enum { MEISO_DISPLAY_PLANES_ANCHOR_HEAD = 1, MEISO_DISPLAY_PLANES_ANCHOR_WORLD = 2 };
+enum { MEISO_DISPLAY_PLANES_ANCHOR_HEAD = 1, MEISO_DISPLAY_PLANES_ANCHOR_WORLD = 2,
+    MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW = 3 /* only with MEISO_DISPLAY_PLANES_MOTION_FOLLOW (§16) */ };
+/* Motion (planes-v12.md §16): the capability's motion bits, and a plane's transition fields. */
+enum { MEISO_DISPLAY_PLANES_MOTION_TRANSITION = 1, MEISO_DISPLAY_PLANES_MOTION_FOLLOW = 2 };
+enum { MEISO_DISPLAY_PLANES_MAX_TRANSITION_CS = 250, MEISO_DISPLAY_PLANES_MAX_FOLLOW_DEG = 60 };
+/* motion_style: curve in the low 4 bits, enter in the high 4. */
+enum { MEISO_DISPLAY_PLANES_CURVE_LINEAR = 0, MEISO_DISPLAY_PLANES_CURVE_EASE_OUT = 1,
+    MEISO_DISPLAY_PLANES_CURVE_EASE_IN_OUT = 2 };
+enum { MEISO_DISPLAY_PLANES_ENTER_NONE = 0, MEISO_DISPLAY_PLANES_ENTER_FADE = 1,
+    MEISO_DISPLAY_PLANES_ENTER_FADE_SCALE = 2 };
+#define MEISO_DISPLAY_PLANES_MOTION_STYLE(curve, enter) ((uint8_t)(((enter) << 4) | (curve)))
 typedef uint8_t MeisoDisplayPlanesSource;
 enum { MEISO_DISPLAY_PLANES_SOURCE_STREAM = 1, MEISO_DISPLAY_PLANES_SOURCE_IMAGE = 2 };
 
@@ -65,6 +75,7 @@ typedef struct {
     float fov_left, fov_right, fov_up, fov_down; /* radians, per view */
     float ipd_m;
     uint16_t max_updates_per_second;
+    uint8_t motion; /* MEISO_DISPLAY_PLANES_MOTION_* bits; 0 for an Edge before §16 */
 } MeisoDisplayPlanesCapability;
 
 typedef struct {
@@ -84,6 +95,10 @@ typedef struct {
     float position[3];        /* metres; x right, y up, looking down -z */
     float orientation[4];     /* unit quaternion x, y, z, w */
     float width_m, height_m;
+    /* §16, all zero unless the capability declares motion: */
+    uint8_t transition_cs; /* 0..250, tens of milliseconds */
+    uint8_t motion_style;  /* MEISO_DISPLAY_PLANES_MOTION_STYLE(curve, enter) */
+    uint8_t follow_deg;    /* 1..60 for ANCHOR_FOLLOW, else 0 */
 } MeisoDisplayPlane;
 
 typedef struct {

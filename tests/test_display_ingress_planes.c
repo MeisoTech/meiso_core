@@ -7,7 +7,7 @@
 static MeisoDisplayPlanesCapability capability(void)
 {
     MeisoDisplayPlanesCapability c = {1920, 1080, MEISO_DISPLAY_PLANES_VIEW_MONO, MEISO_DISPLAY_PLANES_TRACKING_NONE,
-        16, 4, 262144, 2048, 2048, -0.4363f, 0.4363f, 0.2531f, -0.2531f, 0.0f, 30};
+        16, 4, 262144, 2048, 2048, -0.4363f, 0.4363f, 0.2531f, -0.2531f, 0.0f, 30, 0 /* motion */};
     return c;
 }
 
@@ -69,7 +69,8 @@ int main(void)
     CHECK(meiso_display_planes_model_image_count(&m) == 1);
     CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n - 1}, &md));
     b[20] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[20] = 0;
-    b[32 + 80 + 94] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 94] = 0;
+    b[32 + 80 + 95] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 95] = 0;
+    b[32 + 80 + 94] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 94] = 0; /* follow_deg off FOLLOW */
     b[32 + 5] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 5] = 0;
     CHECK(meiso_display_planes_model_decode((MeisoByteView){b, n}, &md));
 
@@ -103,6 +104,41 @@ int main(void)
     bad = c; bad.max_planes = 1; CHECK(!meiso_display_planes_model_supported(&bad, &m, 3, 640, 360));
     x = m; x.planes[1].source_width = 2048; x.planes[1].source_x = 1;
     CHECK(!meiso_display_planes_model_supported(&c, &x, 3, 640, 360));
+
+    /* motion (§16): the capability's bits, a plane's fields, and support only where the Edge declares them */
+    MeisoDisplayPlanesCapability mc = c;
+    mc.motion = MEISO_DISPLAY_PLANES_MOTION_TRANSITION | MEISO_DISPLAY_PLANES_MOTION_FOLLOW;
+    CHECK(meiso_display_planes_capability_encode(&mc, (MeisoMutableBuffer){b, 64}) && b[42] == 3);
+    CHECK(meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd) && cd.motion == 3);
+    b[42] = 4; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
+    b[42] = MEISO_DISPLAY_PLANES_MOTION_FOLLOW; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
+    b[42] = 3; b[43] = 1; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
+    MeisoDisplayPlanesModel f = m;
+    f.planes[0].transition_cs = 18;
+    f.planes[0].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(MEISO_DISPLAY_PLANES_CURVE_EASE_OUT, MEISO_DISPLAY_PLANES_ENTER_FADE_SCALE);
+    f.planes[1].anchor = MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW; f.planes[1].follow_deg = 8; f.planes[1].transition_cs = 40;
+    f.planes[1].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(MEISO_DISPLAY_PLANES_CURVE_EASE_IN_OUT, MEISO_DISPLAY_PLANES_ENTER_NONE);
+    CHECK(meiso_display_planes_model_bytes(&f) == n && meiso_display_planes_model_encode(&f, (MeisoMutableBuffer){b, sizeof(b)}));
+    const uint8_t *f0 = b + 32 + 80, *f1 = f0 + 96;
+    CHECK(f0[92] == 18 && f0[93] == 0x21 && f0[94] == 0 && f1[5] == 3 && f1[92] == 40 && f1[93] == 0x02 && f1[94] == 8 && !f1[95]);
+    CHECK(meiso_display_planes_model_decode((MeisoByteView){b, n}, &md) && md.planes[0].transition_cs == 18 &&
+          md.planes[0].motion_style == 0x21 && md.planes[1].anchor == MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW && md.planes[1].follow_deg == 8);
+    CHECK(meiso_display_planes_model_encode(&md, (MeisoMutableBuffer){b + n, sizeof(b) - n}) && !memcmp(b, b + n, n));
+    b[32 + 80 + 95] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 95] = 0;
+    x = f; x.planes[0].transition_cs = 251; CHECK(!meiso_display_planes_model_bytes(&x));
+    x = f; x.planes[0].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(3, 0); CHECK(!meiso_display_planes_model_bytes(&x));
+    x = f; x.planes[0].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(0, 3); CHECK(!meiso_display_planes_model_bytes(&x));
+    x = f; x.planes[0].follow_deg = 5; CHECK(!meiso_display_planes_model_bytes(&x)); /* not FOLLOW */
+    x = f; x.planes[1].follow_deg = 0; CHECK(!meiso_display_planes_model_bytes(&x));
+    x = f; x.planes[1].follow_deg = 61; CHECK(!meiso_display_planes_model_bytes(&x));
+    x = f; x.planes[1].anchor = 4; CHECK(!meiso_display_planes_model_bytes(&x));
+    CHECK(meiso_display_planes_model_supported(&mc, &f, 3, 640, 360));
+    CHECK(!meiso_display_planes_model_supported(&c, &f, 3, 640, 360)); /* an Edge from before §16 */
+    bad = mc; bad.motion = MEISO_DISPLAY_PLANES_MOTION_TRANSITION;
+    CHECK(!meiso_display_planes_model_supported(&bad, &f, 3, 640, 360)); /* FOLLOW not declared */
+    x = f; x.planes[1].anchor = MEISO_DISPLAY_PLANES_ANCHOR_WORLD; x.planes[1].follow_deg = 0;
+    CHECK(meiso_display_planes_model_supported(&bad, &x, 3, 640, 360) && !meiso_display_planes_model_supported(&c, &x, 3, 640, 360));
+    CHECK(meiso_display_planes_model_supported(&mc, &m, 3, 640, 360)); /* no motion asked: as before */
 
     /* status and evidence */
     MeisoDisplayPlanesStatus s = {7, 1, 1}, sd;
