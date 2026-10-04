@@ -291,7 +291,7 @@ static int catalog(MeisoDisplayPlanesCatalogConfig *out)
     cc.video = (MeisoDisplayIngressCatalogConfig){1, {1280, 720, 30000, 131072, 1024,
         MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_DRM_KMS_PAGE_FLIP, MEISO_STREAM_DEADLINE_UNSUPPORTED, MEISO_DISPLAY_INGRESS_FRAME_H264_IDR}};
     cc.planes = (MeisoDisplayPlanesCapability){0, 0, MEISO_DISPLAY_PLANES_VIEW_RUNTIME_VIEWS, MEISO_DISPLAY_PLANES_TRACKING_POSE,
-        16, 4, 262144, 2048, 2048, 0, 0, 0, 0, 0, 30};
+        16, 4, 262144, 2048, 2048, 0, 0, 0, 0, 0, 30, 0 /* motion */};
     cc.camera_enabled = cc.tracking_enabled = cc.input_enabled = cc.views_enabled = cc.audio_enabled = true;
     cc.camera = (MeisoCompositionMediaCapability){.source = MEISO_COMPOSITION_MEDIA_SOURCE_CAMERA,
         .pixel_formats = MEISO_COMPOSITION_MEDIA_PIXEL_MASK_RGBA8888, .codecs = MEISO_COMPOSITION_MEDIA_CODEC_MASK_RAW,
@@ -365,7 +365,7 @@ static int catalog(MeisoDisplayPlanesCatalogConfig *out)
     /* for the Runtime pair: no camera, no views */
     cc.camera_enabled = cc.views_enabled = false;
     cc.planes = (MeisoDisplayPlanesCapability){1920, 1080, MEISO_DISPLAY_PLANES_VIEW_MONO, MEISO_DISPLAY_PLANES_TRACKING_POSE,
-        16, 4, 262144, 2048, 2048, -0.4363f, 0.4363f, 0.2531f, -0.2531f, 0.0f, 30};
+        16, 4, 262144, 2048, 2048, -0.4363f, 0.4363f, 0.2531f, -0.2531f, 0.0f, 30, 0 /* motion */};
     CHECK(meiso_display_planes_audio_route_base(&cc) == 15);
     *out = cc;
     return 0;
