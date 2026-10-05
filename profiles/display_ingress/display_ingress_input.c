@@ -13,7 +13,7 @@ static const MeisoEndpointId endpoint = {UINT64_C(0x444953504c41595f), UINT64_C(
 
 const MeisoEndpointId *meiso_display_input_endpoint(void) { return &endpoint; }
 
-enum { ALL_KEYS = 0xfe }; /* bits 1..7: UP .. SYSTEM */
+enum { ALL_KEYS = 0x1fe }; /* bits 1..8: UP .. MENU */
 
 static bool cap_valid(const MeisoDisplayInputCapability *c)
 {

@@ -32,7 +32,8 @@ enum {
     MEISO_DISPLAY_INPUT_KEY_RIGHT = 4,
     MEISO_DISPLAY_INPUT_KEY_SELECT = 5,  /* the five-way key pressed in */
     MEISO_DISPLAY_INPUT_KEY_BACK = 6,
-    MEISO_DISPLAY_INPUT_KEY_SYSTEM = 7   /* Claire (S-033): the system's alone, never an APP's */
+    MEISO_DISPLAY_INPUT_KEY_SYSTEM = 7,  /* Claire (S-033): the system's alone, never an APP's */
+    MEISO_DISPLAY_INPUT_KEY_MENU = 8     /* the system key (S-045): the system menu; the system's alone too */
 };
 typedef uint8_t MeisoDisplayInputAction;
 enum { MEISO_DISPLAY_INPUT_PRESS = 1, MEISO_DISPLAY_INPUT_RELEASE = 2 };
@@ -42,7 +43,7 @@ typedef uint8_t MeisoDisplayInputKeysState;
 enum { MEISO_DISPLAY_INPUT_KEYS_OFF = 0, MEISO_DISPLAY_INPUT_KEYS_RUNNING = 1 };
 
 typedef struct {
-    uint32_t keys;                      /* bit k for key code k; nonzero, bits 1..7 only */
+    uint32_t keys;                      /* bit k for key code k; nonzero, bits 1..8 only */
     MeisoDisplayInputPointer pointer;   /* HEAD_RAY: the Edge draws a reticle and names its target */
 } MeisoDisplayInputCapability;
 
