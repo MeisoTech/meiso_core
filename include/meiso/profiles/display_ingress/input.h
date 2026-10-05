@@ -32,7 +32,7 @@ enum {
     MEISO_DISPLAY_INPUT_KEY_RIGHT = 4,
     MEISO_DISPLAY_INPUT_KEY_SELECT = 5,  /* the five-way key pressed in */
     MEISO_DISPLAY_INPUT_KEY_BACK = 6,
-    MEISO_DISPLAY_INPUT_KEY_SYSTEM = 7,  /* Claire (S-033): the system's alone, never an APP's */
+    MEISO_DISPLAY_INPUT_KEY_SYSTEM = 7,  /* Holo's key (Claire, S-033, S-039): the system's alone, never an APP's */
     MEISO_DISPLAY_INPUT_KEY_MENU = 8     /* the system key (S-045): the system menu; the system's alone too */
 };
 typedef uint8_t MeisoDisplayInputAction;
