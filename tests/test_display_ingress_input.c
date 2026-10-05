@@ -211,7 +211,9 @@ int main(void)
     CHECK(meiso_display_input_capability_decode((MeisoByteView){b, 16}, &cd) && cd.keys == 0xfe && cd.pointer == 1);
     b[5] = 1; CHECK(!meiso_display_input_capability_decode((MeisoByteView){b, 16}, &cd)); b[5] = 0;
     b[3] = 0xff; CHECK(!meiso_display_input_capability_decode((MeisoByteView){b, 16}, &cd)); b[3] = 0xfe; /* bit 0 */
-    b[2] = 0x01; CHECK(!meiso_display_input_capability_decode((MeisoByteView){b, 16}, &cd)); b[2] = 0;    /* bit 8 */
+    b[2] = 0x02; CHECK(!meiso_display_input_capability_decode((MeisoByteView){b, 16}, &cd)); b[2] = 0;    /* bit 9 */
+    /* with the system key (MENU, S-045): bit 8 */
+    b[2] = 0x01; CHECK(meiso_display_input_capability_decode((MeisoByteView){b, 16}, &cd) && cd.keys == 0x1fe); b[2] = 0;
     CHECK(!meiso_display_input_capability_decode((MeisoByteView){b, 15}, &cd));
     bad = c; bad.keys = 0; CHECK(!meiso_display_input_capability_encode(&bad, (MeisoMutableBuffer){b, 16}));
     bad = c; bad.pointer = 2; CHECK(!meiso_display_input_capability_encode(&bad, (MeisoMutableBuffer){b, 16}));
@@ -248,7 +250,15 @@ int main(void)
     CHECK(meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24}));
     CHECK(!meiso_display_input_key_encode(&plain, &x, (MeisoMutableBuffer){b, 24})); /* no Claire key on that board */
     x = k; x.key = 0; CHECK(!meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24}));
-    x = k; x.key = 8; CHECK(!meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24}));
+    x = k; x.key = MEISO_DISPLAY_INPUT_KEY_MENU; CHECK(!meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24})); /* not on that board */
+    {   /* a board with the system key (S-045) */
+        const MeisoDisplayInputCapability m = {0x1fe, MEISO_DISPLAY_INPUT_POINTER_HEAD_RAY};
+        x = k; x.key = MEISO_DISPLAY_INPUT_KEY_MENU; x.target_plane = 0; x.target_generation = 0;
+        CHECK(meiso_display_input_key_encode(&m, &x, (MeisoMutableBuffer){b, 24}) && b[8] == 8);
+        CHECK(meiso_display_input_key_decode(&m, (MeisoByteView){b, 24}, &kd) && kd.key == MEISO_DISPLAY_INPUT_KEY_MENU);
+        CHECK(!meiso_display_input_key_decode(&c, (MeisoByteView){b, 24}, &kd)); /* refused by a board without it */
+        x.key = 9; CHECK(!meiso_display_input_key_encode(&m, &x, (MeisoMutableBuffer){b, 24}));
+    }
     x = k; x.action = 3; CHECK(!meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24}));
     x = k; x.time_ns = 0; CHECK(!meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24}));
     x = k; x.target_plane = 0; CHECK(!meiso_display_input_key_encode(&c, &x, (MeisoMutableBuffer){b, 24}));     /* generation left */
