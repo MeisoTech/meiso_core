@@ -179,8 +179,11 @@ Core 当前不定义：
 当前 C11 Core 已实现有界 Resource、精确 Profile 握手、一次性 Session、受限 wire 与 POSIX 适配器。
 当前两端配对以 [Display Ingress planes-v12](../profiles/display_ingress/planes-v12.md) 为显示契约：
 Host 发布空间平面模型，Edge 将串流或静态图贴到平面，并按实际翻页报告呈现证据。
-K230D Edge 已在板上经 DSI→HDMI 输出 1080p60；相机与 IMU 在 Edge 采集，Host 消费后可把位姿送回。
+开发台架上，K230D（庐山派）经 DSI→HDMI 转接板出 1080p60 模式，合成器在其中画平面（台架预览）；眼镜光学显示模组尚未接入。
+相机与 IMU 在 Edge 采集，Host 消费后可把位姿送回。
 断线检测使用 Wi-Fi 链路状态、TCP 关闭和部署的存活探测/超时；本版没有应用层心跳。
+参考实现两端的 user timeout 都是 25 s，在此之内的卡顿不算断线（planes-v12 §8）。Edge 的"信号差"提示读控制连接的
+TCP 状态：有字节超过 1 s 没被确认就标出，Session 照常，确认回来即恢复。
 控制连接卡顿期间，Edge 可以继续显示最后一帧；配置 `correction=IMU` 时还用本地陀螺转动
 WORLD 平面。Session 真正结束后
 按 Profile 规则撤下平面，重连建立新 Session。
