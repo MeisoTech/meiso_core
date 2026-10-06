@@ -660,6 +660,20 @@ MeisoRuntimeStatus meiso_runtime_publish_blob_receive(
 );
 
 /*
+ * Edge only, in place of publish_blob_receive after the exact COMMIT
+ * BLOB_REQUEST event: the receiver has no room for this content now (an Edge
+ * short of memory, Display Ingress planes-v12 §7). Nothing is staged or
+ * published; the pending COMMIT result becomes CAPACITY with every byte
+ * accepted, sent by send_blob_result as any other. Same preconditions as
+ * publish_blob_receive: BLOB_NOT_ACTIVE without a pending publication,
+ * CONFLICT for another transfer or a result already pending.
+ */
+MeisoRuntimeStatus meiso_runtime_refuse_blob_receive(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *expected_transfer
+);
+
+/*
  * Edge only. Queues the exact pending READY or terminal RESULT. READY echoes
  * next_offset=0 and the declared total. PUBLISHED/DUPLICATE echo
  * next_offset=total; ABORTED and failures echo the number of accepted bytes.

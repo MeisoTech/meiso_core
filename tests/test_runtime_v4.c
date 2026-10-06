@@ -1515,6 +1515,63 @@ static bool test_v4_blob_carriage(
           !host_snapshot.publish_pending && !edge_snapshot.publish_pending &&
           host_snapshot.transfer_id_high_water == 1U &&
           edge_snapshot.transfer_id_high_water == 1U);
+
+    /* An Edge short of memory refuses a complete image with CAPACITY (planes-v12 §7): nothing staged. */
+    CHECK(meiso_runtime_send_blob_begin(
+        pair->host_runtime, key, &content_id, sizeof(BLOB_BYTES), &transfer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->host_session, pair->edge_session, pair->edge_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(meiso_runtime_send_blob_result(
+        pair->edge_runtime, &event.blob_transfer, MEISO_RUNTIME_BLOB_BEGIN
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->edge_session, pair->host_session, pair->host_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(meiso_runtime_send_blob_chunk(
+        pair->host_runtime, &transfer, 0U,
+        (MeisoByteView){BLOB_BYTES, sizeof(BLOB_BYTES)}
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->host_session, pair->edge_session, pair->edge_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(meiso_runtime_send_blob_commit(pair->host_runtime, &transfer) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->host_session, pair->edge_session, pair->edge_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_BLOB_REQUEST &&
+          event.blob_operation == MEISO_RUNTIME_BLOB_COMMIT);
+    committed_transfer = event.blob_transfer;
+    CHECK(meiso_runtime_refuse_blob_receive(
+        pair->host_runtime, &committed_transfer
+    ) == MEISO_RUNTIME_WRONG_ROLE);
+    CHECK(meiso_runtime_refuse_blob_receive(
+        pair->edge_runtime, &committed_transfer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_refuse_blob_receive(
+        pair->edge_runtime, &committed_transfer
+    ) == MEISO_RUNTIME_BLOB_NOT_ACTIVE);
+    CHECK(meiso_blob_store_count(store) == 1U);
+    CHECK(meiso_runtime_send_blob_result(
+        pair->edge_runtime, &committed_transfer, MEISO_RUNTIME_BLOB_COMMIT
+    ) == MEISO_RUNTIME_OK);
+    CHECK(transfer_runtime(
+        pair, pair->edge_session, pair->host_session, pair->host_runtime,
+        &event, MEISO_RUNTIME_OK
+    ));
+    CHECK(event.type == MEISO_RUNTIME_EVENT_BLOB_RESULT &&
+          event.blob_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+          event.blob_result == MEISO_RUNTIME_BLOB_RESULT_CAPACITY &&
+          event.blob_next_offset == sizeof(BLOB_BYTES));
+    CHECK(meiso_runtime_blob_snapshot(pair->host_runtime, &host_snapshot) &&
+          meiso_runtime_blob_snapshot(pair->edge_runtime, &edge_snapshot));
+    CHECK(!host_snapshot.transfer_active && !edge_snapshot.transfer_active &&
+          !edge_snapshot.publish_pending && !edge_snapshot.result_pending);
     return true;
 }
 

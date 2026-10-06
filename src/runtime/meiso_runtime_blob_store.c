@@ -197,3 +197,48 @@ MeisoRuntimeStatus meiso_runtime_publish_blob_receive(
     *out_report = report;
     return MEISO_RUNTIME_OK;
 }
+
+MeisoRuntimeStatus meiso_runtime_refuse_blob_receive(
+    MeisoRuntime *runtime,
+    const MeisoRuntimeBlobTransferRef *expected_transfer
+)
+{
+    MeisoRuntimeStatus status = meiso_runtime_private_check_bound_mutable_internal(runtime, true);
+
+    if (status != MEISO_RUNTIME_OK) {
+        return status;
+    }
+    if (runtime->pending_desired_receive || runtime->pending_actual_receive) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    if (!meiso_runtime_private_blob_wire_supported(runtime)) {
+        return MEISO_RUNTIME_WIRE_VERSION_MISMATCH;
+    }
+    if (runtime->local_role != MEISO_SESSION_ROLE_EDGE) {
+        return MEISO_RUNTIME_WRONG_ROLE;
+    }
+    if (expected_transfer == NULL || meiso_runtime_private_ranges_overlap(
+            runtime,
+            runtime->arena_size,
+            expected_transfer,
+            sizeof(*expected_transfer)
+        )) {
+        return MEISO_RUNTIME_INVALID_ARGUMENT;
+    }
+    if (!runtime->blob_transfer_active || !runtime->blob_publish_pending) {
+        return MEISO_RUNTIME_BLOB_NOT_ACTIVE;
+    }
+    if (runtime->blob_result_pending ||
+        !meiso_runtime_private_blob_transfer_equal(expected_transfer, &runtime->blob_transfer)) {
+        return MEISO_RUNTIME_CONFLICT;
+    }
+    runtime->blob_publish_pending = false;
+    meiso_runtime_private_set_blob_result(
+        runtime,
+        &runtime->blob_transfer,
+        MEISO_RUNTIME_BLOB_COMMIT,
+        MEISO_RUNTIME_BLOB_RESULT_CAPACITY,
+        runtime->blob_next_offset
+    );
+    return MEISO_RUNTIME_OK;
+}
