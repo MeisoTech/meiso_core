@@ -1598,6 +1598,76 @@ static bool test_core_staging_ownership_and_forced_abort(void)
     return true;
 }
 
+/* An Edge short of memory refuses a complete image with CAPACITY (planes-v12 §7): nothing is staged or
+ * published, the Host gets CAPACITY with every byte accepted, and the transfer slot is free again. */
+static bool test_edge_refuses_blob_for_capacity(void)
+{
+    RuntimePair pair;
+    BlobArena blob_arena;
+    MeisoBlobStore *store = NULL;
+    MeisoBlobStats stats = {0};
+    MeisoRuntimeBlobTransferRef transfer = {0};
+    MeisoRuntimeBlobTransferRef other = {0};
+    MeisoRuntimeEvent commit_event = {0};
+    MeisoRuntimeEvent event = {0};
+    MeisoRuntimeBlobPublishReport report = {0};
+    MeisoRuntimeBlobSnapshot snapshot;
+    MeisoSessionRuntimeMessage message = {0};
+    MeisoContentId content_id = blob_content_id();
+
+    CHECK(init_test_blob_store(&blob_arena, &store));
+    CHECK(receive_small_blob_to_commit(&pair, &transfer, &commit_event));
+    CHECK(meiso_runtime_refuse_blob_receive(
+        pair.host_runtime, &commit_event.blob_transfer
+    ) == MEISO_RUNTIME_WRONG_ROLE);
+    CHECK(meiso_runtime_refuse_blob_receive(pair.edge_runtime, NULL) == MEISO_RUNTIME_INVALID_ARGUMENT);
+    other = commit_event.blob_transfer;
+    ++other.transfer_id;
+    CHECK(meiso_runtime_refuse_blob_receive(pair.edge_runtime, &other) == MEISO_RUNTIME_CONFLICT);
+
+    CHECK(meiso_runtime_refuse_blob_receive(
+        pair.edge_runtime, &commit_event.blob_transfer
+    ) == MEISO_RUNTIME_OK);
+    CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &snapshot));
+    CHECK(!snapshot.publish_pending && snapshot.result_pending &&
+          snapshot.pending_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+          snapshot.pending_result == MEISO_RUNTIME_BLOB_RESULT_CAPACITY);
+    /* refused once: neither a second refusal nor a publication */
+    CHECK(meiso_runtime_refuse_blob_receive(
+        pair.edge_runtime, &commit_event.blob_transfer
+    ) == MEISO_RUNTIME_BLOB_NOT_ACTIVE);
+    CHECK(meiso_runtime_publish_blob_receive(
+        pair.edge_runtime,
+        &commit_event.blob_transfer,
+        store,
+        accept_blob,
+        NULL,
+        &report
+    ) == MEISO_RUNTIME_BLOB_NOT_ACTIVE);
+    CHECK(meiso_blob_store_count(store) == 0U);
+    CHECK(meiso_blob_store_stats(store, &stats));
+    CHECK(stats.stages_started == 0U && stats.publications == 0U);
+
+    CHECK(meiso_runtime_send_blob_result(
+        pair.edge_runtime, &commit_event.blob_transfer, MEISO_RUNTIME_BLOB_COMMIT
+    ) == MEISO_RUNTIME_OK);
+    CHECK(receive_outbound(&pair, pair.edge_session, pair.host_session, &message, NULL, 0U));
+    CHECK(meiso_runtime_receive(pair.host_runtime, &message, &event) == MEISO_RUNTIME_OK);
+    CHECK(event.type == MEISO_RUNTIME_EVENT_BLOB_RESULT &&
+          event.blob_operation == MEISO_RUNTIME_BLOB_COMMIT &&
+          event.blob_result == MEISO_RUNTIME_BLOB_RESULT_CAPACITY &&
+          event.blob_next_offset == sizeof(BLOB_BYTES));
+    CHECK(meiso_runtime_blob_snapshot(pair.edge_runtime, &snapshot));
+    CHECK(!snapshot.transfer_active && !snapshot.result_pending);
+    CHECK(meiso_runtime_blob_snapshot(pair.host_runtime, &snapshot));
+    CHECK(!snapshot.transfer_active);
+    /* the slot is free: the same image may be offered again */
+    CHECK(meiso_runtime_send_blob_begin(
+        pair.host_runtime, blob_route_key(), &content_id, sizeof(BLOB_BYTES), &other
+    ) == MEISO_RUNTIME_OK);
+    return true;
+}
+
 static bool test_route_and_identity_rejections(void)
 {
     RuntimePair pair;
@@ -3644,6 +3714,9 @@ int main(void)
         return 1;
     }
     if (!test_core_staging_ownership_and_forced_abort()) {
+        return 1;
+    }
+    if (!test_edge_refuses_blob_for_capacity()) {
         return 1;
     }
     if (!test_route_and_identity_rejections()) {
