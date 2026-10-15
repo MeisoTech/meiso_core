@@ -16,8 +16,8 @@ both ends speak.**
   POSIX adapters; conformance tests.
 - **Where it stands**: a development baseline, not a product. It runs between an Orin NX Host and a K230D glasses
   board (128 MiB of RAM) on a lab rig. The link has no authentication or encryption yet: use it only on a network
-  you control. The Host system (MeisoOS and its apps) and the glasses firmware are separate repositories, not
-  public yet.
+  you control. The Host system (MeisoOS and its apps, `meiso_host`) and the glasses firmware (`meiso_edge`) are
+  separate repositories, not public yet: links to them in the documents will not open.
 - **Build**: a C11 compiler and CMake 3.21 or newer (CI builds on Ubuntu 24.04 with GCC, and with Clang under
   ASan/UBSan, and on macOS 15 with Apple Clang):
 
@@ -47,7 +47,8 @@ Meiso 把一副 AR 眼镜拆成两半：眼镜上只留必须戴在脸上的相�
   显示的一切都是空间里的平面（串流视频、静态图或标记），Host 摆放，眼镜每次刷新自己画；可移植的 POSIX 适配器；
   一致性测试。
 - **做到哪了**：开发基线，不是产品。在实验台架上跑在 Orin NX Host 和 K230D 眼镜板（128 MiB 内存）之间。
-  链路还没有认证和加密，只在你自己控制的网络里用。Host 系统（MeisoOS 和它的 APP）和眼镜固件在另外的仓库，暂未公开。
+  链路还没有认证和加密，只在你自己控制的网络里用。Host 系统（MeisoOS 和它的 APP，`meiso_host`）和眼镜固件（`meiso_edge`）
+  在另外的仓库，暂未公开，文档里指向它们的链接打不开。
 - **怎么编**：C11 编译器和 CMake 3.21 或更新，命令同上（CI 在 Ubuntu 24.04 上用 GCC、用 Clang 加 ASan/UBSan，
   在 macOS 15 上用 Apple Clang）。
 - **许可证**：Apache-2.0（[LICENSE](LICENSE)）；第三方材料保留各自的条款（[NOTICE](NOTICE)）。
@@ -90,10 +91,10 @@ Edge 硬件解码并叠加本地绘制的框和中文短消息。纯消息可以
 |---|---|
 | `include/meiso/core`、`src/core` | C11 Core：身份、Session、State / Stream / Action / Blob 传输语义。 |
 | `src/runtime`、`profiles`、`integrations` | 资源目录、能力协商、desired/actual、媒体契约与 Host facade。 |
-| [meiso_edge](https://github.com/MeisoTech/meiso_edge) | 眼镜端（K230D）：Display Ingress 服务、摄像头、解码、DRM 显示、Linux 服务适配与板级 bring-up，2026-09-24 从本仓拆出（S-027）。 |
+| [meiso_edge](https://github.com/MeisoTech/meiso_edge)（暂未公开） | 眼镜端（K230D）：Display Ingress 服务、摄像头、解码、DRM 显示、Linux 服务适配与板级 bring-up，2026-09-24 从本仓拆出（S-027）。 |
 | `applications`、`simulation`、`tests` | 使用入口、模拟后端与契约检查。 |
 
-[Looking Glass](https://github.com/MeisoTech/looking_glass) 独立拥有 HostRuntime、应用兼容和合成。
+[meiso_host](https://github.com/MeisoTech/meiso_host)（原 Looking Glass，暂未公开）独立拥有 HostRuntime、应用兼容和合成。
 它通过 CMake `find_package(MeisoGlass)` 链接本仓安装的库，再交付 Host 服务和客户端 SDK；
 Edge 包由 meiso_edge 以本仓固定修订的源码交叉编译。两仓按固定源码组合发布，不需要整仓复制或相同的提交节奏。
 
