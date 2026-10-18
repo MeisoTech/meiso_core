@@ -7,7 +7,7 @@
 static MeisoDisplayPlanesCapability capability(void)
 {
     MeisoDisplayPlanesCapability c = {1920, 1080, MEISO_DISPLAY_PLANES_VIEW_MONO, MEISO_DISPLAY_PLANES_TRACKING_NONE,
-        16, 4, 262144, 2048, 2048, -0.4363f, 0.4363f, 0.2531f, -0.2531f, 0.0f, 30, 0 /* motion */};
+        16, 4, 262144, 2048, 2048, -0.4363f, 0.4363f, 0.2531f, -0.2531f, 0.0f, 30, 0 /* motion */, 0 /* facing */};
     return c;
 }
 
@@ -69,7 +69,7 @@ int main(void)
     CHECK(meiso_display_planes_model_image_count(&m) == 1);
     CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n - 1}, &md));
     b[20] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[20] = 0;
-    b[32 + 80 + 95] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 95] = 0;
+    b[32 + 80 + 95] = 2; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 95] = 0; /* facing 2 */
     b[32 + 80 + 94] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 94] = 0; /* follow_deg off FOLLOW */
     b[32 + 5] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 5] = 0;
     CHECK(meiso_display_planes_model_decode((MeisoByteView){b, n}, &md));
@@ -112,7 +112,7 @@ int main(void)
     CHECK(meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd) && cd.motion == 3);
     b[42] = 4; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
     b[42] = MEISO_DISPLAY_PLANES_MOTION_FOLLOW; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
-    b[42] = 3; b[43] = 1; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
+    b[42] = 3; b[44] = 1; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd)); b[44] = 0;
     MeisoDisplayPlanesModel f = m;
     f.planes[0].transition_cs = 18;
     f.planes[0].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(MEISO_DISPLAY_PLANES_CURVE_EASE_OUT, MEISO_DISPLAY_PLANES_ENTER_FADE_SCALE);
@@ -124,7 +124,7 @@ int main(void)
     CHECK(meiso_display_planes_model_decode((MeisoByteView){b, n}, &md) && md.planes[0].transition_cs == 18 &&
           md.planes[0].motion_style == 0x21 && md.planes[1].anchor == MEISO_DISPLAY_PLANES_ANCHOR_FOLLOW && md.planes[1].follow_deg == 8);
     CHECK(meiso_display_planes_model_encode(&md, (MeisoMutableBuffer){b + n, sizeof(b) - n}) && !memcmp(b, b + n, n));
-    b[32 + 80 + 95] = 1; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 95] = 0;
+    b[32 + 80 + 95] = 2; CHECK(!meiso_display_planes_model_decode((MeisoByteView){b, n}, &md)); b[32 + 80 + 95] = 0;
     x = f; x.planes[0].transition_cs = 251; CHECK(!meiso_display_planes_model_bytes(&x));
     x = f; x.planes[0].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(3, 0); CHECK(!meiso_display_planes_model_bytes(&x));
     x = f; x.planes[0].motion_style = MEISO_DISPLAY_PLANES_MOTION_STYLE(0, 3); CHECK(!meiso_display_planes_model_bytes(&x));
@@ -139,6 +139,30 @@ int main(void)
     x = f; x.planes[1].anchor = MEISO_DISPLAY_PLANES_ANCHOR_WORLD; x.planes[1].follow_deg = 0;
     CHECK(meiso_display_planes_model_supported(&bad, &x, 3, 640, 360) && !meiso_display_planes_model_supported(&c, &x, 3, 640, 360));
     CHECK(meiso_display_planes_model_supported(&mc, &m, 3, 640, 360)); /* no motion asked: as before */
+
+    /* facing the eye (§17): the capability's bit, a plane's byte 95, only WORLD or FOLLOW, only where declared */
+    MeisoDisplayPlanesCapability fc = mc;
+    fc.facing = MEISO_DISPLAY_PLANES_FACING_VIEWER;
+    CHECK(meiso_display_planes_capability_encode(&fc, (MeisoMutableBuffer){b, 64}) && b[42] == 3 && b[43] == 1);
+    CHECK(meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd) && cd.facing == 1 && cd.motion == 3);
+    b[43] = 2; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd));
+    b[43] = 1; b[63] = 1; CHECK(!meiso_display_planes_capability_decode((MeisoByteView){b, 64}, &cd)); b[63] = 0;
+    MeisoDisplayPlanesModel g = f; /* plane 0 WORLD, plane 1 FOLLOW */
+    g.planes[0].facing = MEISO_DISPLAY_PLANES_FACING_VIEWER; g.planes[1].facing = MEISO_DISPLAY_PLANES_FACING_VIEWER;
+    CHECK(meiso_display_planes_model_bytes(&g) == n && meiso_display_planes_model_encode(&g, (MeisoMutableBuffer){b, sizeof(b)}));
+    CHECK(b[32 + 80 + 95] == 1 && b[32 + 80 + 96 + 95] == 1 && b[32 + 80 + 94] == 0 && b[32 + 80 + 96 + 94] == 8);
+    CHECK(meiso_display_planes_model_decode((MeisoByteView){b, n}, &md) && md.planes[0].facing == 1 && md.planes[1].facing == 1 &&
+          md.planes[1].follow_deg == 8);
+    CHECK(meiso_display_planes_model_encode(&md, (MeisoMutableBuffer){b + n, sizeof(b) - n}) && !memcmp(b, b + n, n));
+    x = g; x.planes[0].facing = 2; CHECK(!meiso_display_planes_model_bytes(&x));
+    x = g; x.planes[0].anchor = MEISO_DISPLAY_PLANES_ANCHOR_HEAD; CHECK(!meiso_display_planes_model_bytes(&x)); /* a HEAD plane faces already */
+    x = g; x.planes[0].facing = 0; x.planes[0].anchor = MEISO_DISPLAY_PLANES_ANCHOR_HEAD; CHECK(meiso_display_planes_model_bytes(&x) == n);
+    CHECK(meiso_display_planes_model_supported(&fc, &g, 3, 640, 360));
+    CHECK(!meiso_display_planes_model_supported(&mc, &g, 3, 640, 360)); /* an Edge from before §17 */
+    CHECK(meiso_display_planes_model_supported(&mc, &f, 3, 640, 360) && meiso_display_planes_model_supported(&fc, &f, 3, 640, 360));
+    MeisoDisplayPlanesModel lone = m; lone.planes[0].facing = MEISO_DISPLAY_PLANES_FACING_VIEWER; /* facing without motion */
+    bad = c; bad.facing = MEISO_DISPLAY_PLANES_FACING_VIEWER;
+    CHECK(meiso_display_planes_model_supported(&bad, &lone, 3, 640, 360) && !meiso_display_planes_model_supported(&c, &lone, 3, 640, 360));
 
     /* status and evidence */
     MeisoDisplayPlanesStatus s = {7, 1, 1}, sd;

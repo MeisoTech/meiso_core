@@ -12,7 +12,7 @@ static MeisoDisplayPlanesCatalogConfig config(void)
         MEISO_DISPLAY_INGRESS_EVIDENCE_MASK_XR_FRAME_SUBMITTED, MEISO_STREAM_DEADLINE_UNSUPPORTED,
         MEISO_DISPLAY_INGRESS_FRAME_H264_IDR}};
     c.planes = (MeisoDisplayPlanesCapability){0, 0, MEISO_DISPLAY_PLANES_VIEW_RUNTIME_VIEWS,
-        MEISO_DISPLAY_PLANES_TRACKING_EDGE, 14, 4, 262144, 2048, 2048, 0, 0, 0, 0, 0, 30, 0 /* motion */};
+        MEISO_DISPLAY_PLANES_TRACKING_EDGE, 14, 4, 262144, 2048, 2048, 0, 0, 0, 0, 0, 30, 0 /* motion */, 0 /* facing */};
     c.local_pose_enabled = c.views_enabled = c.input_enabled = true;
     c.local_pose.max_samples_per_second = 200;
     c.input = (MeisoDisplayInputCapability){0xfe, MEISO_DISPLAY_INPUT_POINTER_HEAD_RAY};
