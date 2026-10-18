@@ -62,6 +62,8 @@ enum { MEISO_DISPLAY_PLANES_CURVE_LINEAR = 0, MEISO_DISPLAY_PLANES_CURVE_EASE_OU
 enum { MEISO_DISPLAY_PLANES_ENTER_NONE = 0, MEISO_DISPLAY_PLANES_ENTER_FADE = 1,
     MEISO_DISPLAY_PLANES_ENTER_FADE_SCALE = 2 };
 #define MEISO_DISPLAY_PLANES_MOTION_STYLE(curve, enter) ((uint8_t)(((enter) << 4) | (curve)))
+/* Facing the eye (planes-v12.md §17): the capability's facing bits, and a plane's facing byte. */
+enum { MEISO_DISPLAY_PLANES_FACING_VIEWER = 1 };
 typedef uint8_t MeisoDisplayPlanesSource;
 enum { MEISO_DISPLAY_PLANES_SOURCE_STREAM = 1, MEISO_DISPLAY_PLANES_SOURCE_IMAGE = 2 };
 
@@ -76,6 +78,7 @@ typedef struct {
     float ipd_m;
     uint16_t max_updates_per_second;
     uint8_t motion; /* MEISO_DISPLAY_PLANES_MOTION_* bits; 0 for an Edge before §16 */
+    uint8_t facing; /* MEISO_DISPLAY_PLANES_FACING_* bits; 0 for an Edge before §17 */
 } MeisoDisplayPlanesCapability;
 
 typedef struct {
@@ -99,6 +102,9 @@ typedef struct {
     uint8_t transition_cs; /* 0..250, tens of milliseconds */
     uint8_t motion_style;  /* MEISO_DISPLAY_PLANES_MOTION_STYLE(curve, enter) */
     uint8_t follow_deg;    /* 1..60 for ANCHOR_FOLLOW, else 0 */
+    /* §17, zero unless the capability declares facing: MEISO_DISPLAY_PLANES_FACING_VIEWER for a WORLD or FOLLOW plane
+     * drawn turned to the eye each frame, else 0. */
+    uint8_t facing;
 } MeisoDisplayPlane;
 
 typedef struct {
