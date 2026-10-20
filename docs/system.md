@@ -32,7 +32,7 @@ Host/Edge 关系或公开 LinkSession。内部 runtime 重启或 bridge continui
 ```text
 Host applications / services / frontends
     ↓
-Host SDK: Virtual Edge / EdgeHandle
+Host SDK: Virtual Edge / EdgeHandle（当前主线未用，见下节）
     ↓
 Host Runtime: Resource Graph / policy / control
     ↓
@@ -50,6 +50,12 @@ capability / platform adapters / actual endpoints
 路径。
 
 ## Virtual Edge
+
+> 现状（2026-10-20 标注）：当前主线没有用 Virtual Edge。`MeisoEdgeHandle` 只在旧 Composition 应用栈里实现，
+> 打开 `MEISO_BUILD_LEGACY_COMPOSITION`（默认关）才构建。当前 Host 直接用
+> [Display Ingress planes-v12](../profiles/display_ingress/planes-v12.md) 的 Host 侧接口；Host 上的应用经
+> Host 自己的应用 SDK 使用设备能力，拿不到 Edge 句柄（见 [SDK 指南](sdk-guide.md#1-边界)）。
+> 本节保留原设计；其中从"当前 `COMPOSE_/_PROFILE:v1`"起的三段是 8 月旧栈的实现记录，"当前""现在"指那时。
 
 Virtual Edge 是 Host SDK 对远端或模拟 Edge Resource Graph 的本地、版本化、能力受限投影。
 应用通过 `EdgeHandle` 一类 facade 发现 capability、读取 State、订阅 Stream、调用 Action
@@ -188,8 +194,8 @@ TCP 状态：有字节超过 1 s 没被确认就标出，Session 照常，确认
 WORLD 平面。Session 真正结束后
 按 Profile 规则撤下平面，重连建立新 Session。
 
-Composition 的通用呈现语义仍有效；旧 Mesh/SceneStore、Coordinator、Composition
-Editor/HostBridge/EdgeService 应用栈已从当前显示主线退役，默认关闭，仅显式构建选项可纳入。
+Composition 的通用呈现语义仍有效；旧 Mesh/SceneStore、Coordinator、Virtual Edge（`MeisoEdgeHandle`）、
+Composition Editor/HostBridge/EdgeService 应用栈已从当前显示主线退役，默认关闭，仅显式构建选项可纳入。
 当前实现不代表安全 transport、Session resume、通用 discovery/plugin、所有 XR 设备适配或长期性能保证。
 
 当前支持范围和版本配对见[快速开始](host-edge-quickstart.md)与[版本配对](releases.md)；

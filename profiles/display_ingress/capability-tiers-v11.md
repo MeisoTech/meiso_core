@@ -1,6 +1,13 @@
-# Display Ingress v11 草案：能力分档、会话活性、驻留 lease 与 BLE 适配器边界
+# Display Ingress v11 草案（已被取代）：能力分档、会话活性、驻留 lease 与 BLE 适配器边界
 
-> 状态：`DRAFT PROFILE CONTRACT`（meiso_glass #9）。依据 shared 决定 S-021、S-022 与 #18/#24 裁定。
+> 状态：**已被取代，没有冻结，只作历史保留**（2026-10-20 标注）。
+> 本页的前提"产品常态是 BLE 量级链路"已由 shared 决定 S-024（2026-09-24）撤回：Host 与眼镜之间的内容
+> 全部走 Wi-Fi，BLE 不再是内容链路。当前两端契约是 [v12 空间中的平面](planes-v12.md)，本页各项都没有进入它：
+> 带宽用 v12 §9 的本版常量，不分档；不加应用层心跳，Session 一结束 Edge 就撤下全部平面，没有驻留
+> lease（v12 §8）；停视频后本 Session 内不能重新启用（v12 §2）；不做 BLE 适配器。
+> S-022"有多大能耐，做多少事"的原则仍有效；以后要分档，按 Wi-Fi 实测另写一版。
+>
+> 原状态：`DRAFT PROFILE CONTRACT`（meiso_glass #9）。依据 shared 决定 S-021、S-022 与 #18/#24 裁定。
 > 本页只定义契约；wire 数值、canonical bytes 在 #18 实现并通过桌面对 + K230D 验收后冻结。
 > 冻结前 v9/v10 的 bytes、版本号与行为不变。当前入口见 [Display Ingress](README.md)。
 
