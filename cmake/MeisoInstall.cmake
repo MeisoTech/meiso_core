@@ -15,6 +15,7 @@ install(
         meiso_core_resources
         meiso_core_session
         meiso_core
+        meiso_pairing
     EXPORT MeisoCoreTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Core
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Core
@@ -31,6 +32,7 @@ install(
 install(
     FILES
         "${PROJECT_SOURCE_DIR}/include/meiso/core.h"
+        "${PROJECT_SOURCE_DIR}/include/meiso/pairing.h"
         "${MEISO_GENERATED_INCLUDE_DIR}/meiso/version.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/meiso"
     COMPONENT Core
