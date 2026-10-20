@@ -30,6 +30,15 @@ meiso_enable_warnings(meiso_core_session)
 meiso_set_target_folder(meiso_core_session "Meiso/Core")
 add_library(Meiso::CoreSession ALIAS meiso_core_session)
 
+# Pairing v0 (docs/pairing-v0.md): how an Edge and a Host first learn each other's
+# PeerId, outside and before a Session. Codecs only; PeerId is Session Core's.
+add_library(meiso_pairing src/pairing/meiso_pairing.c)
+meiso_configure_public_target(meiso_pairing Pairing)
+target_link_libraries(meiso_pairing PUBLIC meiso_core_session)
+meiso_enable_warnings(meiso_pairing)
+meiso_set_target_folder(meiso_pairing "Meiso/Core")
+add_library(Meiso::Pairing ALIAS meiso_pairing)
+
 add_library(meiso_core INTERFACE)
 target_link_libraries(
     meiso_core

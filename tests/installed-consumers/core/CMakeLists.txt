@@ -9,7 +9,8 @@ endif()
 
 if(NOT TARGET Meiso::Core OR
    NOT TARGET Meiso::CoreResources OR
-   NOT TARGET Meiso::CoreSession)
+   NOT TARGET Meiso::CoreSession OR
+   NOT TARGET Meiso::Pairing)
     message(FATAL_ERROR "Core component did not define its complete target set")
 endif()
 if(TARGET Meiso::Runtime OR

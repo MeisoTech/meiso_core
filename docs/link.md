@@ -63,6 +63,9 @@ IP、port 或 socket；locator 不是 peer identity。具体 direct-TCP 开发�
 一个字段不能代替另一层 identity。Host 本地帧号不能替代 Edge stream identity；连接地址
 不能替代 peer/session identity；transport 重连也不能自动证明仍是原 Session。
 
+Edge 与 Host 第一次怎样互相得知 PeerId 并记下“怎么去”，见 [Pairing v0](pairing-v0.md)；
+配对在 Session 之外、之前，不改变 Session Core。
+
 一个 peer 内部可以有多个 producer clock/runtime。内部 producer 重启时，它的 producer
 incarnation 必须更新，受影响的 Stream 使用新 stream epoch；只有 source clock continuity
 无法证明时才使用新 clock epoch。只要对外 peer/boot 与有界 Session 状态的连续性仍可

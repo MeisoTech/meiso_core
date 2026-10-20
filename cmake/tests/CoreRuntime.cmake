@@ -23,6 +23,7 @@ meiso_add_c_test(
 meiso_add_c_test(
     meiso_session_test tests/test_session.c session meiso_core_session
 )
+meiso_add_c_test(meiso_pairing_test tests/test_pairing.c session meiso_pairing)
 meiso_add_c_test(
     meiso_session_four_kind_test
     tests/test_session_four_kind.c
