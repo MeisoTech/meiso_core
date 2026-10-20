@@ -30,7 +30,7 @@ extern "C" {
 #define MEISO_PAIRING_QR_MAX 300U     /* characters of the QR text */
 
 #define MEISO_PAIRING_REQUEST_SIZE 72U
-#define MEISO_PAIRING_OP_PAIR 1U      /* request byte 4; a Host answers another op with REFUSED_VERSION */
+#define MEISO_PAIRING_OP_PAIR 1U      /* request byte 4. MPR1 then another op: REFUSED_VERSION at once, not after 72 bytes */
 #define MEISO_PAIRING_REPLY_SIZE 24U
 
 typedef struct MeisoPairingRequest {
@@ -80,7 +80,8 @@ bool meiso_pairing_host_name_valid(const char *name);
 bool meiso_pairing_edge_name_valid(const uint8_t *name, size_t size);
 
 bool meiso_pairing_request_encode(const MeisoPairingRequest *request, uint8_t *out, size_t capacity);
-/* False for anything but a well-formed v0 request, an unknown op included: the Host checks byte 4 itself. */
+/* False for anything but a well-formed v0 request. The Host reads the first 5 bytes before it waits for 72
+ * (docs/pairing-v0.md §5.3): an unknown op is answered from those. */
 bool meiso_pairing_request_decode(const uint8_t *in, size_t size, MeisoPairingRequest *out);
 bool meiso_pairing_reply_encode(const MeisoPairingReply *reply, uint8_t *out, size_t capacity);
 bool meiso_pairing_reply_decode(const uint8_t *in, size_t size, MeisoPairingReply *out);
