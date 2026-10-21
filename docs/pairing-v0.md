@@ -1,7 +1,8 @@
 # Pairing v0 两端契约
 
 > 状态：两端契约 v0。编解码已实现（`include/meiso/pairing.h`，CMake target `Meiso::Pairing`），
-> 有 golden 测试（`tests/test_pairing.c`）；Host、Edge 尚未接入，板上未验证。
+> 有 golden 测试（`tests/test_pairing.c`）。Host（meiso_host）、Edge（meiso_edge）已接入（2026-10-21），
+> K230D 台架上配对、换 Host 都跑过，见 §8。
 
 一副 Edge 第一次遇到一台 Host 时，两边怎么认识对方、各自记下什么、以后怎么不靠人改配置就连上。
 
@@ -209,7 +210,10 @@ Edge 名字的规则：
   记录里没有 Session 端口，所以端口不同的 Host（例如同一台机器上的第二台 Host）v0 配不了；以后加
   字段即可，旧 Edge 会跳过不认识的字段；
 - 断开后不自动换到别的 Host；
-- 换 Host 只经本地“选主机”：先确认扫得到它，再结束当前 Session，然后切网络、建新 Session。
+- 换 Host 只经本地“选主机”：结束当前 Session，切到它的网络；限时（由 Edge 定，参考 8 s）内进不了
+  这个网络，就回到原来那台 Host 的网络、重建 Session，并告诉人它不在附近。
+  不先扫描再决定走不走：K230D 上的 rtl8189fs 驱动在链路忙时（例如相机画面正发往 Host）拒绝扫描，
+  把上次的结果当作扫完交回，“扫不到”说明不了它不在附近。
 
 **Host**：
 
@@ -259,8 +263,13 @@ QR 文本里含 Wi-Fi 口令：
 
 **测试**：`tests/test_pairing.c` 覆盖两条报文和 QR 文本的 golden、往返，以及各类拒收。
 
+**台架上跑过**（K230D Edge，两台 Host，2026-10-21）：
+
+- 配对：码的文本直接交给 Edge（不经相机），从读到码到配上 5.2 s，眼镜程序不重启；
+- 换 Host：相机没开时来回 6 次都成功，不改任何配置文件、眼镜程序不重启；
+- Edge 读码：640×480 灰度一张平均 8.5 ms（画面里没有码）。
+
 **未验证**：
 
-- 两端接入；
-- Edge 板上读 QR 的距离和耗时；
-- 换 Host 一圈，中间不改任何配置文件。
+- 相机开着时按上面的换法（不先扫描）换 Host；
+- Edge 用相机对着屏幕读码的距离。
